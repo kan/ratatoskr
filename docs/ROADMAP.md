@@ -10,12 +10,12 @@
 
 **完了条件: `pnpm dev` でローカルの Worker が起動し、`/api/health` が 200 を返す**
 
-- [ ] pnpm ワークスペース、TypeScript、ESLint、Prettier の設定
-- [ ] `wrangler.jsonc`（Workers + Static Assets + D1 + Cron の宣言）
-- [ ] Vue 3 + Vite + Tailwind v4 の最小構成
-- [ ] Vitest + `@cloudflare/vitest-pool-workers`
-- [ ] `shared/types.ts` の骨格
-- [ ] `GET /api/health`
+- [x] pnpm ワークスペース、TypeScript、ESLint、Prettier の設定
+- [x] `wrangler.jsonc`（Workers + Static Assets + D1 + Cron の宣言）
+- [x] Vue 3 + Vite + Tailwind v4 の最小構成
+- [x] Vitest + `@cloudflare/vitest-pool-workers`
+- [x] `shared/types.ts` の骨格
+- [x] `GET /api/health`
 
 ---
 
@@ -23,15 +23,15 @@
 
 **完了条件: `wrangler dev` から cron を手動発火させ、D1 に記事が溜まることを確認できる**
 
-- [ ] `migrations/0001_init.sql` の適用
-- [ ] `src/db/` にクエリ層（SQL はここに閉じ込める）
-- [ ] フィード取得（条件付き GET、304 処理、content_hash によるスキップ）
-- [ ] `fast-xml-parser` による RSS 2.0 / Atom / RDF のパース
-- [ ] `guid_hash` の生成と `INSERT OR IGNORE`
-- [ ] `HTMLRewriter` によるサニタイズ
-- [ ] 取得間隔の適応制御と失敗バックオフ
-- [ ] Cron ハンドラ（`LIMIT 20`、並列度 4）
-- [ ] **パースのユニットテスト**（3 系統 + 日付の異常系のフィクスチャ）
+- [x] `migrations/0001_init.sql` の適用
+- [x] `src/db/` にクエリ層（SQL はここに閉じ込める）
+- [x] フィード取得（条件付き GET、304 処理、content_hash によるスキップ）
+- [x] `fast-xml-parser` による RSS 2.0 / Atom / RDF のパース
+- [x] `guid_hash` の生成と `INSERT OR IGNORE`
+- [x] `HTMLRewriter` によるサニタイズ
+- [x] 取得間隔の適応制御と失敗バックオフ
+- [x] Cron ハンドラ（`LIMIT 20`、並列度 4）
+- [x] **パースのユニットテスト**（3 系統 + 日付の異常系のフィクスチャ）
 
 この時点では UI も API も無い。`pnpm db:console` で中身を確認する。
 
@@ -41,11 +41,11 @@
 
 **完了条件: `curl` で `/api/bootstrap` を叩き、記事が返ってくる**
 
-- [ ] Cloudflare Access の JWT 検証（ローカルはバイパス可、本番でバイパスが効かないテスト）
-- [ ] `GET /api/bootstrap`
-- [ ] `GET /api/entries`（`sinceId` ページング）
-- [ ] `GET /api/sync`
-- [ ] エラーレスポンスの統一
+- [x] Cloudflare Access の JWT 検証（ローカルはバイパス可、本番でバイパスが効かないテスト）
+- [x] `GET /api/bootstrap`
+- [x] `GET /api/entries`（`sinceId` ページング）
+- [x] `GET /api/sync`
+- [x] エラーレスポンスの統一
 
 ---
 
@@ -53,18 +53,29 @@
 
 **完了条件: キーボードだけで全購読を消化でき、記事送りに一切の待ちが無い**
 
-- [ ] `lib/db.ts`（IndexedDB スキーマと入出力）
-- [ ] `lib/api.ts`（型付きクライアント）
-- [ ] `stores/feeds.ts` — **カーソルの単独所有者**
-- [ ] `stores/entries.ts`
-- [ ] `lib/keymap.ts` — キーバインドの一元定義
-- [ ] `FeedList.vue` / `EntryReader.vue` / `HelpOverlay.vue`
-- [ ] 起動シーケンス（IndexedDB から即描画 → bootstrap → 背景で全件取得）
-- [ ] Space の境界挙動（`docs/UX.md` の仕様通りに）
-- [ ] ヘルプの自動生成
-- [ ] **キーバインドの E2E テスト**
+- [x] `lib/db.ts`（IndexedDB スキーマと入出力）
+- [x] `lib/api.ts`（型付きクライアント）
+- [x] `stores/feeds.ts` — **カーソルの単独所有者**
+- [x] `stores/entries.ts`
+- [x] `stores/session.ts`（起動シーケンスの手順）
+- [x] `lib/keymap.ts` — キーバインドの一元定義
+- [x] `FeedList.vue` / `EntryReader.vue` / `HelpOverlay.vue`
+- [x] 起動シーケンス（IndexedDB から即描画 → bootstrap → 背景で全件取得）
+- [x] Space の境界挙動（`docs/UX.md` の仕様通りに）
+- [x] ヘルプの自動生成
+- [x] 左ペインの記事一覧（読んでいるフィードのみ。既読は暗く表示）
+- [x] `Shift+S`（フィードを全て既読にして次へ）
+- [x] **既読ウォーターマークのユニットテスト**（web 側の vitest プロジェクトを追加）
+- [x] **キーバインドの E2E テスト**
 
 **ここが最初の山場。** この時点で既読はまだサーバに反映されない（ローカルのみ）。
+
+実装しながら決めたこと:
+
+- 既読は**記事を表示した時点**でその記事まで進める。フィードの最終記事に到達した時ではない
+  （`docs/UX.md`「既読化のタイミング」）。読み進めた分が残り、左ペインの未読数もその場で減る
+- `s` / `a` の移動対象は未読のあるフィードのみ。ただし戻る方向は既読のフィードにも入れる
+- 全て読み終えたら先頭に戻らず「全て読み終えた」で止まる
 
 ---
 
@@ -74,8 +85,8 @@
 
 - [ ] `POST /api/read`（`MAX` による更新、`batch()` 実行）
 - [ ] `stores/outbox.ts`（IndexedDB 永続化、指数バックオフ、`keepalive` / `sendBeacon`）
-- [ ] 最終記事表示時の既読化発行（送信済みフラグは発行前に立てる）
-- [ ] `GET /api/sync` のクライアント側マージ（`Math.max` で受ける）
+- [ ] 表示した記事までの既読化発行（送信済みフラグは発行前に立てる）
+- [x] `GET /api/sync` のクライアント側マージ（`Math.max` で受ける）
 - [ ] `POST /api/entries/:id/unread` と `u` キー
 - [ ] **ウォーターマークのユニットテスト**（巻き戻らないこと、新着が既読にならないこと、重複送信で壊れないこと）
 
