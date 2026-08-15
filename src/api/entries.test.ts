@@ -1,12 +1,8 @@
 import { env } from 'cloudflare:workers';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { EntriesResponse } from '../../shared/types';
 import { apiGet, apiJson } from '../test/request';
-import { resetDb, seedEntry, seedEntryState, seedFeed, setReadSeq } from '../test/seed';
-
-beforeEach(async () => {
-  await resetDb(env.DB);
-});
+import { seedEntry, seedEntryState, seedFeed, setReadSeq } from '../test/seed';
 
 describe('GET /api/entries', () => {
   it('id 昇順で返し、sinceId で続きを引ける', async () => {

@@ -7,7 +7,7 @@ import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-pool-worker
 // web 側のユニットテストは M3 でストアを書くときに別プロジェクトとして足す。
 
 // テスト用 D1 は空で立ち上がるため、migrations/ をバインディング経由で渡し、
-// setupFiles の中で流し込む（src/test/apply-migrations.ts）
+// setupFiles の中で流し込む（src/test/setup.ts）
 const migrations = await readD1Migrations('./migrations');
 
 export default defineConfig({
@@ -25,6 +25,6 @@ export default defineConfig({
   ],
   test: {
     include: ['src/**/*.test.ts'],
-    setupFiles: ['./src/test/apply-migrations.ts'],
+    setupFiles: ['./src/test/setup.ts'],
   },
 });

@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { crawl } from './index';
-import { getEntryRows, getFeedRow, resetDb, seedFeed } from '../test/seed';
+import { getEntryRows, getFeedRow, seedFeed } from '../test/seed';
 import rss2Xml from './__fixtures__/rss2.xml?raw';
 
 const NOW = Math.floor(Date.parse('2026-08-05T00:00:00Z') / 1000);
@@ -53,10 +53,6 @@ function rss2WithExtraItem(): string {
     <item>`,
   );
 }
-
-beforeEach(async () => {
-  await resetDb(env.DB);
-});
 
 describe('crawl', () => {
   it('記事を取り込み、フィードの取得状態を更新する', async () => {

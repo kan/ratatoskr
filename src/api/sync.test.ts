@@ -1,12 +1,8 @@
 import { env } from 'cloudflare:workers';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { SyncResponse } from '../../shared/types';
 import { apiJson } from '../test/request';
-import { resetDb, seedEntry, seedFeed, seedPin, setReadSeq } from '../test/seed';
-
-beforeEach(async () => {
-  await resetDb(env.DB);
-});
+import { seedEntry, seedFeed, seedPin, setReadSeq } from '../test/seed';
 
 describe('GET /api/sync', () => {
   it('entryCursor より後の記事だけを返す', async () => {

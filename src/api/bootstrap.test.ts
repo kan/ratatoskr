@@ -1,17 +1,13 @@
 import { env } from 'cloudflare:workers';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { BootstrapResponse, Feed } from '../../shared/types';
 import { apiGet, apiJson } from '../test/request';
-import { resetDb, seedEntry, seedFeed, seedPin, setReadSeq } from '../test/seed';
+import { seedEntry, seedFeed, seedPin, setReadSeq } from '../test/seed';
 
 /** 自分が投入したフィードだけを取り出す */
 function only(body: BootstrapResponse, ids: number[]): Feed[] {
   return body.feeds.filter((feed) => ids.includes(feed.id));
 }
-
-beforeEach(async () => {
-  await resetDb(env.DB);
-});
 
 describe('GET /api/bootstrap', () => {
   it('フィードをレート降順・未読数降順で返し、未読数を数える', async () => {
