@@ -29,5 +29,8 @@
     "typescript-eslint": "^8.67.0",
     "vitest": "^4.1.10",
     "wrangler": "^4.123.0"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.10.1"
   }
 }

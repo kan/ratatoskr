@@ -1,4 +1,5 @@
 import { handleApi } from './api/router';
+import { crawl } from './crawler';
 
 export default {
   async fetch(request, env, _ctx): Promise<Response> {
@@ -13,7 +14,9 @@ export default {
     return env.ASSETS.fetch(request);
   },
 
-  async scheduled(_event, _env, _ctx): Promise<void> {
-    // クローラは M1 で実装する（docs/ROADMAP.md）
+  async scheduled(_event, env, _ctx): Promise<void> {
+    // 例外は握りつぶさず投げ直す。cron の失敗として観測できるようにするため
+    const summary = await crawl(env);
+    console.log('crawl', JSON.stringify(summary));
   },
 } satisfies ExportedHandler<Env>;

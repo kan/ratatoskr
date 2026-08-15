@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 日付の異常系。パースできない値は published_at = NULL とし、記事自体は取り込む -->
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>壊れた日付のフィード</title>
+    <link>https://broken.example.com/</link>
+
+    <item>
+      <title>rfc3339</title>
+      <link>https://broken.example.com/rfc3339</link>
+      <pubDate>2026-08-04T12:00:00+09:00</pubDate>
+    </item>
+
+    <item>
+      <title>rfc822</title>
+      <link>https://broken.example.com/rfc822</link>
+      <pubDate>Tue, 04 Aug 2026 03:00:00 GMT</pubDate>
+    </item>
+
+    <item>
+      <title>space-separated</title>
+      <link>https://broken.example.com/space</link>
+      <pubDate>2026-08-04 03:00:00</pubDate>
+    </item>
+
+    <item>
+      <title>garbage</title>
+      <link>https://broken.example.com/garbage</link>
+      <pubDate>いつか</pubDate>
+    </item>
+
+    <item>
+      <title>empty</title>
+      <link>https://broken.example.com/empty</link>
+      <pubDate></pubDate>
+    </item>
+
+    <item>
+      <title>missing</title>
+      <link>https://broken.example.com/missing</link>
+    </item>
+
+    <item>
+      <title>too-old</title>
+      <link>https://broken.example.com/too-old</link>
+      <pubDate>1899-01-01T00:00:00Z</pubDate>
+    </item>
+
+    <item>
+      <title>too-far-future</title>
+      <link>https://broken.example.com/too-far-future</link>
+      <pubDate>2999-01-01T00:00:00Z</pubDate>
+    </item>
+
+    <item>
+      <title>dc-date-fallback</title>
+      <link>https://broken.example.com/dc-date</link>
+      <dc:date>2026-08-04T03:00:00Z</dc:date>
+    </item>
+  </channel>
+</rss>
