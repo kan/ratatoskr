@@ -37,6 +37,43 @@ export interface Pin {
   pinnedAt: number;
 }
 
+/**
+ * GET /api/bootstrap
+ *
+ * 起動時の 1 リクエスト。このレスポンスだけで操作可能な状態になることが要件。
+ */
+export interface BootstrapResponse {
+  serverTime: number;
+  schemaVersion: number;
+  /** レート降順 → 未読数降順。この並びが読む順序であり先読みの順序でもある */
+  feeds: Feed[];
+  /** 上位レートのフィードの未読記事 */
+  entries: Entry[];
+  pins: Pin[];
+  /** この時点でサーバが持つ最大 entries.id。以降の差分取得のカーソル */
+  maxEntryId: number;
+}
+
+/** GET /api/entries。残りの記事を背景で引くための一括取得 */
+export interface EntriesResponse {
+  /** id 昇順 */
+  entries: Entry[];
+  /** 続きがある場合の次の sinceId。無ければ null */
+  nextSinceId: number | null;
+  hasMore: boolean;
+}
+
+/** GET /api/sync。複数端末間の差分同期 */
+export interface SyncResponse {
+  serverTime: number;
+  feeds: Feed[];
+  /** entryCursor より大きい記事 */
+  newEntries: Entry[];
+  pins: Pin[];
+  deletedPinIds: number[];
+  maxEntryId: number;
+}
+
 /** エラーレスポンスの形。HTTP ステータスは別に付く */
 export interface ApiErrorBody {
   error: {

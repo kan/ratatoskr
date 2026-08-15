@@ -49,6 +49,15 @@ export interface EntryRow {
   stored_at: number;
 }
 
+/**
+ * テスト間で D1 は共有される（テストごとの巻き戻しは無い）ので、
+ * 順序や件数を見るテストは beforeEach でこれを呼んで白紙から始める。
+ * entries は feeds の CASCADE で消える。
+ */
+export async function resetDb(db: D1Database): Promise<void> {
+  await db.batch([db.prepare('DELETE FROM feeds'), db.prepare('DELETE FROM pins')]);
+}
+
 export async function seedFeed(
   db: D1Database,
   url: string,
@@ -97,6 +106,85 @@ export async function seedFeed(
 
   if (row === null) throw new Error('feed の投入に失敗');
   return row.id;
+}
+
+export interface EntrySeed {
+  guidHash: string;
+  url: string | null;
+  title: string;
+  author: string | null;
+  body: string;
+  publishedAt: number | null;
+  storedAt: number;
+}
+
+// guid_hash は (feed_id, guid_hash) で UNIQUE。テストごとに衝突しない値を配る
+let seedCounter = 0;
+
+export async function seedEntry(
+  db: D1Database,
+  feedId: number,
+  overrides: Partial<EntrySeed> = {},
+): Promise<number> {
+  seedCounter += 1;
+  const seed: EntrySeed = {
+    guidHash: `seed-${seedCounter}`,
+    url: `https://example.com/entries/${seedCounter}`,
+    title: `記事 ${seedCounter}`,
+    author: null,
+    body: '<p>本文</p>',
+    publishedAt: null,
+    storedAt: 0,
+    ...overrides,
+  };
+
+  const row = await db
+    .prepare(
+      `INSERT INTO entries (feed_id, guid_hash, url, title, author, body, published_at, stored_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       RETURNING id`,
+    )
+    .bind(
+      feedId,
+      seed.guidHash,
+      seed.url,
+      seed.title,
+      seed.author,
+      seed.body,
+      seed.publishedAt,
+      seed.storedAt,
+    )
+    .first<{ id: number }>();
+
+  if (row === null) throw new Error('entry の投入に失敗');
+  return row.id;
+}
+
+export async function seedPin(db: D1Database, url: string, title = 'ピン'): Promise<number> {
+  const row = await db
+    .prepare(
+      `INSERT INTO pins (entry_id, title, url, pinned_at) VALUES (NULL, ?, ?, ?) RETURNING id`,
+    )
+    .bind(title, url, 0)
+    .first<{ id: number }>();
+  if (row === null) throw new Error('pin の投入に失敗');
+  return row.id;
+}
+
+/** 手動で未読に戻した記事（ウォーターマークからの例外）を作る */
+export async function seedEntryState(
+  db: D1Database,
+  entryId: number,
+  unread: boolean,
+): Promise<void> {
+  await db
+    .prepare('INSERT OR REPLACE INTO entry_states (entry_id, unread, updated_at) VALUES (?, ?, 0)')
+    .bind(entryId, unread ? 1 : 0)
+    .run();
+}
+
+export async function setReadSeq(db: D1Database, feedId: number, readSeq: number): Promise<void> {
+  await db.prepare('UPDATE feeds SET read_seq = ? WHERE id = ?').bind(readSeq, feedId).run();
 }
 
 export async function getFeedRow(db: D1Database, id: number): Promise<FeedRow> {

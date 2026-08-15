@@ -1,7 +1,64 @@
+import type { Feed } from '../../shared/types';
+import { UNREAD_JOIN, UNREAD_PREDICATE } from './unread';
+
 /**
  * feeds に対するクエリ。SQL は src/db/ の外に書かない（CLAUDE.md）。
- * ここではクロールが使う分だけを定義する。読み取り API 用は M2 で足す。
  */
+
+interface FeedRow {
+  id: number;
+  url: string;
+  site_url: string | null;
+  title: string;
+  icon_url: string | null;
+  rate: number;
+  folder: string;
+  read_seq: number;
+  unread_count: number;
+  last_fetched_at: number | null;
+  last_error: string | null;
+  disabled: number;
+}
+
+function toFeed(row: FeedRow): Feed {
+  return {
+    id: row.id,
+    url: row.url,
+    siteUrl: row.site_url,
+    title: row.title,
+    iconUrl: row.icon_url,
+    rate: row.rate,
+    folder: row.folder,
+    readSeq: row.read_seq,
+    unreadCount: row.unread_count,
+    lastFetchedAt: row.last_fetched_at,
+    lastError: row.last_error,
+    disabled: row.disabled === 1,
+  };
+}
+
+/**
+ * 全フィードを未読数付きで返す。
+ *
+ * 並びは読む順序そのもの（レート降順 → 未読数降順）。左ペインの表示順であり、
+ * 先読みの順序でもあるので、サーバ側で確定させてクライアントに渡す
+ * （docs/DESIGN.md の「先読みが機能する前提条件」）。
+ */
+export async function selectFeeds(db: D1Database): Promise<Feed[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT f.id, f.url, f.site_url, f.title, f.icon_url, f.rate, f.folder, f.read_seq,
+              f.last_fetched_at, f.last_error, f.disabled,
+              (SELECT COUNT(*)
+                 FROM entries e
+                 ${UNREAD_JOIN}
+                WHERE e.feed_id = f.id AND ${UNREAD_PREDICATE}) AS unread_count
+         FROM feeds f
+        ORDER BY f.rate DESC, unread_count DESC, f.id`,
+    )
+    .all<FeedRow>();
+  return results.map(toFeed);
+}
 
 /** クローラが 1 フィードを処理するのに必要な列だけを引く */
 export interface CrawlTarget {

@@ -14,7 +14,13 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: './wrangler.jsonc' },
-      miniflare: { bindings: { TEST_MIGRATIONS: migrations } },
+      miniflare: {
+        bindings: {
+          TEST_MIGRATIONS: migrations,
+          // 認証のバイパスはテストでも明示的に立てる。.dev.vars の有無に依存させない
+          ACCESS_DEV_BYPASS: 'true',
+        },
+      },
     }),
   ],
   test: {
