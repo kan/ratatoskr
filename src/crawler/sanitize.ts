@@ -15,10 +15,16 @@ const ALLOWED_TAGS = tagSet(`
   table tbody td tfoot th thead time tr u ul var
 `);
 
-// 中身ごと捨てるタグ。これ以外の未知タグはタグだけ剥がして中身を残す
+// 中身ごと捨てるタグ。これ以外の未知タグはタグだけ剥がして中身を残す。
+//
+// RAWTEXT / PLAINTEXT として扱われるタグ（script style textarea title iframe
+// noscript noembed noframes xmp plaintext）は必ずこちらに入れること。中身が
+// 要素としてパースされないため、removeAndKeepContent で剥がすと生のマークアップが
+// そのまま出てしまい、ブラウザ側で改めて解釈されてサニタイズが素通りする
 const DROPPED_TAGS = tagSet(`
   applet audio base button canvas embed form frame frameset head iframe input link
-  math meta noscript object script select style svg template textarea title video
+  math meta noembed noframes noscript object plaintext script select style svg
+  template textarea title video xmp
 `);
 
 function tagSet(tags: string): Set<string> {

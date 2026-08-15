@@ -22,6 +22,20 @@ describe('sanitizeHtml', () => {
     expect(out).toBe('<p>本文</p>');
   });
 
+  // xmp などは中身が要素としてパースされないため、タグだけ剥がすと生のマークアップが
+  // そのまま出て、ブラウザ側で改めて解釈される（サニタイズの素通り）
+  it.each(['xmp', 'noembed', 'noframes', 'plaintext'])(
+    '%s の中に隠した HTML を素通りさせない',
+    async (tag) => {
+      const out = await sanitizeHtml(
+        `<p>前</p><${tag}><img src=x onerror="alert(1)"></${tag}><p>後</p>`,
+        BASE,
+      );
+      expect(out).not.toContain('onerror');
+      expect(out).not.toContain('<img');
+    },
+  );
+
   it('未知のタグはタグだけ剥がして中身を残す', async () => {
     const out = await sanitizeHtml('<font size="7">文字</font><marquee>流れる</marquee>', BASE);
     expect(out).toBe('文字流れる');
