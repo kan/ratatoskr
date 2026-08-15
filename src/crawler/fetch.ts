@@ -1,3 +1,4 @@
+import { errorMessage } from '../lib/errors';
 import { sha256Hex } from '../lib/hash';
 
 /**
@@ -87,8 +88,4 @@ export async function fetchFeed(
     lastModified: response.headers.get('last-modified'),
     contentHash,
   };
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

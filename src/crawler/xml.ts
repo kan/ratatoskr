@@ -27,15 +27,9 @@ function isAttributeKey(key: string): boolean {
  * （例: content:encoded → description）。同名タグが複数ある場合は最初の 1 つ。
  */
 export function pick(node: unknown, ...names: string[]): unknown {
-  if (!isXmlNode(node)) return undefined;
   for (const name of names) {
-    for (const key of Object.keys(node)) {
-      if (isAttributeKey(key)) continue;
-      if (localName(key) === name) {
-        const value = node[key];
-        return Array.isArray(value) ? value[0] : value;
-      }
-    }
+    const found = collect(node, name);
+    if (found.length > 0) return found[0];
   }
   return undefined;
 }

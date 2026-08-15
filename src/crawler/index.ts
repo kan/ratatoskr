@@ -7,6 +7,7 @@ import {
   type CrawlTarget,
 } from '../db/feeds';
 import { insertEntries, type NewEntry } from '../db/entries';
+import { errorMessage } from '../lib/errors';
 import { sha256Hex } from '../lib/hash';
 import { fetchFeed } from './fetch';
 import { parseFeed } from './parse';
@@ -124,7 +125,7 @@ async function crawlFeed(
   try {
     parsed = parseFeed(outcome.body, now);
   } catch (err) {
-    await recordFailure(db, target, now, err instanceof Error ? err.message : String(err));
+    await recordFailure(db, target, now, errorMessage(err));
     return { inserted: 0, failed: true };
   }
 

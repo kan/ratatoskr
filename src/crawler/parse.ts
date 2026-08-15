@@ -1,4 +1,5 @@
 import { XMLParser } from 'fast-xml-parser';
+import { errorMessage } from '../lib/errors';
 import { parseDate } from './date';
 import { ParseError, type ParsedFeed, type ParsedItem } from './types';
 import { attr, collect, firstLink, isXmlNode, pick, text } from './xml';
@@ -26,7 +27,7 @@ export function parseFeed(xml: string, now?: number): ParsedFeed {
   try {
     doc = parser.parse(xml);
   } catch (err) {
-    throw new ParseError(`XML として読めない: ${err instanceof Error ? err.message : String(err)}`);
+    throw new ParseError(`XML として読めない: ${errorMessage(err)}`);
   }
   if (!isXmlNode(doc)) throw new ParseError('XML のルート要素が無い');
 

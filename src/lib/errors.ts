@@ -15,6 +15,14 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * catch で受けた値からメッセージを取り出す。Error とは限らないものが飛んでくるので、
+ * 整形の仕方はここ 1 箇所に置く（ログ・last_error・401 の理由で同じ形にするため）。
+ */
+export function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 export function json(body: unknown, status = 200, headers: HeadersInit = {}): Response {
   return new Response(JSON.stringify(body), {
     status,

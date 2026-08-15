@@ -1,4 +1,4 @@
-import { ApiError } from './errors';
+import { ApiError, errorMessage } from './errors';
 
 /**
  * Cloudflare Access（Zero Trust）による認証。
@@ -189,7 +189,7 @@ async function fetchJwks(issuer: string, fetchImpl: typeof fetch): Promise<Map<s
       signal: AbortSignal.timeout(5000),
     });
   } catch (err) {
-    throw unauthorized(`公開鍵の取得に失敗: ${err instanceof Error ? err.message : String(err)}`);
+    throw unauthorized(`公開鍵の取得に失敗: ${errorMessage(err)}`);
   }
   if (!response.ok) throw unauthorized(`公開鍵の取得に失敗: HTTP ${response.status}`);
 
