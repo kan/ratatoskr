@@ -133,6 +133,24 @@ describe('verifyAccessJwt', () => {
     await expectUnauthorized(verifyAccessJwt('not-a-jwt', ENV, jwksFetch().fetch));
   });
 
+  it('署名部が base64url として壊れていても 401（500 にしない）', async () => {
+    const [header, payload] = (await issueJwt()).split('.');
+    await expectUnauthorized(verifyAccessJwt(`${header}.${payload}.@@@`, ENV, jwksFetch().fetch));
+  });
+
+  it('未知の kid で公開鍵を取り直し続けない', async () => {
+    const jwks = jwksFetch();
+    await verifyAccessJwt(await issueJwt(), ENV, jwks.fetch);
+    expect(jwks.count()).toBe(1);
+
+    // kid は署名検証前の値なので、要求元が自由に名乗れる。
+    // でたらめな kid を投げられても外部への取得は増えない
+    for (const kid of ['a', 'b', 'c']) {
+      await expectUnauthorized(verifyAccessJwt(await issueJwt({}, { kid }), ENV, jwks.fetch));
+    }
+    expect(jwks.count()).toBe(1);
+  });
+
   it('公開鍵をキャッシュする', async () => {
     const jwks = jwksFetch();
     await verifyAccessJwt(await issueJwt(), ENV, jwks.fetch);

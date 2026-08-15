@@ -25,6 +25,7 @@ export interface AccessIdentity {
 }
 
 const JWKS_TTL = 3600; // 秒。鍵の入れ替えに追随できる程度に短くする
+const JWKS_MIN_REFETCH = 60; // 秒。未知の kid での取り直しはこの間隔以上あける
 const CLOCK_SKEW = 60; // 秒
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
@@ -43,7 +44,7 @@ interface JwtPayload {
   email?: string;
 }
 
-let jwksCache: { issuer: string; keys: Map<string, CryptoKey>; expiresAt: number } | null = null;
+let jwksCache: { issuer: string; keys: Map<string, CryptoKey>; fetchedAt: number } | null = null;
 
 /** テスト間でキャッシュを持ち越さないための入口。本番コードからは呼ばない */
 export function resetJwksCache(): void {
@@ -111,12 +112,14 @@ export async function verifyAccessJwt(
   const issuer = issuerOf(env);
   const key = await resolveKey(header.kid, issuer, fetchImpl);
   const signed = new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`);
-  const valid = await crypto.subtle.verify(
-    'RSASSA-PKCS1-v1_5',
-    key,
-    decodeBase64Url(encodedSignature),
-    signed,
-  );
+  // 署名部が base64url として壊れていることもある。認証の失敗は全て 401 に揃える
+  let signature: Uint8Array;
+  try {
+    signature = decodeBase64Url(encodedSignature);
+  } catch {
+    throw unauthorized('署名部が読めない');
+  }
+  const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, signature, signed);
   if (!valid) throw unauthorized('署名が一致しない');
 
   const payload = decodeJson<JwtPayload>(encodedPayload, 'ペイロード');
@@ -151,17 +154,21 @@ async function resolveKey(
   fetchImpl: typeof fetch,
 ): Promise<CryptoKey> {
   const now = Math.floor(Date.now() / 1000);
-  const cached =
-    jwksCache !== null && jwksCache.issuer === issuer && jwksCache.expiresAt > now
-      ? jwksCache
-      : null;
+  const cached = jwksCache !== null && jwksCache.issuer === issuer ? jwksCache : null;
+  const fresh = cached !== null && now - cached.fetchedAt < JWKS_TTL;
 
-  const key = cached?.keys.get(kid);
+  const key = fresh ? cached.keys.get(kid) : undefined;
   if (key !== undefined) return key;
 
-  // 未知の kid は鍵の入れ替え直後かもしれないので、一度だけ取り直す
+  // 未知の kid は鍵の入れ替え直後かもしれないので取り直す。ただし kid は署名を
+  // 検証する前の値で、要求元が自由に名乗れる。でたらめな kid を投げ続けるだけで
+  // 外部への取得を誘発できてしまうため、取り直しの間隔に下限を設ける
+  if (cached !== null && now - cached.fetchedAt < JWKS_MIN_REFETCH) {
+    throw unauthorized(`kid ${kid} に対応する公開鍵が無い（再取得は待機中）`);
+  }
+
   const keys = await fetchJwks(issuer, fetchImpl);
-  jwksCache = { issuer, keys, expiresAt: now + JWKS_TTL };
+  jwksCache = { issuer, keys, fetchedAt: now };
 
   const refreshed = keys.get(kid);
   if (refreshed === undefined) throw unauthorized(`kid ${kid} に対応する公開鍵が無い`);

@@ -65,6 +65,16 @@ describe('GET /api/entries', () => {
     expect(body.entries.map((entry) => entry.id)).toEqual([wanted]);
   });
 
+  it('feedId が空値なら絞り込まない', async () => {
+    const first = await seedFeed(env.DB, 'https://e-empty-a.example.com/feed');
+    const second = await seedFeed(env.DB, 'https://e-empty-b.example.com/feed');
+    const a = await seedEntry(env.DB, first);
+    const b = await seedEntry(env.DB, second);
+
+    const body = await apiJson<EntriesResponse>('/api/entries?feedId=');
+    expect(body.entries.map((entry) => entry.id)).toEqual([a, b]);
+  });
+
   it('記事の中身をそのまま返す', async () => {
     const feedId = await seedFeed(env.DB, 'https://e-shape.example.com/feed');
     const id = await seedEntry(env.DB, feedId, {

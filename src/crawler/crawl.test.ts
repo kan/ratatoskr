@@ -101,6 +101,24 @@ describe('crawl', () => {
     expect(newer.body).toContain('href="https://example.com/posts/1"');
   });
 
+  it('記事の link が相対 URL でも本文中のリンクを落とさない', async () => {
+    const id = await seedFeed(env.DB, 'https://relative.example.com/feed.xml');
+    const xml = rss2Xml
+      .replace('<link>https://example.com/posts/2</link>', '<link>/posts/2</link>')
+      .replace(
+        '<![CDATA[<p>本文です。<a href="/posts/1">前の記事</a></p>]]>',
+        '<![CDATA[<p><img src="/a.png"><a href="/posts/1">前</a></p>]]>',
+      );
+    const stub = stubFetch(() => xmlResponse(xml));
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+
+    const [, newer] = await getEntryRows(env.DB, id);
+    expect(newer.url).toBe('https://example.com/posts/2');
+    expect(newer.body).toContain('src="https://example.com/a.png"');
+    expect(newer.body).toContain('href="https://example.com/posts/1"');
+  });
+
   it('同じ記事を二重に取り込まず、新着だけを追加する', async () => {
     const id = await seedFeed(env.DB, 'https://again.example.com/feed.xml');
     const first = stubFetch(() => xmlResponse(rss2Xml));

@@ -154,14 +154,18 @@ async function crawlFeed(
 }
 
 async function toNewEntry(feedId: number, item: ParsedItem, baseUrl: string): Promise<NewEntry> {
+  const url = item.url === null ? null : absoluteUrl(item.url, baseUrl);
   return {
     feedId,
     guidHash: await guidHash(item),
-    url: item.url === null ? null : absoluteUrl(item.url, baseUrl),
+    url,
     title: item.title,
     author: item.author,
-    // 生のフィード HTML は DB に入れない（CLAUDE.md の不変条件 4）
-    body: await sanitizeHtml(item.body, item.url ?? baseUrl),
+    // 生のフィード HTML は DB に入れない（CLAUDE.md の不変条件 4）。
+    // 本文中の相対 URL の基準には絶対化した記事 URL を使う。item.url をそのまま
+    // 渡すと、相対リンクを返すフィードでは基準自体が相対 URL になり、
+    // 本文中の href / src が全て落ちる
+    body: await sanitizeHtml(item.body, url ?? baseUrl),
     publishedAt: item.publishedAt,
   };
 }

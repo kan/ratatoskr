@@ -1,8 +1,9 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import type { SyncResponse } from '../../shared/types';
+import { MAX_NEW_ENTRIES } from './sync';
 import { apiJson } from '../test/request';
-import { seedEntry, seedFeed, seedPin, setReadSeq } from '../test/seed';
+import { seedEntry, seedFeed, seedManyEntries, seedPin, setReadSeq } from '../test/seed';
 
 describe('GET /api/sync', () => {
   it('entryCursor より後の記事だけを返す', async () => {
@@ -43,6 +44,20 @@ describe('GET /api/sync', () => {
     const body = await apiJson<SyncResponse>('/api/sync?since=0');
     expect(body.pins.map((pin) => pin.id)).toEqual([pinId]);
     expect(body.deletedPinIds).toEqual([]);
+  });
+
+  it('1 回で返し切れないときはカーソルを返した範囲で止める', async () => {
+    const feedId = await seedFeed(env.DB, 'https://s-many.example.com/feed');
+    await seedManyEntries(env.DB, feedId, MAX_NEW_ENTRIES + 1);
+
+    const body = await apiJson<SyncResponse>('/api/sync?entryCursor=0');
+    expect(body.newEntries).toHaveLength(MAX_NEW_ENTRIES);
+    // サーバの最大 id ではなく、実際に返した最後の id を返す。
+    // ここを進めすぎると、間の記事をクライアントが二度と取りに来られない
+    expect(body.maxEntryId).toBe(body.newEntries[MAX_NEW_ENTRIES - 1].id);
+
+    const next = await apiJson<SyncResponse>(`/api/sync?entryCursor=${body.maxEntryId}`);
+    expect(next.newEntries).toHaveLength(1);
   });
 
   it('パラメータが無くても動く', async () => {

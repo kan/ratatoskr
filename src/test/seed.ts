@@ -160,6 +160,26 @@ export async function seedEntry(
   return row.id;
 }
 
+/**
+ * 記事をまとめて投入する。ページングの境界を試すために件数が要るときだけ使う
+ * （1 件ずつ INSERT すると遅いので、再帰 CTE で 1 文にまとめる）。
+ */
+export async function seedManyEntries(
+  db: D1Database,
+  feedId: number,
+  count: number,
+): Promise<void> {
+  seedCounter += 1;
+  await db
+    .prepare(
+      `INSERT INTO entries (feed_id, guid_hash, url, title, author, body, published_at, stored_at)
+       WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < ?)
+       SELECT ?, ? || n, NULL, 'bulk ' || n, NULL, '', NULL, 0 FROM seq`,
+    )
+    .bind(count, feedId, `bulk-${seedCounter}-`)
+    .run();
+}
+
 export async function seedPin(db: D1Database, url: string, title = 'ピン'): Promise<number> {
   const row = await db
     .prepare(
