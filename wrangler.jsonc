@@ -1,0 +1,45 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ratatoskr",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-15",
+
+  // 静的アセットは Workers 側で配信する（Pages は使わない。docs/DESIGN.md §2）
+  "assets": {
+    "directory": "./web/dist",
+    "binding": "ASSETS",
+    // SPA なので、未知のパスは index.html にフォールバックする。
+    // ただし /api/* は Worker が先に処理する
+    "not_found_handling": "single-page-application"
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ratatoskr",
+      // `wrangler d1 create ratatoskr` の出力で置き換える
+      "database_id": "REPLACE_ME",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "triggers": {
+    // クローラ。1 回の実行で処理するフィード数は必ず LIMIT で絞ること
+    // （サブリクエスト上限。docs/DESIGN.md §5）
+    "crons": ["*/5 * * * *"]
+  },
+
+  "observability": {
+    "enabled": true
+  },
+
+  "vars": {
+    // Cloudflare Access の検証に使う。値は本番の設定に合わせる
+    "ACCESS_TEAM_DOMAIN": "REPLACE_ME.cloudflareaccess.com",
+    "ACCESS_AUD": "REPLACE_ME"
+  },
+
+  "dev": {
+    "port": 8787
+  }
+}
