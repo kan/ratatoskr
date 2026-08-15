@@ -32,14 +32,14 @@ pnpm dev          # vite(5173) と wrangler dev(8787) を同時起動
 
 画面は http://localhost:5173 を開く。`/api` は 8787 の Worker にプロキシされる（本番は同一オリジン）。
 
-| コマンド | 内容 |
-| --- | --- |
-| `pnpm dev` | 開発サーバ |
-| `pnpm build` | web をビルドして `web/dist` に出力 |
-| `pnpm test` | Vitest（workerd 上で実行） |
-| `pnpm typecheck` | `tsc` + `vue-tsc` |
-| `pnpm lint` | ESLint + Prettier |
-| `pnpm db:console "SQL"` | ローカル D1 に SQL を投げる |
+| コマンド                | 内容                               |
+| ----------------------- | ---------------------------------- |
+| `pnpm dev`              | 開発サーバ                         |
+| `pnpm build`            | web をビルドして `web/dist` に出力 |
+| `pnpm test`             | Vitest（workerd 上で実行）         |
+| `pnpm typecheck`        | `tsc` + `vue-tsc`                  |
+| `pnpm lint`             | ESLint + Prettier                  |
+| `pnpm db:console "SQL"` | ローカル D1 に SQL を投げる        |
 
 ## デプロイ
 
