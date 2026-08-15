@@ -82,8 +82,13 @@ M0 の実装で判明した、環境まわりの制約と手順。
 ```bash
 pnpm install       # esbuild / workerd の postinstall 許可は pnpm-workspace.yaml にコミット済み
 pnpm db:migrate    # .wrangler/ は未コミット。クローン直後のローカル D1 は空
+echo 'ACCESS_DEV_BYPASS=true' > .dev.vars   # Access の JWT 検証を飛ばす（後述）
 pnpm dev
 ```
+
+`.dev.vars` は git 管理外なので、クローン直後は自分で作る。これが無いと
+`/api/*` が全て 401 になる。バイパスは **localhost 宛の要求にしか効かない**ので、
+デプロイ先に紛れ込んでも認証が素通りすることはない（`src/lib/auth.ts`）。
 
 Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCES で失敗する場合は
 `npm i -g pnpm` で入れてよい。
