@@ -44,3 +44,7 @@ pnpm dev          # vite(5173) と wrangler dev(8787) を同時起動
 ## デプロイ
 
 未整備（M9 で手順化する）。最低限、`wrangler d1 create` で作った `database_id` と Cloudflare Access の `ACCESS_TEAM_DOMAIN` / `ACCESS_AUD` を `wrangler.jsonc` に設定する必要がある。
+
+## ライセンス
+
+MIT License（[LICENSE](LICENSE)）。
