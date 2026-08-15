@@ -1,1 +1,58 @@
 @import 'tailwindcss';
+
+/*
+ * 記事本文は v-html で描くのでスコープ付きスタイルが当たらない。
+ * ここでグローバルに最低限の体裁を与える（docs/UX.md「記事本文のレンダリング」）。
+ */
+.article-body {
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.article-body p,
+.article-body ul,
+.article-body ol,
+.article-body blockquote,
+.article-body table,
+.article-body pre {
+  margin-block: 0.75rem;
+}
+
+.article-body img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* 等幅ブロックだけを横スクロールさせる。本文全体は横に流さない */
+.article-body pre {
+  overflow-x: auto;
+  padding: 0.5rem;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.article-body a {
+  text-decoration: underline;
+}
+
+.article-body ul {
+  list-style: disc;
+  padding-left: 1.5rem;
+}
+
+.article-body ol {
+  list-style: decimal;
+  padding-left: 1.5rem;
+}
+
+.article-body h1,
+.article-body h2,
+.article-body h3 {
+  margin-block: 1rem 0.5rem;
+  font-weight: 700;
+}
+
+.article-body blockquote {
+  padding-left: 0.75rem;
+  border-left: 3px solid color-mix(in srgb, currentColor 25%, transparent);
+  color: color-mix(in srgb, currentColor 75%, transparent);
+}
