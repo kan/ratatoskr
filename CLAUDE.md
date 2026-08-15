@@ -73,6 +73,42 @@ pnpm lint               # ESLint + Prettier
 
 `pnpm typecheck` と `pnpm test` は**コミット前に必ず通す**こと。
 
+## 開発環境の注意点
+
+M0 の実装で判明した、環境まわりの制約と手順。
+
+### 初回セットアップ（クローン直後）
+
+```bash
+pnpm install       # esbuild / workerd の postinstall 許可は pnpm-workspace.yaml にコミット済み
+pnpm db:migrate    # .wrangler/ は未コミット。クローン直後のローカル D1 は空
+pnpm dev
+```
+
+Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCES で失敗する場合は
+`npm i -g pnpm` で入れてよい。
+
+### 依存バージョンの制約
+
+- **TypeScript は 5.9 に固定している。** vue-tsc 3.3.10 が TS 7 に未対応で、上げると
+  `pnpm typecheck` が `ERR_PACKAGE_PATH_NOT_EXPORTED` で落ちる。vue-tsc の対応後に上げる
+- `@cloudflare/vitest-pool-workers` 0.21 は `defineWorkersConfig` ではなく
+  `cloudflareTest` プラグイン方式。`env` は `cloudflare:test` ではなく
+  `cloudflare:workers` から import する
+- テストから Worker の `fetch` を直接呼ぶときは `Request` ではなく `IncomingRequest`
+  別名が必要（`src/api/health.test.ts` のパターンに従う）
+
+### ローカル実行の細かい点
+
+- `pnpm dev` は **vite(5173) と wrangler dev(8787) の 2 プロセス構成**。画面は 5173 を開き、
+  `/api` は vite の proxy で 8787 に渡る。本番は同一オリジンなので、クライアントは常に
+  相対パスで `/api` を叩けばよい
+- `pnpm db:console` は SQL を引数で渡す: `pnpm db:console "SELECT * FROM feeds"`
+- cron のローカル発火: `curl "http://localhost:8787/cdn-cgi/local/scheduled"`
+- `pnpm test:e2e` は Playwright を入れる M3 まで存在しない
+- `wrangler.jsonc` の `database_id` と `ACCESS_*` は `REPLACE_ME` のまま。ローカル開発には
+  影響しないが、デプロイ前に設定する
+
 ## 絶対に守るアーキテクチャ上の不変条件
 
 以下は設計の根幹であり、破ると同期やパフォーマンスが静かに壊れます。変更したくなった場合は実装せず、まず人間に相談してください。
