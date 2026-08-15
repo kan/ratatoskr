@@ -101,20 +101,28 @@ export interface Pin {
 | 名前 | 説明 |
 | --- | --- |
 | `entryCursor` | クライアントが持つ最大 entry id |
-| `since` | 前回同期時刻（Unix 秒） |
+| `since` | 前回同期時刻（Unix 秒）。現状は受け取るだけで応答に影響しない（後述） |
 
 ```jsonc
 {
   "serverTime": 1755000300,
-  "feeds": [ /* since 以降に変化した Feed のみ。readSeq / unreadCount を含む */ ],
-  "newEntries": [ /* entryCursor より大きい Entry[] */ ],
-  "pins": [ /* since 以降に変化した Pin[] */ ],
-  "deletedPinIds": [ 12, 34 ],
+  "feeds": [ /* Feed[] 全件。readSeq / unreadCount を含む */ ],
+  "newEntries": [ /* entryCursor より大きい Entry[]。1 回あたり最大 1000 件 */ ],
+  "pins": [ /* Pin[] 全件 */ ],
+  "deletedPinIds": [],
   "maxEntryId": 12900
 }
 ```
 
 クライアントは受け取った `readSeq` を `Math.max(local, remote)` でマージする。**上書きしない。**
+
+`maxEntryId` は**次回の `entryCursor` に送り返す値**であり、サーバが持つ最大 id とは限らない。`newEntries` が 1000 件で打ち切られた場合は、実際に返した最後の記事の id を返す。カーソルを返した範囲の先まで進めると、その間の記事を二度と取りに来られないため。続きは次の同期で返る。
+
+### `feeds` と `pins` を全件返している理由
+
+`since` 以降に変化したものだけを返す方が転送量は小さいが、現在のスキーマには **`feeds` の更新時刻も `pins` の削除記録も無い**。`read_seq` を動かすのは他端末なので `last_fetched_at` では代用できず、変化の検出を諦めて絞り込むと複数端末同期そのものが壊れる。
+
+そのため当面は全件返し、`deletedPinIds` は常に空を返す。想定規模（50〜150 フィード）なら数十 KB で収まる。変更追跡（`feeds` の更新時刻、削除済みピンの記録）は書き込みを実装する M4 / M6 で足し、そのときに `since` を有効化する。
 
 ## 書き込み
 
