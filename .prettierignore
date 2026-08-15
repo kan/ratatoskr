@@ -1,0 +1,11 @@
+node_modules/
+web/dist/
+.wrangler/
+pnpm-lock.yaml
+worker-configuration.d.ts
+
+# 人間が管理するファイルは整形対象にしない
+docs/
+migrations/
+CLAUDE.md
+wrangler.jsonc
