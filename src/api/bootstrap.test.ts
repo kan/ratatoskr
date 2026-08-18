@@ -30,7 +30,7 @@ describe('GET /api/bootstrap', () => {
 
     expect(mine.map((feed) => feed.title)).toEqual(['高・多', '高・少', '低']);
     expect(mine.map((feed) => feed.unreadCount)).toEqual([3, 1, 1]);
-    expect(body.schemaVersion).toBe(2);
+    expect(body.schemaVersion).toBe(3);
     expect(body.serverTime).toBeLessThan(1e11);
   });
 

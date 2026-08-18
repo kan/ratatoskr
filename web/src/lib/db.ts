@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { Entry, Feed } from '@shared/types';
+import type { Entry, Feed, Pin } from '@shared/types';
 import { SCHEMA_VERSION } from '@shared/types';
 import type { OutboxItem } from '@/stores/outbox';
 
@@ -36,6 +36,14 @@ interface RatatoskrDb extends DBSchema {
     value: OutboxItem;
   };
   /**
+   * ピン。サーバから取り直せるが、押した直後（送信前）の分は手元にしか無い。
+   * 送信待ちの控えは outbox にもあるので、ここは表示のための写し
+   */
+  pins: {
+    key: string;
+    value: Pin;
+  };
+  /**
    * 手動で未読に戻した記事（サーバの entry_states の写し）。
    * ウォーターマークから逸脱する記事だけを持つので、行数は実用上ゼロに近い
    */
@@ -59,7 +67,7 @@ const META_CURSOR = 'entryCursor';
 const META_SYNCED_AT = 'syncedAt';
 
 /** 作り直してよいストア。ここに無いものは中身ごと引き継ぐ */
-const CACHE_STORES = ['feeds', 'entries', 'meta'] as const;
+const CACHE_STORES = ['feeds', 'entries', 'meta', 'pins'] as const;
 
 let dbPromise: Promise<IDBPDatabase<RatatoskrDb>> | null = null;
 
@@ -75,6 +83,8 @@ function db(): Promise<IDBPDatabase<RatatoskrDb>> {
       const entries = database.createObjectStore('entries', { keyPath: 'id' });
       entries.createIndex('feedId', 'feedId');
       database.createObjectStore('meta');
+      // url をキーにする。サーバの UNIQUE と同じ単位で、id はまだ無いことがある
+      database.createObjectStore('pins', { keyPath: 'url' });
 
       // 未送信の書き込みは作り直さない。既にあるなら中身ごと引き継ぐ
       if (!database.objectStoreNames.contains('outbox')) {
@@ -215,4 +225,20 @@ export async function putEntryState(entryId: number): Promise<void> {
 
 export async function deleteEntryState(entryId: number): Promise<void> {
   await (await db()).delete('entryStates', entryId);
+}
+
+/** 新しい順に直して返す。IndexedDB はキー（url）順で返すので、そのままでは並びが崩れる */
+export async function loadPins(): Promise<Pin[]> {
+  const pins = await (await db()).getAll('pins');
+  return pins.sort((a, b) => b.pinnedAt - a.pinnedAt || b.id - a.id);
+}
+
+/** ピンは件数が少ないので丸ごと置き換える */
+export async function savePins(pins: Pin[]): Promise<void> {
+  const rows = pins.map(plain);
+  const database = await db();
+  const tx = database.transaction('pins', 'readwrite');
+  await tx.store.clear();
+  await Promise.all(rows.map((pin) => tx.store.put(pin)));
+  await tx.done;
 }

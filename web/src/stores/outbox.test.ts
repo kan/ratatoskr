@@ -1,8 +1,17 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, beaconRead, postRead, sendEntryUnread, updateFeed } from '@/lib/api';
+import {
+  ApiError,
+  beaconRead,
+  deletePin,
+  postPin,
+  postRead,
+  sendEntryUnread,
+  updateFeed,
+} from '@/lib/api';
 import { deleteOutboxItems, loadOutbox, putOutboxItem } from '@/lib/db';
 import { useOutboxStore } from './outbox';
+import { usePinsStore } from './pins';
 
 /**
  * 送信キューのテスト。見るのは「巻き戻らないこと」「重複送信で壊れないこと」
@@ -23,6 +32,12 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   postRead: vi.fn(() => Promise.resolve({ feeds: [] })),
   sendEntryUnread: vi.fn(() => Promise.resolve({ feeds: [] })),
   updateFeed: vi.fn(() => Promise.resolve({ feeds: [] })),
+  postPin: vi.fn(() =>
+    Promise.resolve({
+      pin: { id: 42, entryId: 1, title: 'ピン', url: 'https://example.com/1', pinnedAt: 0 },
+    }),
+  ),
+  deletePin: vi.fn(() => Promise.resolve({ deleted: 1 })),
   beaconRead: vi.fn(() => true),
 }));
 
@@ -271,5 +286,57 @@ describe('レート変更', () => {
 
     expect(updateFeed).toHaveBeenCalledWith(1, { rate: 2 });
     expect(outbox.pending).toBe(1);
+  });
+});
+
+describe('ピン', () => {
+  it('送信が通ったら、サーバの id を手元のピンに書き戻す', async () => {
+    const pins = usePinsStore();
+    pins.add(
+      {
+        id: 1,
+        feedId: 1,
+        url: 'https://example.com/1',
+        title: 'ピン',
+        author: null,
+        body: '',
+        publishedAt: null,
+        storedAt: 0,
+      },
+      0,
+    );
+
+    const outbox = useOutboxStore();
+    outbox.queuePin(1, 'ピン', 'https://example.com/1');
+    await vi.advanceTimersByTimeAsync(FLUSH_DELAY);
+
+    expect(postPin).toHaveBeenCalledWith({
+      entryId: 1,
+      title: 'ピン',
+      url: 'https://example.com/1',
+    });
+    // id が無いとそのピンを外せない
+    expect(pins.find('https://example.com/1')?.id).toBe(42);
+  });
+
+  it('送信前に外したら、送らずにキューから落とす', async () => {
+    const outbox = useOutboxStore();
+    outbox.queuePin(1, 'ピン', 'https://example.com/1');
+    // サーバはまだこのピンを知らない（id は仮の負の値）
+    expect(outbox.queueUnpin(-1, 'https://example.com/1')).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(FLUSH_DELAY);
+    expect(postPin).not.toHaveBeenCalled();
+    expect(deletePin).not.toHaveBeenCalled();
+    expect(outbox.pending).toBe(0);
+  });
+
+  it('送信済みのピンは id を指定して外す', async () => {
+    const outbox = useOutboxStore();
+    expect(outbox.queueUnpin(42, 'https://example.com/1')).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(FLUSH_DELAY);
+    expect(deletePin).toHaveBeenCalledWith(42);
+    expect(outbox.pending).toBe(0);
   });
 });

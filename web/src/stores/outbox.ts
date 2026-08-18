@@ -1,8 +1,17 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import type { ReadMark } from '@shared/types';
-import { ApiError, beaconRead, postRead, sendEntryUnread, updateFeed } from '@/lib/api';
+import {
+  ApiError,
+  beaconRead,
+  deletePin,
+  postPin,
+  postRead,
+  sendEntryUnread,
+  updateFeed,
+} from '@/lib/api';
 import { deleteOutboxItems, loadOutbox, putOutboxItem } from '@/lib/db';
+import { usePinsStore } from './pins';
 
 /**
  * 書き込みの送信キュー（CLAUDE.md の不変条件 3、docs/DESIGN.md §6）。
@@ -18,7 +27,9 @@ import { deleteOutboxItems, loadOutbox, putOutboxItem } from '@/lib/db';
 export type OutboxItem =
   | { key: string; kind: 'read'; feedId: number; watermark: number }
   | { key: string; kind: 'unread'; entryId: number; unread: boolean }
-  | { key: string; kind: 'rate'; feedId: number; rate: number };
+  | { key: string; kind: 'rate'; feedId: number; rate: number }
+  | { key: string; kind: 'pin'; entryId: number | null; title: string; url: string }
+  | { key: string; kind: 'unpin'; pinId: number };
 
 /** 積んでから送るまでの待ち。j 連打で 1 記事ごとに POST が飛ぶのを防ぐ */
 const FLUSH_DELAY = 2_000;
@@ -39,6 +50,15 @@ function rateKey(feedId: number): string {
   return `rate:${feedId}`;
 }
 
+/** ピンは URL で 1 件（サーバの UNIQUE と同じ単位）。外すのは id を持っている場合だけ */
+function pinKey(url: string): string {
+  return `pin:${url}`;
+}
+
+function unpinKey(pinId: number): string {
+  return `unpin:${pinId}`;
+}
+
 /**
  * 送り直しても通らないエラーか。記事が保持期間を過ぎて消えた後の未読戻し（404）や
  * 壊れたリクエスト（400）を延々と再送すると、その後ろの既読まで送れなくなる。
@@ -51,12 +71,18 @@ function isPermanent(error: unknown): boolean {
 }
 
 export const useOutboxStore = defineStore('outbox', () => {
+  const pinsStore = usePinsStore();
+
   /** key → 送信待ちの操作。同じ key への積み増しは上書きになる */
   const items = ref(new Map<string, OutboxItem>());
   const pending = computed(() => items.value.size);
 
   /** 送信中は次の吐き出しを始めない。応答を待つ間に同じものを二重に送らないため */
   let sending = false;
+  /** いま送信中の key。送信中のピンは取り消せない（サーバに出来てしまうため） */
+  const inFlight = new Set<string>();
+  /** 送信中に外されたピンの url。id が判った時点で改めて外す */
+  const cancelled = new Set<string>();
   let failures = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -110,6 +136,43 @@ export const useOutboxStore = defineStore('outbox', () => {
   }
 
   /**
+   * ピンを付ける。
+   *
+   * 送信が通るとサーバが id を振る。外すには id が要るので、応答を手元のピンに
+   * 書き戻す（送信結果を使う唯一の操作）。
+   */
+  function queuePin(entryId: number | null, title: string, url: string): void {
+    enqueue({ key: pinKey(url), kind: 'pin', entryId, title, url });
+  }
+
+  /**
+   * ピンを外す。
+   *
+   * まだ送っていない追加が残っていれば、それを取り消すだけでよい（サーバはまだ知らない）。
+   * ただし**送信中のものは取り消せない**。応答が返ればサーバにはピンが出来ているので、
+   * 取り消したつもりで消し忘れると、次の bootstrap で復活する。
+   * その場合は id が判ってから改めて外す（cancelled に控えておく）。
+   *
+   * @returns サーバへ送る必要があったか
+   */
+  function queueUnpin(pinId: number, url: string): boolean {
+    const key = pinKey(url);
+    const queued = items.value.get(key);
+
+    if (queued !== undefined && pinId < 0) {
+      if (inFlight.has(key)) {
+        cancelled.add(url);
+        return true;
+      }
+      items.value.delete(key);
+      void deleteOutboxItems([key]);
+      return false;
+    }
+    enqueue({ key: unpinKey(pinId), kind: 'unpin', pinId });
+    return true;
+  }
+
+  /**
    * 1 回の吐き出しで送る単位。既読はまとめて 1 リクエスト、未読戻しとレートは対象ごと。
    * marks が付いているものだけが sendBeacon に載せられる（離脱時の経路）。
    */
@@ -136,6 +199,19 @@ export const useOutboxStore = defineStore('outbox', () => {
         sends.push({ keys: [item.key], run: () => sendEntryUnread(item.entryId, item.unread) });
       } else if (item.kind === 'rate') {
         sends.push({ keys: [item.key], run: () => updateFeed(item.feedId, { rate: item.rate }) });
+      } else if (item.kind === 'pin') {
+        sends.push({
+          keys: [item.key],
+          // 応答の id を手元に書き戻す。これが無いと、そのピンを外せない
+          run: () =>
+            postPin({ entryId: item.entryId, title: item.title, url: item.url }).then((body) => {
+              pinsStore.confirm(item.url, body.pin.id);
+              // 送信中に外されていた。サーバには出来てしまったので、改めて外す
+              if (cancelled.delete(item.url)) queueUnpin(body.pin.id, item.url);
+            }),
+        });
+      } else if (item.kind === 'unpin') {
+        sends.push({ keys: [item.key], run: () => deletePin(item.pinId) });
       }
     }
     return sends;
@@ -179,6 +255,7 @@ export const useOutboxStore = defineStore('outbox', () => {
 
     sending = true;
     let failed = false;
+    for (const item of batch) inFlight.add(item.key);
     try {
       const sends = plan(batch);
       const results = await Promise.allSettled(sends.map((send) => send.run()));
@@ -195,6 +272,7 @@ export const useOutboxStore = defineStore('outbox', () => {
       });
       await settle(batch.filter((item) => sentKeys.has(item.key)));
     } finally {
+      inFlight.clear();
       sending = false;
     }
 
@@ -280,6 +358,8 @@ export const useOutboxStore = defineStore('outbox', () => {
     queueRead,
     queueUnread,
     queueRate,
+    queuePin,
+    queueUnpin,
     pendingRates,
     flush,
     flushOnUnload,

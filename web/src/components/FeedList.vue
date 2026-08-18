@@ -20,6 +20,8 @@ const props = defineProps<{
   currentEntryId: number | null;
   /** そのフィードの下に並べる記事。読んでいる最中のフィードだけ扱いが違う */
   entriesOf: (feedId: number) => Entry[];
+  /** ピンの立っている記事の url。一覧に目印を出すために引く */
+  pinnedUrls: Set<string>;
 }>();
 
 defineEmits<{ selectEntry: [feedId: number, entryId: number]; manage: [] }>();
@@ -125,6 +127,7 @@ watch(
           :feed="feed"
           :current-entry-id="feed.id === currentFeedId ? currentEntryId : null"
           :entries-of="entriesOf"
+          :pinned-urls="pinnedUrls"
           @select="(entryId) => $emit('selectEntry', feed.id, entryId)"
         />
       </li>

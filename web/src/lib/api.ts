@@ -7,7 +7,9 @@ import type {
   FeedCandidatesResponse,
   FeedResponse,
   FetchFeedResponse,
+  CreatePinRequest,
   OpmlImportResponse,
+  PinResponse,
   ReadMark,
   ReadRequest,
   ReadResponse,
@@ -184,4 +186,14 @@ export function importOpml(file: File): Promise<OpmlImportResponse> {
   const form = new FormData();
   form.set('file', file);
   return send<OpmlImportResponse>('POST', '/opml', form);
+}
+
+/** ピンの追加。同じ URL への重複はサーバが吸収する（冪等） */
+export function postPin(params: CreatePinRequest): Promise<PinResponse> {
+  return send<PinResponse>('POST', '/pins', params);
+}
+
+/** ピンの削除。既に消えていてもサーバは成功を返す（再送で詰まらせないため） */
+export function deletePin(id: number): Promise<{ deleted: number | null }> {
+  return send<{ deleted: number | null }>('DELETE', `/pins/${id}`);
 }

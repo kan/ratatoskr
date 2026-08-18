@@ -19,6 +19,8 @@ import {
   deleteEntryState,
   deleteFeedData,
   loadEntryStates,
+  loadPins,
+  savePins,
   loadSnapshot,
   putEntryState,
   putFeeds,
@@ -29,6 +31,7 @@ import {
 import { useEntriesStore } from './entries';
 import { sortByReadingOrder, useFeedsStore } from './feeds';
 import { useOutboxStore } from './outbox';
+import { usePinsStore } from './pins';
 
 /**
  * 起動シーケンス（docs/DESIGN.md §6）。
@@ -49,6 +52,7 @@ const PERSIST_DELAY = 500;
 export const useSessionStore = defineStore('session', () => {
   const feedsStore = useFeedsStore();
   const entriesStore = useEntriesStore();
+  const pinsStore = usePinsStore();
   const outbox = useOutboxStore();
 
   /** hydrated 以降は操作可能。ready は背景取得まで終わった状態 */
@@ -69,6 +73,8 @@ export const useSessionStore = defineStore('session', () => {
     readSeq: new Map<number, number>(),
     rate: new Map<number, number>(),
     forcedUnread: new Set<number>(),
+    /** 最後に書き戻したピンのリビジョン。変わっていなければ書き直さない */
+    pinRevision: 0,
   };
 
   async function boot(): Promise<void> {
@@ -103,7 +109,13 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   async function hydrate(): Promise<void> {
-    const [snapshot, forcedUnread] = await Promise.all([loadSnapshot(), loadEntryStates()]);
+    const [snapshot, forcedUnread, pins] = await Promise.all([
+      loadSnapshot(),
+      loadEntryStates(),
+      loadPins(),
+    ]);
+    pinsStore.setPins(pins);
+    persisted.pinRevision = pinsStore.revision;
     for (const feed of snapshot.feeds) {
       persisted.readSeq.set(feed.id, feed.readSeq);
       persisted.rate.set(feed.id, feed.rate);
@@ -127,6 +139,8 @@ export const useSessionStore = defineStore('session', () => {
     flushLocalState();
 
     entriesStore.ingest(body.entries);
+    // まだ送信が通っていないピンは残す（setPins の中で url を突き合わせる）
+    pinsStore.setPins(body.pins);
     feedsStore.setFeeds(body.feeds);
     // レートはサーバの値をそのまま受けるので、まだ届いていない変更を当て直す
     feedsStore.applyPendingRates(outbox.pendingRates());
@@ -142,6 +156,7 @@ export const useSessionStore = defineStore('session', () => {
     await Promise.all([
       saveFeeds(feedsStore.feeds),
       saveEntries(body.entries),
+      savePins(pinsStore.pins),
       saveCursor(body.maxEntryId, body.serverTime),
     ]);
   }
@@ -282,6 +297,20 @@ export const useSessionStore = defineStore('session', () => {
     void putFeeds(changed);
   }
 
+  /**
+   * ピンの手元への書き戻し。件数が少ないので丸ごと置き換える。
+   *
+   * 送信が通ってサーバの id が入ったときも書き戻す必要がある（リビジョンで拾う）。
+   * 仮の id のまま残すと、次の起動でそのピンを外せなくなる
+   */
+  function flushPins(): void {
+    // 読み進めているだけのときも、この吐き出しは 500ms ごとに走る。
+    // ピンが動いていないなら、全件の書き直しを丸ごと省く（feeds / 未読例外と同じ考え方）
+    if (pinsStore.revision === persisted.pinRevision) return;
+    persisted.pinRevision = pinsStore.revision;
+    void savePins(pinsStore.pins);
+  }
+
   /** 未読に戻した記事の増減。例外は基本ゼロ件なので、両方空なら走査ごと省く */
   function flushUnread(): void {
     const saved = persisted.forcedUnread;
@@ -310,6 +339,7 @@ export const useSessionStore = defineStore('session', () => {
     persistTimer = null;
     flushFeeds();
     flushUnread();
+    flushPins();
   }
 
   /**
@@ -324,6 +354,8 @@ export const useSessionStore = defineStore('session', () => {
       persisted.readSeq.set(feed.id, feed.readSeq);
       persisted.rate.set(feed.id, feed.rate);
     }
+    // ピンはこの直後に applyBootstrap がまとめて書き戻す
+    persisted.pinRevision = pinsStore.revision;
   }
 
   /**
@@ -336,7 +368,12 @@ export const useSessionStore = defineStore('session', () => {
     // 既読が進んだこと・未読に戻したことだけを見る。全フィードを走査して差分を探すと、
     // 記事を送るたびに購読数ぶんの走査が走る
     watch(
-      () => [feedsStore.readRevision, feedsStore.settingsRevision, entriesStore.unreadRevision],
+      () => [
+        feedsStore.readRevision,
+        feedsStore.settingsRevision,
+        entriesStore.unreadRevision,
+        pinsStore.revision,
+      ],
       () => {
         if (persistTimer !== null) clearTimeout(persistTimer);
         persistTimer = setTimeout(flushLocalState, PERSIST_DELAY);

@@ -7,7 +7,7 @@ import { GROUP_LABELS, KEYMAP, type KeyBinding } from '@/lib/keymap';
  * ここに一覧を書き写さないこと。書き写すと必ずキーの実体とずれる。
  */
 const groups = computed(() => {
-  const order: KeyBinding['group'][] = ['move', 'read', 'feed', 'other'];
+  const order: KeyBinding['group'][] = ['move', 'read', 'pin', 'feed', 'other'];
   return order
     .map((group) => ({
       label: GROUP_LABELS[group],

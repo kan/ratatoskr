@@ -173,6 +173,22 @@ export interface OpmlImportResponse {
   failed: { url: string; reason: string }[];
 }
 
+/**
+ * POST /api/pins
+ *
+ * title と url は必須。記事が保持期間を過ぎて消えてもピンが生き残るよう、
+ * 記事から引かずにピン自身が持つ（docs/API.md）。
+ */
+export interface CreatePinRequest {
+  entryId: number | null;
+  title: string;
+  url: string;
+}
+
+export interface PinResponse {
+  pin: Pin;
+}
+
 /** エラーレスポンスの形。HTTP ステータスは別に付く */
 export interface ApiErrorBody {
   error: {
@@ -194,5 +210,6 @@ export interface HealthResponse {
  * スキーマの破壊的変更時にインクリメントし、クライアントは IndexedDB を捨てて取り直す。
  *
  * 2: outbox（未送信の書き込み）と entryStates（手動で未読に戻した記事）を足した
+ * 3: pins（ピン）を足した
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;

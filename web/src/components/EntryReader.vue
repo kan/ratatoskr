@@ -10,6 +10,8 @@ import type { Entry } from '@shared/types';
  */
 const props = defineProps<{
   entry: Entry | null;
+  /** この記事にピンが立っているか。目印を出すだけで、操作は親が持つ */
+  pinned: boolean;
 }>();
 
 const scroller = ref<HTMLElement | null>(null);
@@ -60,7 +62,17 @@ defineExpose({ pageDown, pageUp, scrollToBottom });
 <template>
   <article ref="scroller" class="h-full overflow-y-auto px-6 py-4" data-testid="reader">
     <template v-if="entry">
-      <h1 class="text-xl font-bold" data-testid="entry-title">{{ entry.title || '(無題)' }}</h1>
+      <h1 class="text-xl font-bold">
+        <!-- ピンは目立たせない。読む邪魔をせず、目印として分かればよい。
+             タイトルの中には入れない（見出しの文言そのものを変えないため） -->
+        <span
+          v-if="pinned"
+          class="mr-1 align-middle text-sm text-amber-600 dark:text-amber-500"
+          data-testid="entry-pinned"
+          title="ピン済み"
+          >📌</span
+        ><span data-testid="entry-title">{{ entry.title || '(無題)' }}</span>
+      </h1>
       <p class="mt-1 text-xs text-neutral-500">
         <span v-if="entry.author">{{ entry.author }} / </span>
         <span v-if="entry.publishedAt">{{

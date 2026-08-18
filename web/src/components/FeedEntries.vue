@@ -19,6 +19,8 @@ const props = defineProps<{
   /** 読んでいる最中のフィードにだけ渡る。それ以外は null */
   currentEntryId: number | null;
   entriesOf: (feedId: number) => Entry[];
+  /** ピンの立っている記事の url */
+  pinnedUrls: Set<string>;
 }>();
 
 defineEmits<{ select: [entryId: number] }>();
@@ -29,6 +31,10 @@ const entries = computed(() => props.entriesOf(props.feed.id));
  * 読んだ記事は暗く、まだ読んでいない記事は通常の明るさで出す。
  * 既読判定はウォーターマーク（id <= read_seq）そのもの。記事ごとの既読フラグは無い
  */
+function isPinned(entry: Entry): boolean {
+  return entry.url !== null && props.pinnedUrls.has(entry.url);
+}
+
 function entryClass(entry: Entry): string {
   if (entry.id === props.currentEntryId) {
     return 'border-amber-600 bg-neutral-100 font-bold dark:border-amber-500 dark:bg-neutral-900';
@@ -52,6 +58,8 @@ function entryClass(entry: Entry): string {
         @click="$emit('select', entry.id)"
       >
         <span class="mr-1.5 tabular-nums">{{ index + 1 }}</span>
+        <!-- ピンの目印。数字の並びを崩さないよう、タイトル側に小さく出す -->
+        <span v-if="isPinned(entry)" :data-testid="`pinned-${entry.id}`" title="ピン済み">📌</span>
         {{ entry.title || '(無題)' }}
       </button>
     </li>

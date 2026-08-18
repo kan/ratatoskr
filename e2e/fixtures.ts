@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 import type {
   BootstrapResponse,
+  CreatePinRequest,
   CreateFeedResponse,
   EntriesResponse,
   Entry,
@@ -9,6 +10,7 @@ import type {
   FetchFeedResponse,
   ReadMark,
   ReadRequest,
+  PinResponse,
   ReadResponse,
   UpdateFeedRequest,
 } from '../shared/types';
@@ -102,6 +104,8 @@ export interface MockOptions {
  */
 export interface ApiRecorder {
   readMarks: ReadMark[];
+  pinned: CreatePinRequest[];
+  unpinned: number[];
   unreadCalls: { entryId: number; unread: boolean }[];
   /** PATCH /api/feeds/:id で届いた設定変更 */
   updates: { id: number; params: UpdateFeedRequest }[];
@@ -113,6 +117,8 @@ export interface ApiRecorder {
 export async function mockApi(page: Page, options: MockOptions = {}): Promise<ApiRecorder> {
   const recorder: ApiRecorder = {
     readMarks: [],
+    pinned: [],
+    unpinned: [],
     unreadCalls: [],
     updates: [],
     created: [],
@@ -127,7 +133,7 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
   await page.route('**/api/bootstrap*', async (route) => {
     const body: BootstrapResponse = {
       serverTime: 1786000100,
-      schemaVersion: 2,
+      schemaVersion: 3,
       feeds: FEEDS,
       entries: ENTRIES,
       pins: [],
@@ -215,6 +221,21 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
     const current = FEEDS.find((candidate) => candidate.id === id)!;
     const body: FeedResponse = { feed: { ...current, ...params } };
     await route.fulfill({ json: body });
+  });
+
+  await page.route('**/api/pins', async (route) => {
+    const params = route.request().postDataJSON() as CreatePinRequest;
+    recorder.pinned.push(params);
+    const body: PinResponse = {
+      pin: { id: 900 + recorder.pinned.length, ...params, pinnedAt: 1786000200 },
+    };
+    await route.fulfill({ status: 201, json: body });
+  });
+
+  await page.route('**/api/pins/*', async (route) => {
+    const id = Number(/\/pins\/(\d+)$/.exec(route.request().url())?.[1]);
+    recorder.unpinned.push(id);
+    await route.fulfill({ json: { deleted: id } });
   });
 
   return recorder;

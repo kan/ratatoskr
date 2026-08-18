@@ -1,12 +1,16 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import EntryReader from '@/components/EntryReader.vue';
 import FeedList from '@/components/FeedList.vue';
 import HelpOverlay from '@/components/HelpOverlay.vue';
+import PinList from '@/components/PinList.vue';
 import SubscriptionManager from '@/components/SubscriptionManager.vue';
 import { isTextInput, resolveBinding, type KeyBinding } from '@/lib/keymap';
 import { hasSeenHelp, markHelpSeen } from '@/lib/prefs';
+import type { Pin } from '@shared/types';
 import { useFeedsStore } from '@/stores/feeds';
+import { useOutboxStore } from '@/stores/outbox';
+import { usePinsStore } from '@/stores/pins';
 import { useSessionStore } from '@/stores/session';
 
 /**
@@ -15,18 +19,39 @@ import { useSessionStore } from '@/stores/session';
  * 対する処理だけを書く。
  */
 const feeds = useFeedsStore();
+const pins = usePinsStore();
+const outbox = useOutboxStore();
 const session = useSessionStore();
 
 const reader = ref<InstanceType<typeof EntryReader> | null>(null);
 
 // オーバーレイは「いま何が開いているか」で持つ。ピン一覧（M6）が増えたときに
 // 表示中フラグを増やさずに済ませるため
-const activeOverlay = ref<'help' | 'subscriptions' | null>(null);
+const activeOverlay = ref<'help' | 'subscriptions' | 'pins' | null>(null);
 
 const feedTitle = computed(() => feeds.currentFeed?.title ?? '');
 
-/** 手動更新のように、画面が変わらないことのある操作の結果を出す場所 */
+/** いま読んでいる記事にピンが立っているか。本文の見出しの目印に使う */
+const currentPinned = computed(() => {
+  const url = feeds.currentEntry?.url;
+  return url !== null && url !== undefined && pins.has(url);
+});
+
+/** 手動更新やピンのように、画面が変わらないことのある操作の結果を出す場所 */
 const notice = ref<string | null>(null);
+
+function notify(message: string): void {
+  notice.value = message;
+}
+
+// 知らせは短く出すだけのもの（docs/UX.md「トーストで短く通知する」）。
+// 次の記事に移ったら消す。読んでいる間ずっと出ていると本文の場所を食う
+watch(
+  () => feeds.currentEntry?.id,
+  () => {
+    notice.value = null;
+  },
+);
 
 /**
  * 押されたキーを処理する。処理したかどうかを返す。
@@ -36,9 +61,19 @@ const notice = ref<string | null>(null);
  * 奪わないため。読んでいる間は Space を必ず横取りする（既定のスクロールと衝突する）。
  */
 function handle(binding: KeyBinding): boolean {
-  // オーバーレイを開いている間は閉じる操作だけを受け付ける
+  // オーバーレイを開いている間は、閉じる操作とその画面自身の操作だけを受け付ける
   if (activeOverlay.value !== null) {
-    if (binding.action !== 'closeOverlay' && binding.action !== 'toggleHelp') return false;
+    if (activeOverlay.value === 'pins' && binding.action === 'openAllPins') {
+      openAllPins();
+      return true;
+    }
+    if (
+      binding.action !== 'closeOverlay' &&
+      binding.action !== 'toggleHelp' &&
+      binding.action !== 'togglePinList'
+    ) {
+      return false;
+    }
     closeOverlay();
     return true;
   }
@@ -68,6 +103,15 @@ function handle(binding: KeyBinding): boolean {
       break;
     case 'refreshFeed':
       refreshCurrentFeed();
+      break;
+    case 'togglePin':
+      togglePin();
+      break;
+    case 'togglePinList':
+      activeOverlay.value = 'pins';
+      break;
+    case 'openAllPins':
+      // ピン一覧を開いていないときは何もしない（誤爆でタブが大量に開くのを避ける）
       break;
     case 'pageDown':
       // 下端に着いていたら記事送りに変わる。境界の判断は読み手が持つ（docs/UX.md）
@@ -110,17 +154,89 @@ function refreshCurrentFeed(): void {
   const id = feeds.currentFeed?.id;
   if (id === undefined) return;
 
-  notice.value = '取得中…';
+  notify('取得中…');
   session
     .refresh(id)
     .then((added) => {
-      notice.value = added === 0 ? '新着は無かった' : `${added} 件の新着を取得した`;
+      notify(added === 0 ? '新着は無かった' : `${added} 件の新着を取得した`);
     })
     .catch((err: unknown) => {
-      notice.value = `更新に失敗した: ${err instanceof Error ? err.message : String(err)}`;
+      notify(`更新に失敗した: ${err instanceof Error ? err.message : String(err)}`);
     });
 }
 
+/**
+ * ピンを付ける / 外す（p）。**記事は切り替えない**（docs/UX.md）。
+ * 押したことが分かるよう、短い知らせだけ出す。
+ */
+function togglePin(): void {
+  const entry = feeds.currentEntry;
+  if (entry === null || entry.url === null) return;
+
+  const existing = pins.find(entry.url);
+  if (existing !== undefined) {
+    removePin(existing);
+    return;
+  }
+
+  const added = pins.add(entry, Math.floor(Date.now() / 1000));
+  if (added === null) return;
+  outbox.queuePin(added.entryId, added.title, added.url);
+  notify('ピンした');
+}
+
+function removePin(pin: Pin): void {
+  pins.remove(pin.url);
+  outbox.queueUnpin(pin.id, pin.url);
+}
+
+/**
+ * ピンを全て新しいタブで開く（o）。ピン一覧の表示中だけ効く。
+ *
+ * ブラウザは 1 回の操作で開ける新しいタブを 1 つに絞ることがある。
+ * **開けたものだけをピンから外す。** 全部消してからブロックに気付くと、
+ * 「後で処理する」控えが取り返しなく失われる。
+ */
+function openAllPins(): void {
+  const opening = [...pins.pins];
+  const blocked: Pin[] = [];
+
+  for (const pin of opening) {
+    if (openTab(pin.url)) removePin(pin);
+    else blocked.push(pin);
+  }
+
+  if (blocked.length === 0) {
+    if (opening.length > 0) notify(`${opening.length} 件をタブで開いた`);
+    activeOverlay.value = null;
+    return;
+  }
+
+  // 残った分を個別に開けるよう、一覧は閉じない
+  notify(
+    `${opening.length - blocked.length} 件を開いた。${blocked.length} 件はブラウザにブロックされた（ポップアップを許可すると全て開ける）`,
+  );
+}
+
+/**
+ * 新しいタブで開く。**開けたかどうかを返す。**
+ *
+ * noopener を付けて開くと、ブロックされていなくても戻り値が null になる（仕様）。
+ * 判定したいので付けずに開き、開いた直後に opener を切る。
+ * 参照を渡したままにすると、開いた先から元のタブを操作されうる
+ */
+function openTab(url: string): boolean {
+  const opened = window.open(url, '_blank');
+  if (opened === null) return false;
+  opened.opener = null;
+  return true;
+}
+
+/**
+ * 元記事を開く（v）。openTab は使わない。
+ * こちらは開けたかを知る必要が無いぶん、noreferrer まで付けて相手に渡す情報を減らせる
+ * （noreferrer を付けると戻り値が null になり、開けたかの判定はできなくなる）
+ */
 function openOriginal(): void {
   const url = feeds.currentEntry?.url;
   if (url) window.open(url, '_blank', 'noopener,noreferrer');
@@ -159,6 +275,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
       :current-feed-id="feeds.currentFeed?.id ?? null"
       :current-entry-id="feeds.currentEntry?.id ?? null"
       :entries-of="feeds.entriesFor"
+      :pinned-urls="pins.urls"
       @select-entry="feeds.selectEntryIn"
       @manage="activeOverlay = 'subscriptions'"
     />
@@ -205,11 +322,21 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
         >
           ({{ feeds.entryIndex + 1 }}/{{ feeds.entryCount }}) {{ feedTitle }}
         </header>
-        <EntryReader ref="reader" class="min-h-0 flex-1" :entry="feeds.currentEntry" />
+        <EntryReader
+          ref="reader"
+          class="min-h-0 flex-1"
+          :entry="feeds.currentEntry"
+          :pinned="currentPinned"
+        />
       </template>
     </main>
 
     <HelpOverlay v-if="activeOverlay === 'help'" @close="closeOverlay" />
     <SubscriptionManager v-if="activeOverlay === 'subscriptions'" @close="activeOverlay = null" />
+    <PinList
+      v-if="activeOverlay === 'pins'"
+      @close="activeOverlay = null"
+      @remove="(pin) => removePin(pin)"
+    />
   </div>
 </template>

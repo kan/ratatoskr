@@ -4,6 +4,7 @@ import { bootstrap } from './bootstrap';
 import { entries } from './entries';
 import { createFeed, refetchFeed, removeFeed, updateFeed } from './feeds';
 import { health } from './health';
+import { createPin, removePin } from './pins';
 import { exportOpml, importOpml } from './opml';
 import { read } from './read';
 import { sync } from './sync';
@@ -31,6 +32,8 @@ const ROUTES: Record<string, Handler> = {
   'PATCH /api/feeds/:id': (request, env, id) => updateFeed(request, env, id),
   'DELETE /api/feeds/:id': (_request, env, id) => removeFeed(env, id),
   'POST /api/feeds/:id/fetch': (_request, env, id) => refetchFeed(env, id),
+  'POST /api/pins': createPin,
+  'DELETE /api/pins/:id': (_request, env, id) => removePin(env, id),
   'GET /api/opml': (_request, env) => exportOpml(env),
   'POST /api/opml': importOpml,
 };

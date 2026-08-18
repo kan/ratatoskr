@@ -5,7 +5,7 @@
  * ヘルプ画面（?）も、押されたキーの判定も、この表 1 つから導く。
  * 表と判定を別々に書くと、ヘルプに載っているのに動かないキーが生まれる。
  *
- * 未実装のマイルストーンのキー（p / z / o）はまだ載せない。
+ * 未実装のマイルストーンのキーはまだ載せない。
  * ヘルプに出ているのに動かない状態を作らないため。
  */
 
@@ -18,6 +18,9 @@ export type Action =
   | 'markUnread'
   | 'refreshFeed'
   | 'setRate'
+  | 'togglePin'
+  | 'togglePinList'
+  | 'openAllPins'
   | 'pageDown'
   | 'pageUp'
   | 'openOriginal'
@@ -38,7 +41,7 @@ export interface KeyBinding {
   action: Action;
   description: string;
   /** ヘルプでの並び。同じ値は定義順 */
-  group: 'move' | 'read' | 'feed' | 'other';
+  group: 'move' | 'read' | 'feed' | 'pin' | 'other';
 
   /**
    * キーそのものが引数を兼ねる場合の値（レートの 1–5）。
@@ -87,6 +90,27 @@ export const KEYMAP: readonly KeyBinding[] = [
     action: 'openOriginal',
     description: '元記事を新しいタブで開く',
     group: 'read',
+  },
+  {
+    key: 'p',
+    label: 'p',
+    action: 'togglePin',
+    description: 'この記事をピンする / 外す',
+    group: 'pin',
+  },
+  {
+    key: 'z',
+    label: 'z',
+    action: 'togglePinList',
+    description: 'ピン一覧を開く / 閉じる',
+    group: 'pin',
+  },
+  {
+    key: 'o',
+    label: 'o',
+    action: 'openAllPins',
+    description: 'ピンを全て新しいタブで開く（ピン一覧の表示中）',
+    group: 'pin',
   },
   {
     key: 'r',
@@ -141,6 +165,7 @@ export function resolveBinding(event: KeyboardEvent): KeyBinding | null {
 export const GROUP_LABELS: Record<KeyBinding['group'], string> = {
   move: '移動',
   read: '読む',
+  pin: 'ピン',
   feed: 'フィード',
   other: 'その他',
 };
