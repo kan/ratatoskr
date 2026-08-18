@@ -8,9 +8,13 @@
   "assets": {
     "directory": "./web/dist",
     "binding": "ASSETS",
-    // SPA なので、未知のパスは index.html にフォールバックする。
-    // ただし /api/* は Worker が先に処理する
-    "not_found_handling": "single-page-application"
+    // SPA なので、未知のパスは index.html にフォールバックする
+    "not_found_handling": "single-page-application",
+    // /api/* は必ず Worker に渡す。
+    // single-page-application は「ナビゲーション要求（Sec-Fetch-Mode: navigate）で
+    // アセットに一致しないもの」を Worker より先に index.html へ倒す。これを指定しないと、
+    // リンクを踏んで開く経路（OPML の書き出し）だけ API が index.html を返す
+    "run_worker_first": ["/api/*"]
   },
 
   "d1_databases": [
