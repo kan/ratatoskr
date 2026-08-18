@@ -69,10 +69,63 @@ const META_SYNCED_AT = 'syncedAt';
 /** 作り直してよいストア。ここに無いものは中身ごと引き継ぐ */
 const CACHE_STORES = ['feeds', 'entries', 'meta', 'pins'] as const;
 
-let dbPromise: Promise<IDBPDatabase<RatatoskrDb>> | null = null;
+/**
+ * 手元の保存領域が使えなくなった理由。null なら使えている。
+ *
+ * **別のタブが古い版のまま接続を握っていると、openDB は解決も失敗もしない。**
+ * スキーマを上げるには既存の接続が全て閉じている必要があり、閉じるまで待ち続ける。
+ * 起動シーケンスは手元の読み出しを待つので、そのまま画面は「読み込み中…」で止まる
+ * （M6 で SCHEMA_VERSION を 3 に上げたときに実際に踏んだ）。
+ *
+ * 手元の控えはあくまで速さのための手段で、サーバのデータだけでも起動できることが
+ * 要件（docs/DESIGN.md §6）。待つのをやめて「控えが無い」状態として先に進める。
+ * 読みは空を返し、書きは捨てる。捨てたことは画面に出す（outbox だけは取り直せない）。
+ *
+ * 一度諦めたら、このセッションでは開き直さない。途中から書けるようにすると、
+ * 書けた分と捨てた分が混ざった控えが残り、次の起動でそれを正だと信じてしまう。
+ */
+let unavailable: string | null = null;
 
-function db(): Promise<IDBPDatabase<RatatoskrDb>> {
-  dbPromise ??= openDB<RatatoskrDb>(DB_NAME, SCHEMA_VERSION, {
+/** 使えなくなったことの通知先。画面に出すのは呼び出し側の仕事 */
+let notifyUnavailable: ((reason: string) => void) | null = null;
+
+/** 待っている呼び出しをまとめて諦めさせる（blocked を受けたときに呼ぶ） */
+let abandon: (() => void) | null = null;
+
+const BLOCKED =
+  '別のタブで古い版が開いているので、手元への保存ができない。全てのタブを閉じて開き直すと直る';
+const SUPERSEDED =
+  '別のタブで新しい版が開かれたので、この画面は手元への保存をやめた。再読み込みすること';
+
+/** 使えなくなったことを画面に伝える。起動シーケンスから 1 回だけ登録する */
+export function onLocalStoreUnavailable(handler: (reason: string) => void): void {
+  notifyUnavailable = handler;
+  if (unavailable !== null) handler(unavailable);
+}
+
+function disable(reason: string): void {
+  if (unavailable !== null) return;
+  unavailable = reason;
+  console.error(`手元の保存領域が使えない: ${reason}`);
+  notifyUnavailable?.(reason);
+  abandon?.();
+}
+
+let dbPromise: Promise<IDBPDatabase<RatatoskrDb> | null> | null = null;
+
+/** 開けなければ null を返す。呼び出し側は「控えが無い」として続けること */
+function db(): Promise<IDBPDatabase<RatatoskrDb> | null> {
+  if (unavailable !== null) return Promise.resolve(null);
+  dbPromise ??= openDatabase();
+  return dbPromise;
+}
+
+function openDatabase(): Promise<IDBPDatabase<RatatoskrDb> | null> {
+  const abandoned = new Promise<null>((resolve) => {
+    abandon = () => resolve(null);
+  });
+
+  const opening = openDB<RatatoskrDb>(DB_NAME, SCHEMA_VERSION, {
     upgrade(database, _oldVersion, _newVersion, transaction) {
       // キャッシュは全てサーバから取り直せる。互換を保つより捨てて作り直す方が安全
       for (const name of CACHE_STORES) {
@@ -98,8 +151,30 @@ function db(): Promise<IDBPDatabase<RatatoskrDb>> {
       transaction.objectStore('meta').put(0, META_CURSOR);
       transaction.objectStore('meta').put(0, META_SYNCED_AT);
     },
+
+    // 古い版を握っているタブがいて、スキーマを上げられない。待たずに諦める
+    blocked() {
+      disable(BLOCKED);
+    },
+
+    // こちらが古い版になった側。握り続けると新しい版のタブが起動できないので手を離す。
+    // この画面はもう古いコードで動いているので、書き戻しも止めて再読み込みを促す
+    blocking(_currentVersion, _blockedVersion, event) {
+      (event.target as IDBDatabase).close();
+      disable(SUPERSEDED);
+    },
   });
-  return dbPromise;
+  // race で捨てた側が未処理の拒否にならないようにしておく
+  opening.catch(() => undefined);
+
+  return Promise.race<IDBPDatabase<RatatoskrDb> | null>([opening, abandoned]).catch(
+    (error: unknown) => {
+      // 開けない理由は他にもある（容量不足、プライベートウィンドウ、版の不整合）。
+      // どれも「控えが無い」として続けられるので、扱いを分けない
+      disable(error instanceof Error ? error.message : String(error));
+      return null;
+    },
+  );
 }
 
 function asNumber(value: unknown): number {
@@ -109,6 +184,8 @@ function asNumber(value: unknown): number {
 /** 起動時に 1 回だけ呼ぶ。オフラインでもここまでは必ず動く */
 export async function loadSnapshot(): Promise<Snapshot> {
   const database = await db();
+  if (database === null) return { feeds: [], entries: [], entryCursor: 0, syncedAt: 0 };
+
   const [feeds, entries, entryCursor, syncedAt] = await Promise.all([
     database.getAll('feeds'),
     database.getAll('entries'),
@@ -139,6 +216,8 @@ export async function putFeeds(feeds: Feed[]): Promise<void> {
   if (feeds.length === 0) return;
   const rows = feeds.map(plain);
   const database = await db();
+  if (database === null) return;
+
   const tx = database.transaction('feeds', 'readwrite');
   await Promise.all(rows.map((feed) => tx.store.put(feed)));
   await tx.done;
@@ -148,6 +227,8 @@ export async function putFeeds(feeds: Feed[]): Promise<void> {
 export async function saveFeeds(feeds: Feed[]): Promise<void> {
   const rows = feeds.map(plain);
   const database = await db();
+  if (database === null) return;
+
   const tx = database.transaction('feeds', 'readwrite');
   await tx.store.clear();
   await Promise.all(rows.map((feed) => tx.store.put(feed)));
@@ -163,6 +244,8 @@ export async function saveEntries(entries: Entry[]): Promise<void> {
   if (entries.length === 0) return;
   const rows = entries.map(plain);
   const database = await db();
+  if (database === null) return;
+
   const tx = database.transaction('entries', 'readwrite');
   await Promise.all(rows.map((entry) => tx.store.put(entry)));
   await tx.done;
@@ -171,6 +254,8 @@ export async function saveEntries(entries: Entry[]): Promise<void> {
 /** 購読解除。フィードの行と、そのフィードの記事をまとめて捨てる */
 export async function deleteFeedData(feedId: number): Promise<void> {
   const database = await db();
+  if (database === null) return;
+
   const tx = database.transaction(['feeds', 'entries'], 'readwrite');
   const entries = tx.objectStore('entries');
   const keys = await entries.index('feedId').getAllKeys(feedId);
@@ -183,6 +268,8 @@ export async function deleteFeedData(feedId: number): Promise<void> {
 
 export async function saveCursor(entryCursor: number, syncedAt: number): Promise<void> {
   const database = await db();
+  if (database === null) return;
+
   const tx = database.transaction('meta', 'readwrite');
   await Promise.all([
     tx.store.put(entryCursor, META_CURSOR),
@@ -196,18 +283,20 @@ export async function saveCursor(entryCursor: number, syncedAt: number): Promise
  * 前回の起動でオフラインだった分は、ここから再送される。
  */
 export async function loadOutbox(): Promise<OutboxItem[]> {
-  return (await db()).getAll('outbox');
+  return (await db())?.getAll('outbox') ?? [];
 }
 
 /** キューへの積み増し。key で上書きされる（同じ対象への操作はまとめる） */
 export async function putOutboxItem(item: OutboxItem): Promise<void> {
-  await (await db()).put('outbox', plain(item));
+  await (await db())?.put('outbox', plain(item));
 }
 
 /** 送信が確定した分を落とす */
 export async function deleteOutboxItems(keys: string[]): Promise<void> {
   if (keys.length === 0) return;
   const database = await db();
+  if (database === null) return;
+
   const tx = database.transaction('outbox', 'readwrite');
   await Promise.all(keys.map((key) => tx.store.delete(key)));
   await tx.done;
@@ -215,21 +304,21 @@ export async function deleteOutboxItems(keys: string[]): Promise<void> {
 
 /** 手動で未読に戻した記事の id。再読み込みしても未読のまま残すために持つ */
 export async function loadEntryStates(): Promise<number[]> {
-  const rows = await (await db()).getAll('entryStates');
+  const rows = (await (await db())?.getAll('entryStates')) ?? [];
   return rows.map((row) => row.entryId);
 }
 
 export async function putEntryState(entryId: number): Promise<void> {
-  await (await db()).put('entryStates', { entryId });
+  await (await db())?.put('entryStates', { entryId });
 }
 
 export async function deleteEntryState(entryId: number): Promise<void> {
-  await (await db()).delete('entryStates', entryId);
+  await (await db())?.delete('entryStates', entryId);
 }
 
 /** 新しい順に直して返す。IndexedDB はキー（url）順で返すので、そのままでは並びが崩れる */
 export async function loadPins(): Promise<Pin[]> {
-  const pins = await (await db()).getAll('pins');
+  const pins = (await (await db())?.getAll('pins')) ?? [];
   return pins.sort((a, b) => b.pinnedAt - a.pinnedAt || b.id - a.id);
 }
 
@@ -237,6 +326,8 @@ export async function loadPins(): Promise<Pin[]> {
 export async function savePins(pins: Pin[]): Promise<void> {
   const rows = pins.map(plain);
   const database = await db();
+  if (database === null) return;
+
   const tx = database.transaction('pins', 'readwrite');
   await tx.store.clear();
   await Promise.all(rows.map((pin) => tx.store.put(pin)));

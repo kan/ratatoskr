@@ -19,6 +19,7 @@ import {
   deleteEntryState,
   deleteFeedData,
   loadEntryStates,
+  onLocalStoreUnavailable,
   loadPins,
   savePins,
   loadSnapshot,
@@ -58,6 +59,11 @@ export const useSessionStore = defineStore('session', () => {
   /** hydrated 以降は操作可能。ready は背景取得まで終わった状態 */
   const phase = ref<'booting' | 'hydrated' | 'ready'>('booting');
   const error = ref<string | null>(null);
+  /**
+   * 手元（IndexedDB）が使えない理由。読むだけなら困らないが、既読やピンが
+   * 手元にもキューにも残らない状態なので、黙って続けずに画面に出す
+   */
+  const localError = ref<string | null>(null);
   /** サーバが持つ最大 entry id。M4 の GET /api/sync のカーソルになる */
   const entryCursor = ref(0);
   const syncedAt = ref(0);
@@ -78,6 +84,10 @@ export const useSessionStore = defineStore('session', () => {
   };
 
   async function boot(): Promise<void> {
+    onLocalStoreUnavailable((reason) => {
+      localError.value = reason;
+    });
+
     // 手元の読み出しとネットワークは互いに依存しない。往復を待たせないよう先に投げる。
     // await するまでの間に失敗しても未処理拒否にならないようにしておく
     const bootstrapping = getBootstrap();
@@ -397,6 +407,7 @@ export const useSessionStore = defineStore('session', () => {
   return {
     phase,
     error,
+    localError,
     entryCursor,
     syncedAt,
     boot,

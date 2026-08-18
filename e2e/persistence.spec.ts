@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mockApi } from './fixtures';
+import { SCHEMA_VERSION } from '../shared/types';
 
 /**
  * 手元に残した既読が、再読み込みしても生き残ることの確認。
@@ -46,4 +47,39 @@ test('読み終えたフィードは再読み込み後も既読のまま', async
   await expect(page.getByTestId('entry-title')).toHaveText('夕刊の 1 本目');
   // 起動時の bootstrap で上書きされていないこと
   await expect.poll(() => storedReadSeq(page, 1)).toBe(12);
+});
+
+/**
+ * 別のタブが古い版のまま接続を握っていると、IndexedDB のスキーマ更新が始められず
+ * openDB は解決も失敗もしない。手元の読み出しを待ち続けて「読み込み中…」で
+ * 止まらないことを見る（M6 で SCHEMA_VERSION を 3 に上げたときに実際に踏んだ）。
+ */
+test('古い版のタブが接続を握っていても、サーバのデータで起動する', async ({ page, context }) => {
+  // アプリを動かさない同一オリジンのページで、1 つ前の版の接続を握らせる
+  const holder = await context.newPage();
+  await holder.route('**/*', (route) =>
+    route.fulfill({ contentType: 'text/html', body: '<html><body>holder</body></html>' }),
+  );
+  await holder.goto('/holder');
+  await holder.evaluate(
+    (version) =>
+      new Promise<void>((resolve, reject) => {
+        const request = indexedDB.open('ratatoskr', version);
+        request.onupgradeneeded = () => request.result.createObjectStore('meta');
+        request.onsuccess = () => {
+          // 参照を残して接続を開いたままにする（古いコードは versionchange で閉じない）
+          (window as unknown as { held: IDBDatabase }).held = request.result;
+          resolve();
+        };
+        request.onerror = () => reject(request.error);
+      }),
+    SCHEMA_VERSION - 1,
+  );
+
+  await mockApi(page);
+  await page.goto('/');
+
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+  // 手元に保存できないことは黙って続けずに画面に出す
+  await expect(page.getByTestId('local-error')).toContainText('古い版');
 });

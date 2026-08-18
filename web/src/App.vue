@@ -288,6 +288,13 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
         サーバに繋がらないので手元のデータで表示している: {{ session.error }}
       </p>
       <p
+        v-if="session.localError"
+        class="shrink-0 bg-amber-100 px-3 py-1 text-xs text-amber-900 dark:bg-amber-900 dark:text-amber-100"
+        data-testid="local-error"
+      >
+        {{ session.localError }}
+      </p>
+      <p
         v-if="notice"
         class="shrink-0 bg-neutral-200 px-3 py-1 text-xs text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
         data-testid="notice"
