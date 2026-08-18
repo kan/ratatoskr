@@ -314,3 +314,91 @@ describe('読む順序', () => {
     expect(sortByReadingOrder(stored).map((f) => f.id)).toEqual([11, 9, 2, 5]);
   });
 });
+
+describe('未読に戻す（u）', () => {
+  it('その記事だけを未読に戻し、ウォーターマークは動かさない', () => {
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    entriesStore.ingest(entries(1, [10, 11, 12]));
+    feeds.setFeeds([feed(1, { unreadCount: 3 })]);
+    feeds.enterFirstUnread();
+    feeds.nextEntry(); // 11 を表示 → 10 と 11 が既読
+
+    feeds.markCurrentUnread();
+    expect(feeds.feeds[0].readSeq).toBe(11);
+    // 10 は既読のまま。巻き戻すと後ろの既読がまとめて消える
+    expect(entriesStore.isUnread(10, feeds.feeds[0].readSeq)).toBe(false);
+    expect(entriesStore.isUnread(11, feeds.feeds[0].readSeq)).toBe(true);
+    expect(feeds.feeds[0].unreadCount).toBe(2);
+  });
+
+  it('既読化が追い越しても未読のまま残る', () => {
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    entriesStore.ingest(entries(1, [10, 11, 12]));
+    feeds.setFeeds([feed(1, { unreadCount: 3 })]);
+    feeds.enterFirstUnread();
+
+    feeds.markCurrentUnread(); // 10 を未読に戻す
+    feeds.nextEntry();
+    feeds.nextEntry(); // 12 まで読み進める
+
+    expect(feeds.feeds[0].readSeq).toBe(12);
+    expect(feeds.feeds[0].unreadCount).toBe(1);
+    expect(entriesStore.unreadOf(1, feeds.feeds[0].readSeq).map((e) => e.id)).toEqual([10]);
+  });
+
+  it('未読に戻したフィードに入り直すとその記事から読める', () => {
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    entriesStore.ingest(entries(1, [10, 11]));
+    entriesStore.ingest(entries(2, [20]));
+    feeds.setFeeds([feed(1, { unreadCount: 2 }), feed(2, { unreadCount: 1 })]);
+    feeds.enterFirstUnread();
+
+    feeds.markCurrentUnread(); // 10 を未読に戻す
+    feeds.nextEntry(); // 11
+    feeds.nextEntry(); // フィード 2 へ
+    expect(feeds.currentFeed?.id).toBe(2);
+
+    feeds.selectFeed(1);
+    expect(feeds.currentEntries.map((e) => e.id)).toEqual([10]);
+    // もう一度表示したのだから既読に戻る（「表示したら既読」が唯一の規則）
+    expect(entriesStore.isUnread(10, feeds.feeds[0].readSeq)).toBe(false);
+    expect(feeds.feeds[0].unreadCount).toBe(0);
+  });
+
+  it('背景取得で古い記事が届いても、未読に戻した記事の例外は外れない', () => {
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    // bootstrap が同梱するのは新しい方だけ。古い記事は後から届く
+    entriesStore.ingest(entries(1, [20, 21]));
+    feeds.setFeeds([feed(1, { unreadCount: 2 })]);
+    feeds.enterFirstUnread();
+    feeds.markCurrentUnread(); // 20 を未読に戻す
+
+    entriesStore.ingest(entries(1, [10, 11]));
+    feeds.absorbNewEntries();
+
+    // 差し替えの途中で位置がずれると、その記事の例外が解除されてしまう
+    expect(feeds.currentEntry?.id).toBe(20);
+    expect(entriesStore.isUnread(20, feeds.feeds[0].readSeq)).toBe(true);
+  });
+
+  it('Shift+S は未読に戻した記事も既読にする', () => {
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    entriesStore.ingest(entries(1, [10, 11, 12]));
+    entriesStore.ingest(entries(2, [20]));
+    feeds.setFeeds([feed(1, { unreadCount: 3 }), feed(2, { unreadCount: 1 })]);
+    feeds.enterFirstUnread();
+
+    feeds.markCurrentUnread(); // 10 を未読に戻す
+    feeds.readAllAndNext();
+
+    // 例外を残すとこのフィードが未読 1 件のまま居座る
+    expect(feeds.feeds[0].unreadCount).toBe(0);
+    expect(entriesStore.forcedUnread.size).toBe(0);
+    expect(feeds.currentFeed?.id).toBe(2);
+  });
+});

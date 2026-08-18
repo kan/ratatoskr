@@ -2,9 +2,19 @@ import { defineStore } from 'pinia';
 import { ref, watch } from 'vue';
 import { getBootstrap, getEntries } from '@/lib/api';
 import type { BootstrapResponse } from '@shared/types';
-import { loadSnapshot, putFeeds, saveCursor, saveEntries, saveFeeds } from '@/lib/db';
+import {
+  deleteEntryState,
+  loadEntryStates,
+  loadSnapshot,
+  putEntryState,
+  putFeeds,
+  saveCursor,
+  saveEntries,
+  saveFeeds,
+} from '@/lib/db';
 import { useEntriesStore } from './entries';
 import { sortByReadingOrder, useFeedsStore } from './feeds';
+import { useOutboxStore } from './outbox';
 
 /**
  * 起動シーケンス（docs/DESIGN.md §6）。
@@ -25,6 +35,7 @@ const PERSIST_DELAY = 500;
 export const useSessionStore = defineStore('session', () => {
   const feedsStore = useFeedsStore();
   const entriesStore = useEntriesStore();
+  const outbox = useOutboxStore();
 
   /** hydrated 以降は操作可能。ready は背景取得まで終わった状態 */
   const phase = ref<'booting' | 'hydrated' | 'ready'>('booting');
@@ -32,6 +43,15 @@ export const useSessionStore = defineStore('session', () => {
   /** サーバが持つ最大 entry id。M4 の GET /api/sync のカーソルになる */
   const entryCursor = ref(0);
   const syncedAt = ref(0);
+
+  /**
+   * 手元（IndexedDB）に保存済みの状態。差分の起点になる。
+   *
+   * **読み出した直後に控える。** 起動シーケンスの中で最初の記事を表示した時点で既読は
+   * 進み、未読に戻していた記事の例外も外れる。後から控えると、その変化が「無かったこと」
+   * になって書き戻しも送信もされない。
+   */
+  const persisted = { readSeq: new Map<number, number>(), forcedUnread: new Set<number>() };
 
   async function boot(): Promise<void> {
     // 手元の読み出しとネットワークは互いに依存しない。往復を待たせないよう先に投げる。
@@ -46,7 +66,12 @@ export const useSessionStore = defineStore('session', () => {
       console.error('ローカルの読み出しに失敗', err);
       phase.value = 'hydrated';
     }
-    persistLocalReads();
+    // 送信の契機は persistLocalState より後に張る。離脱時は「手元の変化を積む → 送る」
+    // の順でなければ、最後に読んだ分が送られない
+    persistLocalState();
+    outbox.install();
+    // 前回送り切れなかった分の再送。完了は待たずに読み始められる
+    void outbox.hydrate();
 
     try {
       await applyBootstrap(await bootstrapping);
@@ -60,8 +85,13 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   async function hydrate(): Promise<void> {
-    const snapshot = await loadSnapshot();
+    const [snapshot, forcedUnread] = await Promise.all([loadSnapshot(), loadEntryStates()]);
+    for (const feed of snapshot.feeds) persisted.readSeq.set(feed.id, feed.readSeq);
+    for (const entryId of forcedUnread) persisted.forcedUnread.add(entryId);
+
     entriesStore.ingest(snapshot.entries);
+    // 未読に戻した記事はサーバから復元できない。手元の記録がそのまま正
+    entriesStore.restoreForcedUnread(forcedUnread);
     // IndexedDB は id 順で返ってくる。読む順序に並べ直してから渡す
     feedsStore.setFeeds(sortByReadingOrder(snapshot.feeds));
     feedsStore.enterFirstUnread();
@@ -110,37 +140,73 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
-   * ローカルの既読（read_seq の前進）を IndexedDB に書き戻す。
-   * これをしないと再読み込みで読んだ記事がまた出てくる。
-   * サーバへの送信は M4 の outbox が担当する。
+   * ローカルの既読を手元（IndexedDB）に書き戻し、サーバへの送信キューに積む。
+   *
+   * 書き戻しをしないと再読み込みで読んだ記事がまた出てくる。積まないと他の端末に
+   * 伝わらない。どちらも「何が変わったか」を同じ差分から出すので 1 箇所にまとめる。
    */
-  function persistLocalReads(): void {
+  function persistLocalState(): void {
     let timer: ReturnType<typeof setTimeout> | null = null;
-    // 直近で書き戻した read_seq。差分だけを書くために覚えておく
-    const saved = new Map<number, number>();
+    // 保存済みの状態を起点に差分を出す。手元が読めなかった場合は空のまま始まり、
+    // 最初の 1 回で全件を書き戻す（多いのは初回だけなので許容する）
+    const savedReadSeq = persisted.readSeq;
+    const savedUnread = persisted.forcedUnread;
+
+    /** 進んだ既読。フィード単位なので、変わった行だけをまとめて書く */
+    const flushReads = (): void => {
+      const changed = feedsStore.feeds.filter((feed) => savedReadSeq.get(feed.id) !== feed.readSeq);
+      if (changed.length === 0) return;
+      for (const feed of changed) {
+        savedReadSeq.set(feed.id, feed.readSeq);
+        outbox.queueRead(feed.id, feed.readSeq);
+      }
+      void putFeeds(changed);
+    };
+
+    /** 未読に戻した記事の増減。例外は基本ゼロ件なので、両方空なら走査ごと省く */
+    const flushUnread = (): void => {
+      if (savedUnread.size === 0 && entriesStore.forcedUnread.size === 0) return;
+
+      for (const entryId of entriesStore.forcedUnread) {
+        if (savedUnread.has(entryId)) continue;
+        savedUnread.add(entryId);
+        void putEntryState(entryId);
+        outbox.queueUnread(entryId, true);
+      }
+      // 削除しながら回るので複製を辿る
+      for (const entryId of [...savedUnread]) {
+        if (entriesStore.forcedUnread.has(entryId)) continue;
+        savedUnread.delete(entryId);
+        void deleteEntryState(entryId);
+        outbox.queueUnread(entryId, false);
+      }
+    };
 
     const flush = (): void => {
       if (timer !== null) clearTimeout(timer);
       timer = null;
-
-      const changed = feedsStore.feeds.filter((feed) => saved.get(feed.id) !== feed.readSeq);
-      if (changed.length === 0) return;
-      for (const feed of changed) saved.set(feed.id, feed.readSeq);
-      void putFeeds(changed);
+      flushReads();
+      flushUnread();
     };
 
-    // 既読が進んだことだけを見る。全フィードを走査して差分を探すと、
+    // 既読が進んだこと・未読に戻したことだけを見る。全フィードを走査して差分を探すと、
     // 記事を送るたびに購読数ぶんの走査が走る
     watch(
-      () => feedsStore.readRevision,
+      () => [feedsStore.readRevision, entriesStore.unreadRevision],
       () => {
         if (timer !== null) clearTimeout(timer);
         timer = setTimeout(flush, PERSIST_DELAY);
       },
     );
 
+    // 起動シーケンスの中で進んだ分（最初の記事の表示）を先に片付ける。
+    // watch は「以降の変化」しか見ないので、これが無いと手元を読み直しただけの起動で
+    // 表示した記事が書き戻しも送信もされない
+    flush();
+
     // 最終記事を読んだ直後にタブを閉じても取りこぼさない。
-    // pagehide だけだと破棄が間に合わないことがあるので、先に来る visibilitychange でも流す
+    // pagehide だけだと破棄が間に合わないことがあるので、先に来る visibilitychange でも流す。
+    // outbox も同じ契機で送信する。ここで積んだ分をそちらが拾えるよう、先に登録しておく
     window.addEventListener('pagehide', flush);
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') flush();

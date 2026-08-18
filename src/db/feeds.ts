@@ -1,5 +1,5 @@
-import type { Feed } from '../../shared/types';
-import { UNREAD_JOIN, UNREAD_PREDICATE } from './unread';
+import type { Feed, FeedReadState, ReadMark } from '../../shared/types';
+import { UNREAD_COUNT_SUBQUERY } from './unread';
 
 /**
  * feeds に対するクエリ。SQL は src/db/ の外に書かない（CLAUDE.md）。
@@ -49,15 +49,52 @@ export async function selectFeeds(db: D1Database): Promise<Feed[]> {
     .prepare(
       `SELECT f.id, f.url, f.site_url, f.title, f.icon_url, f.rate, f.folder, f.read_seq,
               f.last_fetched_at, f.last_error, f.disabled,
-              (SELECT COUNT(*)
-                 FROM entries e
-                 ${UNREAD_JOIN}
-                WHERE e.feed_id = f.id AND ${UNREAD_PREDICATE}) AS unread_count
+              ${UNREAD_COUNT_SUBQUERY} AS unread_count
          FROM feeds f
         ORDER BY f.rate DESC, unread_count DESC, f.id`,
     )
     .all<FeedRow>();
   return results.map(toFeed);
+}
+
+/**
+ * 既読ウォーターマークの更新。
+ *
+ * **必ず MAX を取る**（CLAUDE.md の不変条件 1）。単調増加であることが複数端末同期の
+ * 唯一の保証なので、SET read_seq = ? と書いた瞬間に巻き戻りが発生する。
+ * MAX である限り、重複しても順序が入れ替わっても結果は変わらない。
+ *
+ * 存在しないフィード id は 0 行更新になるだけで、エラーにはしない
+ * （他端末で購読を消した後に届く送信が失敗し続けるのを避ける）。
+ */
+export async function applyReadMarks(db: D1Database, marks: ReadMark[]): Promise<void> {
+  if (marks.length === 0) return;
+  const statement = db.prepare('UPDATE feeds SET read_seq = MAX(read_seq, ?) WHERE id = ?');
+  // D1 には長時間トランザクションが無いので batch() にまとめる（CLAUDE.md）
+  await db.batch(marks.map((mark) => statement.bind(mark.watermark, mark.feedId)));
+}
+
+/** 書き込み後の状態。応答に載せて、クライアントが自分の値と突き合わせられるようにする */
+export async function selectFeedReadStates(
+  db: D1Database,
+  ids: number[],
+): Promise<FeedReadState[]> {
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(', ');
+  const { results } = await db
+    .prepare(
+      `SELECT f.id, f.read_seq, ${UNREAD_COUNT_SUBQUERY} AS unread_count
+         FROM feeds f
+        WHERE f.id IN (${placeholders})
+        ORDER BY f.id`,
+    )
+    .bind(...ids)
+    .all<{ id: number; read_seq: number; unread_count: number }>();
+  return results.map((row) => ({
+    id: row.id,
+    readSeq: row.read_seq,
+    unreadCount: row.unread_count,
+  }));
 }
 
 /** クローラが 1 フィードを処理するのに必要な列だけを引く */

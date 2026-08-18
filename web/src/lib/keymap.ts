@@ -5,7 +5,7 @@
  * ヘルプ画面（?）も、押されたキーの判定も、この表 1 つから導く。
  * 表と判定を別々に書くと、ヘルプに載っているのに動かないキーが生まれる。
  *
- * 未実装のマイルストーンのキー（p / z / o / r / 1-5 / u）はまだ載せない。
+ * 未実装のマイルストーンのキー（p / z / o / r / 1-5）はまだ載せない。
  * ヘルプに出ているのに動かない状態を作らないため。
  */
 
@@ -15,6 +15,7 @@ export type Action =
   | 'nextFeed'
   | 'prevFeed'
   | 'readAllAndNext'
+  | 'markUnread'
   | 'pageDown'
   | 'pageUp'
   | 'openOriginal'
@@ -48,6 +49,13 @@ export const KEYMAP: readonly KeyBinding[] = [
     label: 'Shift+S',
     action: 'readAllAndNext',
     description: 'このフィードを全て既読にして次へ',
+    group: 'read',
+  },
+  {
+    key: 'u',
+    label: 'u',
+    action: 'markUnread',
+    description: 'この記事を未読に戻す',
     group: 'read',
   },
   {

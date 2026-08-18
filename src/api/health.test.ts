@@ -24,7 +24,7 @@ describe('GET /api/health', () => {
     const body = (await response.json()) as HealthResponse;
     expect(body.ok).toBe(true);
     expect(body.db).toBe('ok');
-    expect(body.schemaVersion).toBe(1);
+    expect(body.schemaVersion).toBe(2);
     // 時刻は Unix 秒。ミリ秒が混ざっていないことを桁数で見る
     expect(body.serverTime).toBeLessThan(1e11);
   });

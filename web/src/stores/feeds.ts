@@ -66,13 +66,18 @@ export const useFeedsStore = defineStore('feeds', () => {
     return entriesStore.of(feed.id).length > 0;
   }
 
+  /** 左ペインの未読数は手元の記事から数える。数え方を 1 箇所に閉じておく */
+  function syncUnreadCount(feed: Feed): void {
+    feed.unreadCount = entriesStore.countUnread(feed.id, feed.readSeq);
+  }
+
   /**
    * フィード一覧を差し替える。読んでいる最中なら現在位置を id で引き継ぐ
    * （bootstrap と背景取得で何度も呼ばれる）。
    *
-   * read_seq は単調増加でなければならない（不変条件 1）。M3 の時点では既読を
-   * サーバに送っていないので、サーバの read_seq は常に手元より古い。
-   * そのまま受けると読んだ記事が毎回の起動で未読に戻るため、必ず MAX を取る。
+   * read_seq は単調増加でなければならない（不変条件 1）。既読の送信は outbox 経由で
+   * 遅れて届くので、サーバの read_seq は手元より古いことがある。そのまま受けると
+   * 読んだ記事が未読に戻るため、必ず MAX を取る（docs/API.md の sync 節）。
    */
   function setFeeds(next: Feed[]): void {
     const localReadSeq = new Map(feeds.value.map((feed) => [feed.id, feed.readSeq]));
@@ -102,9 +107,7 @@ export const useFeedsStore = defineStore('feeds', () => {
    * 途中で呼ぶと、まだ届いていない記事の分だけ未読数が少なく出る。
    */
   function recountUnread(): void {
-    for (const feed of feeds.value) {
-      feed.unreadCount = entriesStore.countUnread(feed.id, feed.readSeq);
-    }
+    for (const feed of feeds.value) syncUnreadCount(feed);
   }
 
   /** 起動時に 1 回。未読の先頭フィードにカーソルを置く */
@@ -158,15 +161,19 @@ export const useFeedsStore = defineStore('feeds', () => {
     if (additions.length === 0) return;
 
     const currentId = currentEntry.value?.id ?? null;
-    currentEntries.value = [...currentEntries.value, ...additions].sort((a, b) => a.id - b.id);
+    const merged = [...currentEntries.value, ...additions].sort((a, b) => a.id - b.id);
 
     // 読んでいる記事を見失わないよう、id で位置を取り直す
-    if (currentId !== null) {
-      const moved = currentEntries.value.findIndex((entry) => entry.id === currentId);
-      if (moved !== -1) entryIndex.value = moved;
-    }
-    // 届いた分を未読数にも反映する。左ペインの数字は手元の記事から数える
-    feed.unreadCount = entriesStore.countUnread(feed.id, feed.readSeq);
+    const moved = currentId === null ? -1 : merged.findIndex((entry) => entry.id === currentId);
+
+    // enterFeed と同じ理由で、一度空にしてから入れ替える。リストだけ先に差し替えると
+    // 「新しいリストの、古い位置」を指した記事が一瞬できてしまい、既読化と未読例外の
+    // 解除がその記事に走る（背景取得は古い記事を足すので、位置はほぼ必ずずれる）
+    currentEntries.value = [];
+    if (moved !== -1) entryIndex.value = moved;
+    currentEntries.value = merged;
+    // 届いた分を未読数にも反映する
+    syncUnreadCount(feed);
   }
 
   function findFeed(from: number, step: 1 | -1, accept: (feed: Feed) => boolean): number {
@@ -241,8 +248,11 @@ export const useFeedsStore = defineStore('feeds', () => {
   function readAllAndNext(): void {
     const feed = currentFeed.value;
     if (feed !== null) {
+      // 未読に戻した記事も「全て既読」に含める。残すとこのフィードが未読のまま居座る
+      const cleared = entriesStore.clearForcedUnreadIn(feed.id);
       // 手元にある分までを既読にする。取得後にサーバへ届いた記事は巻き込まない
       advanceReadSeq(feed, entriesStore.maxIdOf(feed.id));
+      if (cleared) syncUnreadCount(feed);
     }
     nextFeed();
   }
@@ -254,26 +264,55 @@ export const useFeedsStore = defineStore('feeds', () => {
    * 表示した記事の id までしか進めない。手元にある全記事の最大 id を使うと、
    * 背景取得で届いただけでまだ表示していない記事まで既読にしてしまう。
    *
-   * M3 の時点ではローカルにしか反映しない。サーバへの送信は M4 の outbox で足す。
+   * ここではローカルにしか反映しない。手元への書き戻しとサーバへの送信は、
+   * readRevision を見ている stores/session.ts が outbox 経由で行う（不変条件 3）。
    */
   function advanceReadSeq(feed: Feed, watermark: number): void {
     // 巻き戻さないよう必ず MAX を取る（不変条件 1）
     if (watermark <= feed.readSeq) return;
     feed.readSeq = watermark;
-    feed.unreadCount = entriesStore.countUnread(feed.id, watermark);
+    syncUnreadCount(feed);
     readRevision.value += 1;
   }
+
+  /**
+   * 現在の記事を未読に戻す（u キー）。ウォーターマークは動かさない。
+   * 動かすとこの記事より後ろの既読が全て巻き戻るので、例外として 1 件だけ記録する
+   * （docs/DESIGN.md §4 の entry_states）。
+   */
+  function markCurrentUnread(): void {
+    const feed = currentFeed.value;
+    const entry = currentEntry.value;
+    if (feed === null || entry === null) return;
+    if (!entriesStore.setForcedUnread(entry.id, true)) return;
+    syncUnreadCount(feed);
+  }
+
+  /** 直前に表示した記事。カーソルが動いたのか、足元のリストが入れ替わっただけかを見分ける */
+  let displayed: number | null = null;
 
   /**
    * 表示した記事は必ず既読にする。移動の経路（j / k / s / a / 一覧クリック）ごとに
    * 呼び忘れないよう、カーソルの変化そのものに紐付けている。
    * sync で流すのは、テストと E2E で「押した直後の状態」を素直に見られるようにするため。
+   *
+   * 未読に戻した記事をもう一度**表示しに行った**ときは例外を外す。「表示したら既読」を
+   * 唯一の規則にしておかないと、一度 u を押した記事が読んでも消えなくなる。
+   *
+   * ただし反応するのはカーソルが別の記事に動いたときだけ。リストの差し替え
+   * （enterFeed / absorbNewEntries）でも currentEntry は一度 null を挟んで作り直されるので、
+   * それに反応すると、いま座っている記事に押した u が背景取得のたびに消える。
    */
   watch(
     currentEntry,
     (entry) => {
       const feed = currentFeed.value;
-      if (feed !== null && entry !== null) advanceReadSeq(feed, entry.id);
+      if (feed === null || entry === null) return;
+      if (entry.id === displayed) return;
+      displayed = entry.id;
+
+      if (entriesStore.setForcedUnread(entry.id, false)) syncUnreadCount(feed);
+      advanceReadSeq(feed, entry.id);
     },
     { flush: 'sync' },
   );
@@ -296,6 +335,7 @@ export const useFeedsStore = defineStore('feeds', () => {
     selectFeed,
     selectEntry,
     readAllAndNext,
+    markCurrentUnread,
     nextEntry,
     prevEntry,
     nextFeed,

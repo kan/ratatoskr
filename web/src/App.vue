@@ -47,6 +47,9 @@ function handle(action: Action): void {
     case 'readAllAndNext':
       feeds.readAllAndNext();
       break;
+    case 'markUnread':
+      feeds.markCurrentUnread();
+      break;
     case 'pageDown':
       // 下端に着いていたら記事送りに変わる。境界の判断は読み手が持つ（docs/UX.md）
       if (!reader.value?.pageDown()) feeds.nextEntry();

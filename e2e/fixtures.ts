@@ -1,5 +1,13 @@
 import type { Page } from '@playwright/test';
-import type { BootstrapResponse, EntriesResponse, Entry, Feed } from '../shared/types';
+import type {
+  BootstrapResponse,
+  EntriesResponse,
+  Entry,
+  Feed,
+  ReadMark,
+  ReadRequest,
+  ReadResponse,
+} from '../shared/types';
 import { HELP_SEEN_KEY } from '../web/src/lib/prefs';
 
 /**
@@ -64,7 +72,18 @@ export interface MockOptions {
   showHelp?: boolean;
 }
 
-export async function mockApi(page: Page, options: MockOptions = {}): Promise<void> {
+/**
+ * サーバに届いた書き込み。既読同期（M4）は「送られたか」が見たいことの全てなので、
+ * 応答は空で返し、届いた中身だけを控えておく。
+ */
+export interface ApiRecorder {
+  readMarks: ReadMark[];
+  unreadCalls: { entryId: number; unread: boolean }[];
+}
+
+export async function mockApi(page: Page, options: MockOptions = {}): Promise<ApiRecorder> {
+  const recorder: ApiRecorder = { readMarks: [], unreadCalls: [] };
+
   if (options.showHelp !== true) {
     await page.addInitScript((key) => localStorage.setItem(key, '1'), HELP_SEEN_KEY);
   }
@@ -72,7 +91,7 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<vo
   await page.route('**/api/bootstrap*', async (route) => {
     const body: BootstrapResponse = {
       serverTime: 1786000100,
-      schemaVersion: 1,
+      schemaVersion: 2,
       feeds: FEEDS,
       entries: ENTRIES,
       pins: [],
@@ -85,4 +104,20 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<vo
     const body: EntriesResponse = { entries: ENTRIES, nextSinceId: null, hasMore: false };
     await route.fulfill({ json: body });
   });
+
+  await page.route('**/api/read', async (route) => {
+    const body = route.request().postDataJSON() as ReadRequest;
+    recorder.readMarks.push(...body.marks);
+    const empty: ReadResponse = { feeds: [] };
+    await route.fulfill({ json: empty });
+  });
+
+  await page.route('**/api/entries/*/unread', async (route) => {
+    const entryId = Number(/\/entries\/(\d+)\/unread$/.exec(route.request().url())?.[1]);
+    recorder.unreadCalls.push({ entryId, unread: route.request().method() === 'POST' });
+    const empty: ReadResponse = { feeds: [] };
+    await route.fulfill({ json: empty });
+  });
+
+  return recorder;
 }

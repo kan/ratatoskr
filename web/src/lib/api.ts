@@ -1,4 +1,11 @@
-import type { ApiErrorBody, BootstrapResponse, EntriesResponse } from '@shared/types';
+import type {
+  ApiErrorBody,
+  BootstrapResponse,
+  EntriesResponse,
+  ReadMark,
+  ReadRequest,
+  ReadResponse,
+} from '@shared/types';
 
 /**
  * 型付き API クライアント。
@@ -67,4 +74,53 @@ export type EntriesParams = {
 
 export function getEntries(params: EntriesParams = {}): Promise<EntriesResponse> {
   return get<EntriesResponse>('/entries', params);
+}
+
+/**
+ * 書き込み。全て冪等なので、失敗したら同じものをそのまま再送してよい（DESIGN.md §6）。
+ *
+ * keepalive を付けると、タブが閉じられた後もブラウザが送信を続けてくれる。
+ * outbox の吐き出しは離脱時に走ることがあるので既定で付ける。
+ */
+async function send<T>(method: 'POST' | 'DELETE', path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`/api${path}`, {
+    method,
+    headers: {
+      accept: 'application/json',
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    credentials: 'same-origin',
+    keepalive: true,
+  });
+
+  if (!response.ok) throw await toApiError(response);
+  return (await response.json()) as T;
+}
+
+/** 既読ウォーターマークをまとめて送る */
+export function postRead(marks: ReadMark[]): Promise<ReadResponse> {
+  const body: ReadRequest = { marks };
+  return send<ReadResponse>('POST', '/read', body);
+}
+
+/** 個別の記事を未読に戻す / 戻したものを既読にする */
+export function sendEntryUnread(entryId: number, unread: boolean): Promise<ReadResponse> {
+  const path = `/entries/${entryId}/unread`;
+  return unread ? send<ReadResponse>('POST', path) : send<ReadResponse>('DELETE', path);
+}
+
+/**
+ * ページ破棄の直前に既読を送る。fetch は破棄と競合して取り消されることがあるので、
+ * ブラウザに送信を委ねられる sendBeacon を使う。
+ *
+ * 応答は読めない。届いたかどうかは分からないので、キューからは消さずに次回の起動で
+ * 再送する（冪等なので二重に届いても害が無い）。
+ */
+export function beaconRead(marks: ReadMark[]): boolean {
+  if (typeof navigator.sendBeacon !== 'function') return false;
+  const body: ReadRequest = { marks };
+  // Content-Type は Blob の type がそのまま載る
+  const blob = new Blob([JSON.stringify(body)], { type: 'application/json' });
+  return navigator.sendBeacon('/api/read', blob);
 }

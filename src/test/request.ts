@@ -7,16 +7,29 @@ import worker from '../index';
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 
 /**
- * Worker に GET を投げる。既定のオリジンは localhost で、認証はバイパスされる
+ * Worker に 1 リクエスト投げる。既定のオリジンは localhost で、認証はバイパスされる
  * （vitest.config.ts で ACCESS_DEV_BYPASS を立てている）。
  * 本番相当のオリジンを渡すとバイパスが効かず 401 になる。
  */
-export async function apiGet(path: string, origin = 'http://localhost'): Promise<Response> {
-  const request = new IncomingRequest(`${origin}${path}`);
+export async function apiSend(
+  method: 'GET' | 'POST' | 'DELETE',
+  path: string,
+  body?: unknown,
+  origin = 'http://localhost',
+): Promise<Response> {
+  const request = new IncomingRequest(`${origin}${path}`, {
+    method,
+    headers: body === undefined ? {} : { 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
   const ctx = createExecutionContext();
   const response = await worker.fetch(request, env, ctx);
   await waitOnExecutionContext(ctx);
   return response;
+}
+
+export function apiGet(path: string, origin = 'http://localhost'): Promise<Response> {
+  return apiSend('GET', path, undefined, origin);
 }
 
 export async function apiJson<T>(path: string): Promise<T> {

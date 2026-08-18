@@ -74,6 +74,34 @@ export interface SyncResponse {
   maxEntryId: number;
 }
 
+/**
+ * POST /api/read
+ *
+ * 既読ウォーターマークの更新。outbox からまとめて送られる。
+ * 同じものを何度送っても、順序が入れ替わっても結果が変わらない（必ず MAX を取るため）。
+ */
+export interface ReadMark {
+  feedId: number;
+  /** 既読済みの最大 entries.id。これより後ろは未読のまま残る */
+  watermark: number;
+}
+
+export interface ReadRequest {
+  marks: ReadMark[];
+}
+
+/** 書き込み後のフィードの状態。クライアントは readSeq を Math.max で受ける */
+export interface FeedReadState {
+  id: number;
+  readSeq: number;
+  unreadCount: number;
+}
+
+/** POST /api/read と POST / DELETE /api/entries/:id/unread の応答 */
+export interface ReadResponse {
+  feeds: FeedReadState[];
+}
+
 /** エラーレスポンスの形。HTTP ステータスは別に付く */
 export interface ApiErrorBody {
   error: {
@@ -93,5 +121,7 @@ export interface HealthResponse {
 /**
  * クライアントが持つデータの互換性判定に使う。
  * スキーマの破壊的変更時にインクリメントし、クライアントは IndexedDB を捨てて取り直す。
+ *
+ * 2: outbox（未送信の書き込み）と entryStates（手動で未読に戻した記事）を足した
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
