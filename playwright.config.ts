@@ -9,6 +9,9 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: 0,
+  // 1 つの dev サーバを全ワーカーで共有しているので、並列度を上げても速くならず、
+  // 起動待ち（IndexedDB の読み出し + bootstrap）が詰まって落ちる。CPU 数任せにしない
+  workers: 4,
   reporter: 'list',
   use: {
     baseURL: 'http://localhost:5173',

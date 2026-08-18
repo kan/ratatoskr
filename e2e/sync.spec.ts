@@ -15,7 +15,9 @@ const BOOT_TIMEOUT = 15_000;
 test('読んだところまでの既読がサーバに送られる', async ({ page }) => {
   const recorder = await mockApi(page);
   await page.goto('/');
-  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目', {
+    timeout: BOOT_TIMEOUT,
+  });
 
   await page.keyboard.press('j');
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 2 本目');
@@ -29,7 +31,9 @@ test('読んだところまでの既読がサーバに送られる', async ({ pa
 test('u で未読に戻した記事はサーバに送られ、再読み込み後もその記事から読める', async ({ page }) => {
   const recorder = await mockApi(page);
   await page.goto('/');
-  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目', {
+    timeout: BOOT_TIMEOUT,
+  });
 
   await page.keyboard.press('j');
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 2 本目');
@@ -51,6 +55,11 @@ test('u で未読に戻した記事はサーバに送られ、再読み込み後
 test('起動直後に表示した記事の既読も送られる', async ({ page }) => {
   const recorder = await mockApi(page);
   await page.goto('/');
+  // 起動を待ってからキーを押す。描画前のキーは誰も受け取らない
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目', {
+    timeout: BOOT_TIMEOUT,
+  });
+
   await page.keyboard.press('j');
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 2 本目');
   await expect
@@ -73,6 +82,11 @@ test('起動直後に表示した記事の既読も送られる', async ({ page 
 test('未読に戻した記事を読み直すと、その取り消しが手元とサーバの両方に届く', async ({ page }) => {
   const recorder = await mockApi(page);
   await page.goto('/');
+  // 起動を待ってからキーを押す。描画前のキーは誰も受け取らない
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目', {
+    timeout: BOOT_TIMEOUT,
+  });
+
   await page.keyboard.press('j');
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 2 本目');
   await page.keyboard.press('u');
