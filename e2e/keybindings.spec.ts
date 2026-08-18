@@ -122,23 +122,28 @@ test('左ペインのフィード名で記事一覧を開閉する', async ({ pa
   await expect(page.getByTestId('entry-list-1')).toBeVisible();
   await expect(page.getByTestId('entry-list-2')).toBeHidden();
 
-  // 別のフィードを開いても、読んでいる記事は変わらない（移動ではなく開閉）
+  // 読んでいるフィードも畳める。ただしカーソルが動いたら開き直す
+  // （記事を送っている最中に一覧が消えると現在地を見失う）
+  await page.getByTestId('feed-1').click();
+  await expect(page.getByTestId('entry-list-1')).toBeHidden();
+  await page.keyboard.press('j');
+  await expect(page.getByTestId('entry-list-1')).toBeVisible();
+  await expect(title(page)).toHaveText('朝刊の 2 本目');
+
+  // 別のフィードを開いても読んでいる記事は変わらない（移動ではなく開閉）
   await page.getByTestId('feed-2').click();
   await expect(page.getByTestId('entry-list-2')).toBeVisible();
-  await expect(title(page)).toHaveText('朝刊の 1 本目');
+  await expect(title(page)).toHaveText('朝刊の 2 本目');
 
-  // 開いた一覧から記事を選ぶとそのフィードへ移る
+  // 開いた一覧から記事を選ぶと、そのフィードへ移る
   await page.getByTestId('entry-21').click();
   await expect(title(page)).toHaveText('夕刊の 1 本目');
 
-  // 読んでいるフィードは畳める
+  // 畳んでから離れたら、開いたままにはしない
   await page.getByTestId('feed-2').click();
   await expect(page.getByTestId('entry-list-2')).toBeHidden();
-
-  // ただしカーソルが動いたら開き直す。記事を送っている最中に
-  // 一覧が出てこないと、どこを読んでいるのか分からなくなる
-  await page.keyboard.press('k');
-  await expect(page.getByTestId('entry-list-2')).toBeVisible();
+  await page.keyboard.press('a');
+  await expect(page.getByTestId('entry-list-2')).toBeHidden();
 });
 
 test('? でヘルプが開き、Esc で閉じる', async ({ page }) => {

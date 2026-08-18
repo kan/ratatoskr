@@ -33,6 +33,7 @@ function feed(id: number, title: string, rate: number, unreadCount: number): Fee
     lastFetchedAt: 1786000000,
     lastError: null,
     lastErrorKind: null,
+    consecutiveFailures: 0,
     disabled: false,
   };
 }
@@ -54,8 +55,14 @@ const SHORT = '<p>短い本文</p>';
 // スクロールが発生する長さ。Space の境界挙動を試すために使う
 const LONG = '<p>長い本文</p>'.repeat(400);
 
-function failing(id: number, title: string, error: string, kind: Feed['lastErrorKind']): Feed {
-  return { ...feed(id, title, 1, 0), lastError: error, lastErrorKind: kind };
+function failing(
+  id: number,
+  title: string,
+  error: string,
+  kind: Feed['lastErrorKind'],
+  consecutiveFailures = 1,
+): Feed {
+  return { ...feed(id, title, 1, 0), lastError: error, lastErrorKind: kind, consecutiveFailures };
 }
 
 /**
@@ -63,17 +70,19 @@ function failing(id: number, title: string, error: string, kind: Feed['lastError
  *   1: ★5 未読 2（1 件目が長文）
  *   2: ★3 未読 1
  *   3: ★1 未読 0 … s / a で飛ばされることの確認用
- *   4: 404 … 一括解除の対象
- *   5: タイムアウト … 一括解除の対象（放置されたサイトばかりだったため）
+ *   4: 404 が 1 回 … 一括解除の対象（何度引いても 404）
+ *   5: タイムアウトが 2 回 … 一括解除の対象（続いているので放置とみなす）
  *   6: 接続断 … 一括解除の対象外（相手の一時障害で普通に起きる）
+ *   7: タイムアウトが 1 回 … 一括解除の対象外（1 回では消さない）
  */
 export const FEEDS: Feed[] = [
   feed(1, '朝刊', 5, 2),
   feed(2, '夕刊', 3, 1),
   feed(3, '既読済み', 1, 0),
   failing(4, '消えたブログ', 'HTTP 404 Not Found', 'not_found'),
-  failing(5, '重いサイト', '応答が無い（15 秒で打ち切り）', 'timeout'),
+  failing(5, '重いサイト', '応答が無い（15 秒で打ち切り）', 'timeout', 2),
   failing(6, '不安定なサイト', '接続が途中で切れた', 'connection_lost'),
+  failing(7, 'たまたま遅いサイト', '応答が無い（15 秒で打ち切り）', 'timeout'),
 ];
 
 export const ENTRIES: Entry[] = [

@@ -101,7 +101,7 @@ test('取得できないフィードだけをまとめて解除できる', async
   await page.goto('/');
   await page.getByTestId('open-manager').click();
 
-  // 取りに行っても直らない失敗（404 / 応答なし）が対象。接続断は数に入れない
+  // 404 は 1 回でも対象。応答なしは 2 回続いたものだけ。接続断は対象外
   const bar = page.getByTestId('unreachable-bar');
   await expect(bar).toContainText('2 件');
 
@@ -109,12 +109,15 @@ test('取得できないフィードだけをまとめて解除できる', async
   await expect(page.getByTestId('manage-feed-4')).toBeVisible();
   await expect(page.getByTestId('manage-feed-5')).toBeVisible();
   await expect(page.getByTestId('manage-feed-6')).toBeHidden();
+  await expect(page.getByTestId('manage-feed-7')).toBeHidden();
   await expect(page.getByTestId('manage-feed-1')).toBeHidden();
 
   await page.getByTestId('remove-unreachable').click();
 
-  await expect.poll(() => recorder.deleted).toEqual([4, 5]);
-  // 相手の一時障害で落ちているフィードは残す
+  // 並列に投げるので届く順は決まらない
+  await expect.poll(() => [...recorder.deleted].sort()).toEqual([4, 5]);
+  // 一時的な失敗のフィードは残す
   await expect(page.getByTestId('unreachable-bar')).toBeHidden();
   await expect(page.getByTestId('manage-feed-6')).toBeVisible();
+  await expect(page.getByTestId('manage-feed-7')).toBeVisible();
 });

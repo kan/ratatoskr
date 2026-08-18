@@ -6,9 +6,10 @@
 /**
  * 取得に失敗した理由。last_error（人が読む文言）とは別に、機械的に扱うために持つ。
  *
- * 直しようがないもの（not_found / forbidden / not_a_feed / unreachable）と、
- * 時間を置けば直りうるもの（timeout / connection_lost / server_error）を
- * 区別できるようにしてある。購読管理画面の一括解除は前者だけを対象にする。
+ * 分類そのものは「何が起きたか」だけを表す。**どれを一括解除の対象にするかは
+ * 画面側（SubscriptionManager.vue の REMOVABLE）が決める。** 同じ分類でも、
+ * 1 回目の失敗で消してよいもの（404 は何度試しても 404）と、繰り返し失敗して
+ * 初めて消してよいもの（接続断やタイムアウトは一時的にも起きる）があるため。
  */
 export type FeedErrorKind =
   | 'not_found'
@@ -33,6 +34,8 @@ export interface Feed {
   lastFetchedAt: number | null;
   lastError: string | null;
   lastErrorKind: FeedErrorKind | null;
+  /** 連続で失敗した回数。1 回きりの失敗と、ずっと死んでいるものを区別する */
+  consecutiveFailures: number;
   disabled: boolean;
 }
 

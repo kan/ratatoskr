@@ -18,6 +18,7 @@ interface FeedRow {
   last_fetched_at: number | null;
   last_error: string | null;
   last_error_kind: string | null;
+  consecutive_failures: number;
   disabled: number;
 }
 
@@ -35,12 +36,14 @@ function toFeed(row: FeedRow): Feed {
     lastFetchedAt: row.last_fetched_at,
     lastError: row.last_error,
     lastErrorKind: row.last_error_kind as FeedErrorKind | null,
+    consecutiveFailures: row.consecutive_failures,
     disabled: row.disabled === 1,
   };
 }
 
 const FEED_COLUMNS = `f.id, f.url, f.site_url, f.title, f.icon_url, f.rate, f.folder, f.read_seq,
-              f.last_fetched_at, f.last_error, f.last_error_kind, f.disabled`;
+              f.last_fetched_at, f.last_error, f.last_error_kind, f.consecutive_failures,
+              f.disabled`;
 
 /**
  * 全フィードを未読数付きで返す。

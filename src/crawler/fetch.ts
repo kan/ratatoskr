@@ -76,8 +76,15 @@ export async function readBoundedText(
  * 購読管理画面に意味の通らない文字列が並ぶので、ここで噛み砕く。
  */
 export function describeNetworkError(err: unknown): { message: string; reason: FeedErrorKind } {
-  const raw = errorMessage(err);
+  // 打ち切りは名前で判る。AbortSignal.timeout は TimeoutError を投げると
+  // 仕様で決まっているので、文言が変わっても取り違えない
+  if (err instanceof DOMException && err.name === 'TimeoutError') {
+    return { message: `応答が無い（${TIMEOUT_MS / 1000} 秒で打ち切り）`, reason: 'timeout' };
+  }
 
+  // 以下は workerd の文言に頼るしかない。取りこぼしても other として記録は残り、
+  // 一括解除の対象から外れる（消しすぎない側に倒れる）だけで済ませてある
+  const raw = errorMessage(err);
   if (raw.includes('aborted due to timeout')) {
     return { message: `応答が無い（${TIMEOUT_MS / 1000} 秒で打ち切り）`, reason: 'timeout' };
   }

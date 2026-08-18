@@ -19,29 +19,34 @@ const emit = defineEmits<{ close: [] }>();
 const RATE_OPTIONS = [5, 4, 3, 2, 1];
 
 /**
- * 一括解除の対象にする失敗と、その理由の表示。
+ * 一括解除の対象にする失敗と、消してよいと判断するまでの連続失敗回数。
  *
- * 「もう一度取りに行っても直らない」ものを入れる。タイムアウトは一時的な不調でも
- * 起きうるが、実際の購読を見ると、応答が返らないまま放置されたサイトばかりだったので
- * 対象に含めている。接続断（connection_lost）と 5xx は相手の一時障害で普通に起きるので
- * 含めない。
+ * 何度試しても結果が変わらないもの（404 は何度引いても 404）は 1 回で足りる。
+ * 接続できない・応答が無いは、相手の一時的な不調やこちらの回線でも起きるので、
+ * 2 回続けて失敗するまで待つ。**解除は取り消せず記事ごと消える**ので、
+ * 迷う側は残す方に倒す。
+ *
+ * 接続断（connection_lost）と 5xx は、続いていても相手の障害であることが多いので
+ * 対象にしない。
  */
-const REMOVABLE: Record<string, string> = {
-  not_found: '見つからない（404 / 410）',
-  forbidden: '拒否される（401 / 403）',
-  not_a_feed: 'フィードではない',
-  unreachable: '接続できない（ドメイン消滅）',
-  timeout: '応答が無い（打ち切り）',
+const REMOVABLE: Record<string, { label: string; minFailures: number }> = {
+  not_found: { label: '見つからない（404 / 410）', minFailures: 1 },
+  forbidden: { label: '拒否される（401 / 403）', minFailures: 1 },
+  not_a_feed: { label: 'フィードではない', minFailures: 1 },
+  unreachable: { label: '接続できない（ドメイン消滅）', minFailures: 2 },
+  timeout: { label: '応答が無い（打ち切り）', minFailures: 2 },
 };
 
 function isRemovable(feed: Feed): boolean {
-  return feed.lastErrorKind !== null && feed.lastErrorKind in REMOVABLE;
+  if (feed.lastErrorKind === null) return false;
+  const rule = REMOVABLE[feed.lastErrorKind];
+  return rule !== undefined && feed.consecutiveFailures >= rule.minFailures;
 }
 
 /** 失敗の分類を日本語にする。分類が無い（成功している）場合は空 */
 function reasonLabel(kind: FeedErrorKind | null): string {
   if (kind === null) return '';
-  return REMOVABLE[kind] ?? kind;
+  return REMOVABLE[kind]?.label ?? kind;
 }
 
 const url = ref('');
@@ -60,9 +65,14 @@ const sorted = computed(() => sortByReadingOrder(feeds.feeds));
 /** 取りに行っても直らない失敗をしているフィード。一括解除の対象そのもの */
 const removable = computed(() => sorted.value.filter(isRemovable));
 
-/** 一覧を「問題のあるフィードだけ」に絞る。消す前に中身を見せるための表示 */
+/**
+ * 一覧を「問題のあるフィードだけ」に絞る。消す前に中身を見せるための表示。
+ * 対象が無くなったら自動で戻す（絞り込みを解除する導線ごと消えて詰むため）。
+ */
 const problemsOnly = ref(false);
-const rows = computed(() => (problemsOnly.value ? removable.value : sorted.value));
+const rows = computed(() =>
+  problemsOnly.value && removable.value.length > 0 ? removable.value : sorted.value,
+);
 
 async function removeUnreachable(): Promise<void> {
   const targets = removable.value;
@@ -289,6 +299,9 @@ async function onOpmlSelected(event: Event): Promise<void> {
               </a>
               <p v-if="feed.lastError" class="text-red-700 dark:text-red-400">
                 {{ feed.lastError }}
+                <span v-if="feed.consecutiveFailures > 1">
+                  — {{ feed.consecutiveFailures }} 回連続
+                </span>
                 <span v-if="isRemovable(feed)">（{{ reasonLabel(feed.lastErrorKind) }}）</span>
               </p>
             </td>

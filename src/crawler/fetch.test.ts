@@ -33,6 +33,14 @@ describe('describeNetworkError', () => {
     expect(described.message).toContain('接続できない');
   });
 
+  it('打ち切りは例外の名前で判定する（文言に依存しない）', () => {
+    // AbortSignal.timeout が投げるもの。実際に 15 秒待つテストは全体を遅くするので、
+    // ここでは仕様で決まっている例外（TimeoutError）を直接渡して見る
+    expect(describeNetworkError(new DOMException('...', 'TimeoutError'))).toMatchObject({
+      reason: 'timeout',
+    });
+  });
+
   it('打ち切りと接続断は、直りうる失敗として分ける', () => {
     expect(
       describeNetworkError(new Error('The operation was aborted due to timeout')),

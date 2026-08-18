@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue';
 import type { Entry, Feed } from '@shared/types';
-import { isRead } from '@/stores/entries';
+import FeedEntries from '@/components/FeedEntries.vue';
 
 /**
  * 左ペイン。並びはサーバが返した順（レート降順 → 未読数降順）をそのまま使う。
@@ -50,23 +50,13 @@ function isExpanded(feed: Feed): boolean {
 function toggle(feed: Feed): void {
   if (feed.id === props.currentFeedId) {
     closedCurrent.value = !closedCurrent.value;
+    // 手で開いた記録も落とす。残すと、カーソルが離れた瞬間に
+    // 「いま畳んだはずのフィード」が開き直る
+    if (closedCurrent.value) opened.value.delete(feed.id);
     return;
   }
   if (opened.value.has(feed.id)) opened.value.delete(feed.id);
   else opened.value.add(feed.id);
-}
-
-/**
- * 読んだ記事は暗く、まだ読んでいない記事は通常の明るさで出す。
- * 既読判定はウォーターマーク（id <= read_seq）そのもの。記事ごとの既読フラグは無い
- */
-function entryClass(feed: Feed, entry: Entry): string {
-  if (entry.id === props.currentEntryId) {
-    return 'border-amber-600 bg-neutral-100 font-bold dark:border-amber-500 dark:bg-neutral-900';
-  }
-  return isRead(entry.id, feed.readSeq)
-    ? 'border-transparent text-neutral-400 dark:text-neutral-600'
-    : 'border-transparent text-neutral-700 dark:text-neutral-300';
 }
 
 // カーソルが動いたら、その行を見える位置に保つ。
@@ -125,22 +115,18 @@ watch(
           <span class="truncate">{{ feed.title || feed.url }}</span>
         </button>
 
-        <ul v-if="isExpanded(feed)" :data-testid="`entry-list-${feed.id}`">
-          <li v-for="(entry, index) in entriesOf(feed.id)" :key="entry.id">
-            <button
-              type="button"
-              class="block w-full truncate border-l-2 py-1 pr-3 pl-8 text-left text-xs hover:bg-neutral-200 dark:hover:bg-neutral-800"
-              :class="entryClass(feed, entry)"
-              :data-testid="`entry-${entry.id}`"
-              :data-active="entry.id === currentEntryId ? 'true' : undefined"
-              :data-read="isRead(entry.id, feed.readSeq) ? 'true' : undefined"
-              @click="$emit('selectEntry', feed.id, entry.id)"
-            >
-              <span class="mr-1.5 tabular-nums">{{ index + 1 }}</span>
-              {{ entry.title || '(無題)' }}
-            </button>
-          </li>
-        </ul>
+        <!--
+          読んでいる最中でないフィードには currentEntryId を渡さない。
+          そのフィードの記事が現在の記事であることは無く、渡すと記事送りのたびに
+          開いている一覧が全て再描画される
+        -->
+        <FeedEntries
+          v-if="isExpanded(feed)"
+          :feed="feed"
+          :current-entry-id="feed.id === currentFeedId ? currentEntryId : null"
+          :entries-of="entriesOf"
+          @select="(entryId) => $emit('selectEntry', feed.id, entryId)"
+        />
       </li>
     </ul>
   </nav>

@@ -208,7 +208,11 @@ export const useFeedsStore = defineStore('feeds', () => {
     const local = feeds.value[index];
     local.readSeq = Math.max(local.readSeq, feed.readSeq);
     local.lastFetchedAt = feed.lastFetchedAt;
+    // 失敗の状態は 3 つで 1 組。片方だけ持ち越すと、文言は消えたのに分類だけ残って
+    // 「取得できないフィード」として一括解除に巻き込まれる
     local.lastError = feed.lastError;
+    local.lastErrorKind = feed.lastErrorKind;
+    local.consecutiveFailures = feed.consecutiveFailures;
     syncUnreadCount(local);
     if (index === feedIndex.value) absorbNewEntries();
   }
@@ -225,14 +229,26 @@ export const useFeedsStore = defineStore('feeds', () => {
     enterFeed(index, 'first');
   }
 
-  function enterFeed(index: number, position: 'first' | 'last'): void {
+  /** 着地先。記事を名指しできるのは、左ペインの一覧から直接飛ぶ場合（不変条件 2 の経路） */
+  type Landing = 'first' | 'last' | { entryId: number };
+
+  /**
+   * そのフィードで読む記事の並び。未読があれば未読だけ、無ければ手元にある全件。
+   * 既読のフィードに戻ってきたときに読み返せるようにするための規則で、
+   * カーソルを入れるときと左ペインに並べるときで同じでなければならない。
+   */
+  function readingList(feed: Feed): Entry[] {
+    const unread = entriesStore.unreadOf(feed.id, feed.readSeq);
+    return unread.length > 0 ? unread : entriesStore.of(feed.id);
+  }
+
+  function enterFeed(index: number, position: Landing): void {
     const feed = feeds.value[index];
     if (feed === undefined) return;
 
     const unread = entriesStore.unreadOf(feed.id, feed.readSeq);
-    // 既読のフィードに戻ってきたときは読み返せるように全件を出す
-    const list = unread.length > 0 ? unread : entriesStore.of(feed.id);
-    const landing = position === 'first' ? 0 : Math.max(0, list.length - 1);
+    const list = readingList(feed);
+    const landing = landingIndex(list, position);
 
     // 記事リストと位置を別々に書き換えると、その途中の一瞬だけ
     // 「新しいフィードの、前のフィードでの位置の記事」を指した状態が生まれる。
@@ -244,6 +260,20 @@ export const useFeedsStore = defineStore('feeds', () => {
     entryFloor.value = unread.length > 0 ? feed.readSeq : 0;
     finished.value = false;
     currentEntries.value = list;
+  }
+
+  /**
+   * 着地する位置を決める。名指しされた記事が一覧に無ければ先頭に落とす。
+   *
+   * 記事を名指しできることが要るのは、途中の記事を経由させないため。
+   * カーソルの変化には既読化と未読例外の解除が紐付いているので、一度先頭に
+   * 着地してから動かすと、名指しされていない記事まで巻き込む
+   */
+  function landingIndex(list: Entry[], position: Landing): number {
+    if (position === 'first') return 0;
+    if (position === 'last') return Math.max(0, list.length - 1);
+    const index = list.findIndex((entry) => entry.id === position.entryId);
+    return index === -1 ? 0 : index;
   }
 
   /**
@@ -350,26 +380,30 @@ export const useFeedsStore = defineStore('feeds', () => {
   }
 
   /**
-   * 左ペインで開いた別のフィードの記事に飛ぶ。
-   * まずそのフィードに入ってから記事を選ぶ（カーソルの持ち主はここ 1 つ。不変条件 2）。
+   * 左ペインで開いた別のフィードの記事に飛ぶ（カーソルの持ち主はここ 1 つ。不変条件 2）。
+   *
+   * そのフィードの先頭を経由しない。経由すると、経由した記事の未読例外（u）が
+   * 「表示した」とみなされて解ける。
    */
   function selectEntryIn(feedId: number, entryId: number): void {
-    if (currentFeed.value?.id !== feedId) selectFeed(feedId);
-    selectEntry(entryId);
+    if (currentFeed.value?.id === feedId) {
+      selectEntry(entryId);
+      return;
+    }
+    const index = feeds.value.findIndex((feed) => feed.id === feedId);
+    if (index !== -1) enterFeed(index, { entryId });
   }
 
   /**
    * 左ペインに並べる記事。読んでいる最中のフィードは、入った時点で確定した一覧を返す
    * （未読を都度計算し直すと、最終記事を表示した瞬間に一覧が消える）。
-   * それ以外のフィードは未読を、未読が無ければ手元にある分を返す（enterFeed と同じ規則）。
+   * それ以外のフィードは readingList そのもの。
    */
   function entriesFor(feedId: number): Entry[] {
     if (currentFeed.value?.id === feedId) return currentEntries.value;
 
     const feed = feeds.value.find((candidate) => candidate.id === feedId);
-    if (feed === undefined) return [];
-    const unread = entriesStore.unreadOf(feed.id, feed.readSeq);
-    return unread.length > 0 ? unread : entriesStore.of(feed.id);
+    return feed === undefined ? [] : readingList(feed);
   }
 
   /**
