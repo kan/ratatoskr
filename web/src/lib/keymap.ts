@@ -5,7 +5,7 @@
  * ヘルプ画面（?）も、押されたキーの判定も、この表 1 つから導く。
  * 表と判定を別々に書くと、ヘルプに載っているのに動かないキーが生まれる。
  *
- * 未実装のマイルストーンのキー（p / z / o / r / 1-5）はまだ載せない。
+ * 未実装のマイルストーンのキー（p / z / o）はまだ載せない。
  * ヘルプに出ているのに動かない状態を作らないため。
  */
 
@@ -16,6 +16,8 @@ export type Action =
   | 'prevFeed'
   | 'readAllAndNext'
   | 'markUnread'
+  | 'refreshFeed'
+  | 'setRate'
   | 'pageDown'
   | 'pageUp'
   | 'openOriginal'
@@ -36,7 +38,13 @@ export interface KeyBinding {
   action: Action;
   description: string;
   /** ヘルプでの並び。同じ値は定義順 */
-  group: 'move' | 'read' | 'other';
+  group: 'move' | 'read' | 'feed' | 'other';
+
+  /**
+   * キーそのものが引数を兼ねる場合の値（レートの 1–5）。
+   * 5 つ別々の Action を作らずに済ませる
+   */
+  argument?: number;
 }
 
 export const KEYMAP: readonly KeyBinding[] = [
@@ -80,6 +88,21 @@ export const KEYMAP: readonly KeyBinding[] = [
     description: '元記事を新しいタブで開く',
     group: 'read',
   },
+  {
+    key: 'r',
+    label: 'r',
+    action: 'refreshFeed',
+    description: 'このフィードを今すぐ取得し直す',
+    group: 'feed',
+  },
+  ...([1, 2, 3, 4, 5] as const).map((rate) => ({
+    key: String(rate),
+    label: String(rate),
+    action: 'setRate' as const,
+    argument: rate,
+    description: `このフィードのレートを ${rate} にする`,
+    group: 'feed' as const,
+  })),
   { key: '?', label: '?', action: 'toggleHelp', description: 'ヘルプ', group: 'other' },
   {
     key: 'Escape',
@@ -104,19 +127,20 @@ export function isTextInput(target: EventTarget | null): boolean {
  * Ctrl / Alt / Meta が付いていたらブラウザ側のショートカットとみなして手を出さない。
  * Shift は、同じ key を分け合う組（Space と Shift+Space）でだけ見る。
  */
-export function resolveAction(event: KeyboardEvent): Action | null {
+export function resolveBinding(event: KeyboardEvent): KeyBinding | null {
   if (event.ctrlKey || event.altKey || event.metaKey) return null;
 
   // Space は配列によって key が空文字になることがあるので code でも拾う
   const key = event.key === ' ' || event.code === 'Space' ? ' ' : event.key;
   const candidates = KEYMAP.filter((binding) => binding.key === key);
 
-  if (candidates.length <= 1) return candidates[0]?.action ?? null;
-  return candidates.find((binding) => (binding.shift ?? false) === event.shiftKey)?.action ?? null;
+  if (candidates.length <= 1) return candidates[0] ?? null;
+  return candidates.find((binding) => (binding.shift ?? false) === event.shiftKey) ?? null;
 }
 
 export const GROUP_LABELS: Record<KeyBinding['group'], string> = {
   move: '移動',
   read: '読む',
+  feed: 'フィード',
   other: 'その他',
 };

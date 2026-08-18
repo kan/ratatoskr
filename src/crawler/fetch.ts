@@ -27,14 +27,43 @@ export interface FetchTarget {
   contentHash: string | null;
 }
 
-const USER_AGENT = 'Ratatoskr/0.1 (+https://github.com/kan/ratatoskr)';
-const ACCEPT =
-  'application/atom+xml, application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5';
+/**
+ * 取得の共通設定。フィード本体の取得（ここ）と、購読追加時の検出（discover.ts）で
+ * 同じ名乗り・同じ上限を使う。片方だけ緩めることに意味は無い。
+ */
+export const USER_AGENT = 'Ratatoskr/0.1 (+https://github.com/kan/ratatoskr)';
 // 遅いサーバに cron 全体を引きずられないための打ち切り。
 // fetch の待ち時間は CPU 時間に計上されないが、実行時間の上限には効く
-const TIMEOUT_MS = 15_000;
+export const TIMEOUT_MS = 15_000;
 // 想定外に巨大なフィードで DB とメモリを埋めないための上限
-const MAX_BYTES = 4 * 1024 * 1024;
+export const MAX_BYTES = 4 * 1024 * 1024;
+
+const ACCEPT =
+  'application/atom+xml, application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5';
+
+/**
+ * 大きすぎる応答を弾いて本文を読む。
+ * 申告（content-length）で先に切り、申告の無いサーバのために読んだ後でも見る。
+ */
+export async function readBoundedText(
+  response: Response,
+): Promise<{ kind: 'ok'; body: string } | { kind: 'error'; message: string }> {
+  const declaredLength = Number(response.headers.get('content-length') ?? NaN);
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_BYTES) {
+    return { kind: 'error', message: `応答が大きすぎる: ${declaredLength} bytes` };
+  }
+
+  let body: string;
+  try {
+    body = await response.text();
+  } catch (err) {
+    return { kind: 'error', message: `本文の読み出しに失敗: ${errorMessage(err)}` };
+  }
+  if (body.length > MAX_BYTES) {
+    return { kind: 'error', message: `応答が大きすぎる: ${body.length} 文字` };
+  }
+  return { kind: 'ok', body };
+}
 
 export async function fetchFeed(
   target: FetchTarget,
@@ -61,20 +90,9 @@ export async function fetchFeed(
     return { kind: 'error', message: `HTTP ${response.status} ${response.statusText}`.trim() };
   }
 
-  const declaredLength = Number(response.headers.get('content-length') ?? NaN);
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_BYTES) {
-    return { kind: 'error', message: `フィードが大きすぎる: ${declaredLength} bytes` };
-  }
-
-  let body: string;
-  try {
-    body = await response.text();
-  } catch (err) {
-    return { kind: 'error', message: `本文の読み出しに失敗: ${errorMessage(err)}` };
-  }
-  if (body.length > MAX_BYTES) {
-    return { kind: 'error', message: `フィードが大きすぎる: ${body.length} 文字` };
-  }
+  const read = await readBoundedText(response);
+  if (read.kind === 'error') return read;
+  const body = read.body;
 
   const contentHash = await sha256Hex(body);
   if (target.contentHash !== null && target.contentHash === contentHash) {

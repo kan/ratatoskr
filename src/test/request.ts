@@ -12,15 +12,34 @@ const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
  * 本番相当のオリジンを渡すとバイパスが効かず 401 になる。
  */
 export async function apiSend(
-  method: 'GET' | 'POST' | 'DELETE',
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   path: string,
   body?: unknown,
   origin = 'http://localhost',
 ): Promise<Response> {
-  const request = new IncomingRequest(`${origin}${path}`, {
-    method,
+  return apiRaw(method, path, {
     headers: body === undefined ? {} : { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
+    origin,
+  });
+}
+
+export interface RawOptions {
+  headers?: Record<string, string>;
+  body?: BodyInit;
+  origin?: string;
+}
+
+/** JSON 以外のボディ（OPML の生テキストや multipart）を投げるとき用 */
+export async function apiRaw(
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  path: string,
+  options: RawOptions = {},
+): Promise<Response> {
+  const request = new IncomingRequest(`${options.origin ?? 'http://localhost'}${path}`, {
+    method,
+    headers: options.headers,
+    body: options.body,
   });
   const ctx = createExecutionContext();
   const response = await worker.fetch(request, env, ctx);

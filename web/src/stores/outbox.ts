@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import type { ReadMark } from '@shared/types';
-import { ApiError, beaconRead, postRead, sendEntryUnread } from '@/lib/api';
+import { ApiError, beaconRead, postRead, sendEntryUnread, updateFeed } from '@/lib/api';
 import { deleteOutboxItems, loadOutbox, putOutboxItem } from '@/lib/db';
 
 /**
@@ -17,7 +17,8 @@ import { deleteOutboxItems, loadOutbox, putOutboxItem } from '@/lib/db';
 
 export type OutboxItem =
   | { key: string; kind: 'read'; feedId: number; watermark: number }
-  | { key: string; kind: 'unread'; entryId: number; unread: boolean };
+  | { key: string; kind: 'unread'; entryId: number; unread: boolean }
+  | { key: string; kind: 'rate'; feedId: number; rate: number };
 
 /** 積んでから送るまでの待ち。j 連打で 1 記事ごとに POST が飛ぶのを防ぐ */
 const FLUSH_DELAY = 2_000;
@@ -32,6 +33,10 @@ function readKey(feedId: number): string {
 
 function unreadKey(entryId: number): string {
   return `unread:${entryId}`;
+}
+
+function rateKey(feedId: number): string {
+  return `rate:${feedId}`;
 }
 
 /**
@@ -96,10 +101,22 @@ export const useOutboxStore = defineStore('outbox', () => {
     enqueue({ key: unreadKey(entryId), kind: 'unread', entryId, unread });
   }
 
-  /** 1 回の吐き出しで送る単位。既読はまとめて 1 リクエスト、未読戻しは記事ごと */
+  /**
+   * レート変更（1–5 キー）。読んでいる最中に押されるので outbox 経由にする
+   * （CLAUDE.md の不変条件 3）。同じフィードへの連打は最後の値だけが残る。
+   */
+  function queueRate(feedId: number, rate: number): void {
+    enqueue({ key: rateKey(feedId), kind: 'rate', feedId, rate });
+  }
+
+  /**
+   * 1 回の吐き出しで送る単位。既読はまとめて 1 リクエスト、未読戻しとレートは対象ごと。
+   * marks が付いているものだけが sendBeacon に載せられる（離脱時の経路）。
+   */
   interface Send {
     keys: string[];
     run: () => Promise<unknown>;
+    marks?: ReadMark[];
   }
 
   function plan(batch: OutboxItem[]): Send[] {
@@ -111,15 +128,15 @@ export const useOutboxStore = defineStore('outbox', () => {
         feedId: item.feedId,
         watermark: item.watermark,
       }));
-      sends.push({ keys: reads.map((item) => item.key), run: () => postRead(marks) });
+      sends.push({ keys: reads.map((item) => item.key), run: () => postRead(marks), marks });
     }
 
     for (const item of batch) {
-      if (item.kind !== 'unread') continue;
-      sends.push({
-        keys: [item.key],
-        run: () => sendEntryUnread(item.entryId, item.unread),
-      });
+      if (item.kind === 'unread') {
+        sends.push({ keys: [item.key], run: () => sendEntryUnread(item.entryId, item.unread) });
+      } else if (item.kind === 'rate') {
+        sends.push({ keys: [item.key], run: () => updateFeed(item.feedId, { rate: item.rate }) });
+      }
     }
     return sends;
   }
@@ -193,23 +210,32 @@ export const useOutboxStore = defineStore('outbox', () => {
   }
 
   /**
+   * 送信待ちのレート。サーバのフィード一覧を当てるときに、まだ届いていない
+   * 変更をこちらの値で上書きし直すために使う（stores/session.ts）。
+   */
+  function pendingRates(): Map<number, number> {
+    const rates = new Map<number, number>();
+    for (const item of items.value.values()) {
+      if (item.kind === 'rate') rates.set(item.feedId, item.rate);
+    }
+    return rates;
+  }
+
+  /**
    * ページ破棄の直前。fetch は取り消されることがあるので、既読は sendBeacon に委ねる。
    *
-   * 未読戻しは記事ごとに URL とメソッドが違って sendBeacon に載らない（POST 固定・
-   * ボディだけしか送れない）ので、keepalive 付きの fetch で投げる。取り消される
-   * 可能性は残るが、何も送らなければ確実に失われる。
+   * 未読戻しとレート変更は対象ごとに URL とメソッドが違い、sendBeacon に載らない
+   * （POST 固定・ボディだけしか送れない）ので、keepalive 付きの fetch で投げる。
+   * 取り消される可能性は残るが、何も送らなければ確実に失われる。
    *
-   * どちらも応答は当てにできないのでキューからは落とさない
+   * どれも応答は当てにできないのでキューからは落とさない
    * （次の起動で再送される。冪等なので二重に届いても害が無い）。
    */
   function flushOnUnload(): void {
     const marks: ReadMark[] = [];
-    for (const item of items.value.values()) {
-      if (item.kind === 'read') {
-        marks.push({ feedId: item.feedId, watermark: item.watermark });
-      } else {
-        void sendEntryUnread(item.entryId, item.unread).catch(() => undefined);
-      }
+    for (const send of plan([...items.value.values()])) {
+      if (send.marks !== undefined) marks.push(...send.marks);
+      else void send.run().catch(() => undefined);
     }
     if (marks.length > 0) beaconRead(marks);
   }
@@ -248,5 +274,16 @@ export const useOutboxStore = defineStore('outbox', () => {
     window.addEventListener('pagehide', flushOnUnload);
   }
 
-  return { items, pending, queueRead, queueUnread, flush, flushOnUnload, hydrate, install };
+  return {
+    items,
+    pending,
+    queueRead,
+    queueUnread,
+    queueRate,
+    pendingRates,
+    flush,
+    flushOnUnload,
+    hydrate,
+    install,
+  };
 });

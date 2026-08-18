@@ -1,9 +1,23 @@
 import { defineStore } from 'pinia';
 import { ref, watch } from 'vue';
-import { getBootstrap, getEntries } from '@/lib/api';
-import type { BootstrapResponse } from '@shared/types';
+import {
+  createFeed,
+  deleteFeed,
+  getBootstrap,
+  getEntries,
+  importOpml,
+  refetchFeed,
+  updateFeed,
+} from '@/lib/api';
+import type {
+  BootstrapResponse,
+  CreateFeedRequest,
+  OpmlImportResponse,
+  UpdateFeedRequest,
+} from '@shared/types';
 import {
   deleteEntryState,
+  deleteFeedData,
   loadEntryStates,
   loadSnapshot,
   putEntryState,
@@ -51,7 +65,11 @@ export const useSessionStore = defineStore('session', () => {
    * 進み、未読に戻していた記事の例外も外れる。後から控えると、その変化が「無かったこと」
    * になって書き戻しも送信もされない。
    */
-  const persisted = { readSeq: new Map<number, number>(), forcedUnread: new Set<number>() };
+  const persisted = {
+    readSeq: new Map<number, number>(),
+    rate: new Map<number, number>(),
+    forcedUnread: new Set<number>(),
+  };
 
   async function boot(): Promise<void> {
     // 手元の読み出しとネットワークは互いに依存しない。往復を待たせないよう先に投げる。
@@ -86,7 +104,10 @@ export const useSessionStore = defineStore('session', () => {
 
   async function hydrate(): Promise<void> {
     const [snapshot, forcedUnread] = await Promise.all([loadSnapshot(), loadEntryStates()]);
-    for (const feed of snapshot.feeds) persisted.readSeq.set(feed.id, feed.readSeq);
+    for (const feed of snapshot.feeds) {
+      persisted.readSeq.set(feed.id, feed.readSeq);
+      persisted.rate.set(feed.id, feed.rate);
+    }
     for (const entryId of forcedUnread) persisted.forcedUnread.add(entryId);
 
     entriesStore.ingest(snapshot.entries);
@@ -101,8 +122,16 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   async function applyBootstrap(body: BootstrapResponse): Promise<void> {
+    // サーバの値を当てる前に、手元の未送信分をキューへ出し切る。
+    // 出し切ってあれば、当てた後の値をそのまま次の差分の起点にできる
+    flushLocalState();
+
     entriesStore.ingest(body.entries);
     feedsStore.setFeeds(body.feeds);
+    // レートはサーバの値をそのまま受けるので、まだ届いていない変更を当て直す
+    feedsStore.applyPendingRates(outbox.pendingRates());
+    rebasePersisted();
+
     if (!feedsStore.started) feedsStore.enterFirstUnread();
     else feedsStore.absorbNewEntries();
 
@@ -140,78 +169,180 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
+   * 購読の追加・更新・削除・手動更新（M5）。
+   *
+   * 既読やレートと違って outbox は通さない。フィードの検出も初回クロールも
+   * サーバでしかできず、結果をその場で見せる必要がある（購読管理画面は
+   * 応答を待ってよい普通のフォーム UI）。
+   */
+
+  /** 追加。フィードが複数見つかった場合は候補を返し、登録はしない */
+  async function subscribe(
+    params: CreateFeedRequest,
+  ): Promise<
+    | { kind: 'created' }
+    | { kind: 'candidates'; candidates: { url: string; title: string | null }[] }
+  > {
+    const result = await createFeed(params);
+    if (result.kind === 'candidates') return result;
+
+    const { feed, entries } = result.body;
+    entriesStore.ingest(entries);
+    feedsStore.upsertFeed(feed);
+    await Promise.all([putFeeds([feed]), saveEntries(entries)]);
+    return { kind: 'created' };
+  }
+
+  async function unsubscribe(id: number): Promise<void> {
+    await deleteFeed(id);
+
+    // 未読例外は記事とは別のストアに持っている。残すと、もう存在しない記事の
+    // 例外を起動のたびに読み戻し続けることになる
+    const droppedUnread = feedsStore.dropFeed(id);
+    for (const entryId of droppedUnread) persisted.forcedUnread.delete(entryId);
+
+    await Promise.all([
+      deleteFeedData(id),
+      ...droppedUnread.map((entryId) => deleteEntryState(entryId)),
+    ]);
+  }
+
+  /** 購読管理画面からの設定変更。1–5 キーのレート変更は outbox 経由（別経路） */
+  async function editFeed(id: number, params: UpdateFeedRequest): Promise<void> {
+    const { feed } = await updateFeed(id, params);
+    feedsStore.upsertFeed(feed);
+    await putFeeds([feed]);
+  }
+
+  /** 手動更新（r キー）。増えた記事だけが返る */
+  async function refresh(id: number): Promise<number> {
+    const { feed, entries } = await refetchFeed(id);
+    entriesStore.ingest(entries);
+    feedsStore.applyFetched(feed);
+    await Promise.all([putFeeds([feed]), saveEntries(entries)]);
+    return entries.length;
+  }
+
+  /**
+   * OPML の取り込み。初回クロールはサーバ側でしないので、記事はまだ無い。
+   * 取り込んだ購読を一覧に出すため、bootstrap を取り直す。
+   */
+  async function restoreFromOpml(file: File): Promise<OpmlImportResponse> {
+    const result = await importOpml(file);
+    if (result.imported > 0) await applyBootstrap(await getBootstrap());
+    return result;
+  }
+
+  /**
+   * フィード側の変化（既読の前進とレート変更）。どちらも行単位なので、
+   * 変わった行だけをまとめて手元に書き、送信キューに積む。
+   */
+  function flushFeeds(): void {
+    const changed = feedsStore.feeds.filter(
+      (feed) =>
+        persisted.readSeq.get(feed.id) !== feed.readSeq ||
+        persisted.rate.get(feed.id) !== feed.rate,
+    );
+    if (changed.length === 0) return;
+
+    for (const feed of changed) {
+      if (persisted.readSeq.get(feed.id) !== feed.readSeq) {
+        persisted.readSeq.set(feed.id, feed.readSeq);
+        outbox.queueRead(feed.id, feed.readSeq);
+      }
+      if (persisted.rate.get(feed.id) !== feed.rate) {
+        persisted.rate.set(feed.id, feed.rate);
+        outbox.queueRate(feed.id, feed.rate);
+      }
+    }
+    void putFeeds(changed);
+  }
+
+  /** 未読に戻した記事の増減。例外は基本ゼロ件なので、両方空なら走査ごと省く */
+  function flushUnread(): void {
+    const saved = persisted.forcedUnread;
+    if (saved.size === 0 && entriesStore.forcedUnread.size === 0) return;
+
+    for (const entryId of entriesStore.forcedUnread) {
+      if (saved.has(entryId)) continue;
+      saved.add(entryId);
+      void putEntryState(entryId);
+      outbox.queueUnread(entryId, true);
+    }
+    // 削除しながら回るので複製を辿る
+    for (const entryId of [...saved]) {
+      if (entriesStore.forcedUnread.has(entryId)) continue;
+      saved.delete(entryId);
+      void deleteEntryState(entryId);
+      outbox.queueUnread(entryId, false);
+    }
+  }
+
+  let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** 手元の変化を IndexedDB に書き戻し、送信キューに積む */
+  function flushLocalState(): void {
+    if (persistTimer !== null) clearTimeout(persistTimer);
+    persistTimer = null;
+    flushFeeds();
+    flushUnread();
+  }
+
+  /**
+   * いまの値を差分の起点にし直す。**サーバのデータを当てた直後にだけ呼ぶ。**
+   *
+   * 当てた値をそのまま起点にしておかないと、サーバから来ただけの値が
+   * 「手元の変更」として次の flush で送り返される。手元の未送信分は当てる前に
+   * flushLocalState でキューへ出し切っているので、ここで起点を進めても失われない。
+   */
+  function rebasePersisted(): void {
+    for (const feed of feedsStore.feeds) {
+      persisted.readSeq.set(feed.id, feed.readSeq);
+      persisted.rate.set(feed.id, feed.rate);
+    }
+  }
+
+  /**
    * ローカルの既読を手元（IndexedDB）に書き戻し、サーバへの送信キューに積む。
    *
    * 書き戻しをしないと再読み込みで読んだ記事がまた出てくる。積まないと他の端末に
    * 伝わらない。どちらも「何が変わったか」を同じ差分から出すので 1 箇所にまとめる。
    */
   function persistLocalState(): void {
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    // 保存済みの状態を起点に差分を出す。手元が読めなかった場合は空のまま始まり、
-    // 最初の 1 回で全件を書き戻す（多いのは初回だけなので許容する）
-    const savedReadSeq = persisted.readSeq;
-    const savedUnread = persisted.forcedUnread;
-
-    /** 進んだ既読。フィード単位なので、変わった行だけをまとめて書く */
-    const flushReads = (): void => {
-      const changed = feedsStore.feeds.filter((feed) => savedReadSeq.get(feed.id) !== feed.readSeq);
-      if (changed.length === 0) return;
-      for (const feed of changed) {
-        savedReadSeq.set(feed.id, feed.readSeq);
-        outbox.queueRead(feed.id, feed.readSeq);
-      }
-      void putFeeds(changed);
-    };
-
-    /** 未読に戻した記事の増減。例外は基本ゼロ件なので、両方空なら走査ごと省く */
-    const flushUnread = (): void => {
-      if (savedUnread.size === 0 && entriesStore.forcedUnread.size === 0) return;
-
-      for (const entryId of entriesStore.forcedUnread) {
-        if (savedUnread.has(entryId)) continue;
-        savedUnread.add(entryId);
-        void putEntryState(entryId);
-        outbox.queueUnread(entryId, true);
-      }
-      // 削除しながら回るので複製を辿る
-      for (const entryId of [...savedUnread]) {
-        if (entriesStore.forcedUnread.has(entryId)) continue;
-        savedUnread.delete(entryId);
-        void deleteEntryState(entryId);
-        outbox.queueUnread(entryId, false);
-      }
-    };
-
-    const flush = (): void => {
-      if (timer !== null) clearTimeout(timer);
-      timer = null;
-      flushReads();
-      flushUnread();
-    };
-
     // 既読が進んだこと・未読に戻したことだけを見る。全フィードを走査して差分を探すと、
     // 記事を送るたびに購読数ぶんの走査が走る
     watch(
-      () => [feedsStore.readRevision, entriesStore.unreadRevision],
+      () => [feedsStore.readRevision, feedsStore.settingsRevision, entriesStore.unreadRevision],
       () => {
-        if (timer !== null) clearTimeout(timer);
-        timer = setTimeout(flush, PERSIST_DELAY);
+        if (persistTimer !== null) clearTimeout(persistTimer);
+        persistTimer = setTimeout(flushLocalState, PERSIST_DELAY);
       },
     );
 
     // 起動シーケンスの中で進んだ分（最初の記事の表示）を先に片付ける。
     // watch は「以降の変化」しか見ないので、これが無いと手元を読み直しただけの起動で
     // 表示した記事が書き戻しも送信もされない
-    flush();
+    flushLocalState();
 
     // 最終記事を読んだ直後にタブを閉じても取りこぼさない。
     // pagehide だけだと破棄が間に合わないことがあるので、先に来る visibilitychange でも流す。
     // outbox も同じ契機で送信する。ここで積んだ分をそちらが拾えるよう、先に登録しておく
-    window.addEventListener('pagehide', flush);
+    window.addEventListener('pagehide', flushLocalState);
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') flush();
+      if (document.visibilityState === 'hidden') flushLocalState();
     });
   }
 
-  return { phase, error, entryCursor, syncedAt, boot };
+  return {
+    phase,
+    error,
+    entryCursor,
+    syncedAt,
+    boot,
+    subscribe,
+    unsubscribe,
+    editFeed,
+    refresh,
+    restoreFromOpml,
+  };
 });

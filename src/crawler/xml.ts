@@ -1,10 +1,36 @@
+import { XMLParser } from 'fast-xml-parser';
+import { errorMessage } from '../lib/errors';
+
 /**
- * fast-xml-parser が返すオブジェクトを安全に掘るためのヘルパ群。
+ * XML の読み取り。パーサの設定と、返ってきたオブジェクトを安全に掘るヘルパ群。
  *
  * 名前空間接頭辞は除去しない（removeNSPrefix: false）。RDF の rdf:RDF と
  * RSS の atom:link のように、接頭辞を落とすと別物が同じキーに潰れるため。
  * 代わりに、ここでは「接頭辞を無視してローカル名で引く」形で吸収する。
  */
+
+// DOMParser は Workers に存在しないので XML は fast-xml-parser で読む（CLAUDE.md）
+const parser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  // 数値に見えるタイトルや guid を number にされると扱いが分岐するので文字列で固定する
+  parseTagValue: false,
+  parseAttributeValue: false,
+  trimValues: true,
+  // フィードは &lt;p&gt; のようにエスケープした HTML を本文に入れてくる。
+  // ここで実体参照を戻し、サニタイズは後段の HTMLRewriter に任せる
+  processEntities: true,
+  htmlEntities: true,
+});
+
+/** XML として壊れていれば投げる。フィードか OPML かの判定は呼び出し側の仕事 */
+export function parseXml(xml: string): unknown {
+  try {
+    return parser.parse(xml);
+  } catch (err) {
+    throw new Error(`XML として読めない: ${errorMessage(err)}`, { cause: err });
+  }
+}
 
 export type XmlNode = Record<string, unknown>;
 

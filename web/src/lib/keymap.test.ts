@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { KEYMAP, resolveAction } from './keymap';
+import { KEYMAP, resolveBinding } from './keymap';
 
 /**
  * ヘルプに載っているキーが実際に効くことの確認。
- * 表（KEYMAP）と判定（resolveAction）が別々に書かれていると、片方だけ直して
+ * 表（KEYMAP）と判定（resolveBinding）が別々に書かれていると、片方だけ直して
  * 「ヘルプにはあるのに動かない」が生まれる。ここでその 2 つを突き合わせる。
  */
 
@@ -27,29 +27,33 @@ function press(event: EventLike): KeyboardEvent {
   } as KeyboardEvent;
 }
 
-describe('resolveAction', () => {
+describe('resolveBinding', () => {
   it.each(KEYMAP.map((binding) => [binding.label, binding]))(
     '%s が定義どおりの動作に解決される',
     (_label, binding) => {
-      const action = resolveAction(press({ key: binding.key, shiftKey: binding.shift ?? false }));
+      const action = resolveBinding(
+        press({ key: binding.key, shiftKey: binding.shift ?? false }),
+      )?.action;
       expect(action).toBe(binding.action);
     },
   );
 
   it('Space は code からも拾う（配列によっては key が空になる）', () => {
-    expect(resolveAction(press({ key: '', code: 'Space' }))).toBe('pageDown');
-    expect(resolveAction(press({ key: '', code: 'Space', shiftKey: true }))).toBe('pageUp');
+    expect(resolveBinding(press({ key: '', code: 'Space' }))?.action).toBe('pageDown');
+    expect(resolveBinding(press({ key: '', code: 'Space', shiftKey: true }))?.action).toBe(
+      'pageUp',
+    );
   });
 
   it('修飾キー付きはブラウザに譲る', () => {
-    expect(resolveAction(press({ key: 'j', ctrlKey: true }))).toBeNull();
-    expect(resolveAction(press({ key: 'j', metaKey: true }))).toBeNull();
-    expect(resolveAction(press({ key: 'j', altKey: true }))).toBeNull();
+    expect(resolveBinding(press({ key: 'j', ctrlKey: true }))).toBeNull();
+    expect(resolveBinding(press({ key: 'j', metaKey: true }))).toBeNull();
+    expect(resolveBinding(press({ key: 'j', altKey: true }))).toBeNull();
   });
 
   it('定義されていないキーは無視する', () => {
-    expect(resolveAction(press({ key: 'x' }))).toBeNull();
-    expect(resolveAction(press({ key: 'J', shiftKey: true }))).toBeNull();
+    expect(resolveBinding(press({ key: 'x' }))).toBeNull();
+    expect(resolveBinding(press({ key: 'J', shiftKey: true }))).toBeNull();
   });
 
   it('ヘルプの表記が重複していない', () => {

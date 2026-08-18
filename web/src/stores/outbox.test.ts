@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, beaconRead, postRead, sendEntryUnread } from '@/lib/api';
+import { ApiError, beaconRead, postRead, sendEntryUnread, updateFeed } from '@/lib/api';
 import { deleteOutboxItems, loadOutbox, putOutboxItem } from '@/lib/db';
 import { useOutboxStore } from './outbox';
 
@@ -22,6 +22,7 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   postRead: vi.fn(() => Promise.resolve({ feeds: [] })),
   sendEntryUnread: vi.fn(() => Promise.resolve({ feeds: [] })),
+  updateFeed: vi.fn(() => Promise.resolve({ feeds: [] })),
   beaconRead: vi.fn(() => true),
 }));
 
@@ -236,5 +237,39 @@ describe('起動時の読み戻し', () => {
 
     await vi.advanceTimersByTimeAsync(FLUSH_DELAY);
     expect(marksOfLastCall()).toEqual([{ feedId: 1, watermark: 10 }]);
+  });
+});
+
+describe('レート変更', () => {
+  it('フィード単位でまとめ、最後の値だけを送る', async () => {
+    const outbox = useOutboxStore();
+    outbox.queueRate(1, 5);
+    // 押し間違えてすぐ押し直した
+    outbox.queueRate(1, 4);
+
+    await vi.advanceTimersByTimeAsync(FLUSH_DELAY);
+    expect(updateFeed).toHaveBeenCalledTimes(1);
+    expect(updateFeed).toHaveBeenCalledWith(1, { rate: 4 });
+    expect(outbox.pending).toBe(0);
+  });
+
+  it('既読とレートは同じ吐き出しで一緒に送る', async () => {
+    const outbox = useOutboxStore();
+    outbox.queueRead(1, 10);
+    outbox.queueRate(1, 5);
+
+    await vi.advanceTimersByTimeAsync(FLUSH_DELAY);
+    expect(postRead).toHaveBeenCalledTimes(1);
+    expect(updateFeed).toHaveBeenCalledWith(1, { rate: 5 });
+    expect(outbox.pending).toBe(0);
+  });
+
+  it('離脱時も送る（sendBeacon には載らないので fetch で投げる）', () => {
+    const outbox = useOutboxStore();
+    outbox.queueRate(1, 2);
+    outbox.flushOnUnload();
+
+    expect(updateFeed).toHaveBeenCalledWith(1, { rate: 2 });
+    expect(outbox.pending).toBe(1);
   });
 });

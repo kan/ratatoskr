@@ -100,6 +100,19 @@ export const useEntriesStore = defineStore('entries', () => {
     return count;
   }
 
+  /**
+   * 購読を解除したフィードの記事を捨てる。サーバでは CASCADE で消えている。
+   * 手元に残っていた未読例外の id を返す（手元の記録も消す必要があるため）。
+   */
+  function dropFeed(feedId: number): number[] {
+    const dropped: number[] = [];
+    for (const entry of of(feedId)) {
+      if (forcedUnread.delete(entry.id)) dropped.push(entry.id);
+    }
+    delete byFeed[feedId];
+    return dropped;
+  }
+
   /** そのフィードについて手元にある最大 id。一括既読の到達点に使う */
   function maxIdOf(feedId: number): number {
     const list = of(feedId);
@@ -118,6 +131,7 @@ export const useEntriesStore = defineStore('entries', () => {
     restoreForcedUnread,
     unreadOf,
     countUnread,
+    dropFeed,
     maxIdOf,
   };
 });

@@ -1,22 +1,7 @@
-import { XMLParser } from 'fast-xml-parser';
 import { errorMessage } from '../lib/errors';
 import { parseDate } from './date';
 import { ParseError, type ParsedFeed, type ParsedItem } from './types';
-import { attr, collect, firstLink, isXmlNode, pick, text } from './xml';
-
-// DOMParser は Workers に存在しないので XML は fast-xml-parser で読む（CLAUDE.md）
-const parser = new XMLParser({
-  ignoreAttributes: false,
-  attributeNamePrefix: '@_',
-  // 数値に見えるタイトルや guid を number にされると扱いが分岐するので文字列で固定する
-  parseTagValue: false,
-  parseAttributeValue: false,
-  trimValues: true,
-  // フィードは &lt;p&gt; のようにエスケープした HTML を本文に入れてくる。
-  // ここで実体参照を戻し、サニタイズは後段の HTMLRewriter に任せる
-  processEntities: true,
-  htmlEntities: true,
-});
+import { attr, collect, firstLink, isXmlNode, parseXml, pick, text } from './xml';
 
 /**
  * RSS 2.0 / Atom / RDF (RSS 1.0) を同じ形に均す。
@@ -25,9 +10,9 @@ const parser = new XMLParser({
 export function parseFeed(xml: string, now?: number): ParsedFeed {
   let doc: unknown;
   try {
-    doc = parser.parse(xml);
+    doc = parseXml(xml);
   } catch (err) {
-    throw new ParseError(`XML として読めない: ${errorMessage(err)}`);
+    throw new ParseError(errorMessage(err));
   }
   if (!isXmlNode(doc)) throw new ParseError('XML のルート要素が無い');
 

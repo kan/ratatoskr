@@ -37,6 +37,9 @@ function toFeed(row: FeedRow): Feed {
   };
 }
 
+const FEED_COLUMNS = `f.id, f.url, f.site_url, f.title, f.icon_url, f.rate, f.folder, f.read_seq,
+              f.last_fetched_at, f.last_error, f.disabled`;
+
 /**
  * 全フィードを未読数付きで返す。
  *
@@ -47,9 +50,7 @@ function toFeed(row: FeedRow): Feed {
 export async function selectFeeds(db: D1Database): Promise<Feed[]> {
   const { results } = await db
     .prepare(
-      `SELECT f.id, f.url, f.site_url, f.title, f.icon_url, f.rate, f.folder, f.read_seq,
-              f.last_fetched_at, f.last_error, f.disabled,
-              ${UNREAD_COUNT_SUBQUERY} AS unread_count
+      `SELECT ${FEED_COLUMNS}, ${UNREAD_COUNT_SUBQUERY} AS unread_count
          FROM feeds f
         ORDER BY f.rate DESC, unread_count DESC, f.id`,
     )
@@ -95,6 +96,141 @@ export async function selectFeedReadStates(
     readSeq: row.read_seq,
     unreadCount: row.unread_count,
   }));
+}
+
+/** 1 件だけ引く。登録・更新の応答と、購読管理画面の再描画に使う */
+export async function selectFeedById(db: D1Database, id: number): Promise<Feed | null> {
+  const row = await db
+    .prepare(
+      `SELECT ${FEED_COLUMNS}, ${UNREAD_COUNT_SUBQUERY} AS unread_count
+         FROM feeds f
+        WHERE f.id = ?`,
+    )
+    .bind(id)
+    .first<FeedRow>();
+  return row === null ? null : toFeed(row);
+}
+
+export interface NewFeed {
+  url: string;
+  siteUrl: string | null;
+  title: string;
+  rate: number;
+  folder: string;
+}
+
+/**
+ * 購読の追加。1 件でも一括でも同じ列・同じ並びで入れる。
+ * next_fetch_at は 0 にして、登録直後のクロール（同期・cron のどちらでも）に拾わせる。
+ */
+const INSERT_FEED = `INSERT OR IGNORE INTO feeds
+       (url, site_url, title, rate, folder, next_fetch_at, created_at)
+     VALUES (?, ?, ?, ?, ?, 0, ?)`;
+
+function bindNewFeed(
+  statement: D1PreparedStatement,
+  feed: NewFeed,
+  now: number,
+): D1PreparedStatement {
+  return statement.bind(feed.url, feed.siteUrl, feed.title, feed.rate, feed.folder, now);
+}
+
+/**
+ * 1 件だけ追加する。url は UNIQUE なので、既に購読していれば null を返す
+ * （呼び出し側が「登録済み」として扱えるように、例外にはしない）。
+ */
+export async function insertFeed(
+  db: D1Database,
+  feed: NewFeed,
+  now: number,
+): Promise<number | null> {
+  const row = await bindNewFeed(db.prepare(`${INSERT_FEED} RETURNING id`), feed, now).first<{
+    id: number;
+  }>();
+  return row?.id ?? null;
+}
+
+// D1 の 1 バッチが際限なく膨らまないように区切る（insertEntries と同じ考え方）
+const INSERT_BATCH_SIZE = 50;
+
+/**
+ * まとめて購読を追加する（OPML の取り込み）。
+ *
+ * 1 件ずつ INSERT すると、件数ぶんのステートメントが 1 リクエストに積み上がる。
+ * D1 には長時間トランザクションが無いので batch() にまとめる（CLAUDE.md）。
+ *
+ * @returns 実際に追加された件数。既に購読している URL は UNIQUE 制約で黙って落ちる
+ */
+export async function insertFeeds(db: D1Database, feeds: NewFeed[], now: number): Promise<number> {
+  if (feeds.length === 0) return 0;
+
+  const statement = db.prepare(INSERT_FEED);
+
+  let inserted = 0;
+  for (let i = 0; i < feeds.length; i += INSERT_BATCH_SIZE) {
+    const results = await db.batch(
+      feeds.slice(i, i + INSERT_BATCH_SIZE).map((feed) => bindNewFeed(statement, feed, now)),
+    );
+    for (const result of results) inserted += result.meta.changes ?? 0;
+  }
+  return inserted;
+}
+
+export interface FeedSettings {
+  rate?: number;
+  folder?: string;
+  /** フィードの名乗りを上書きするユーザ指定値 */
+  title?: string;
+  disabled?: boolean;
+}
+
+/**
+ * ユーザが決める設定だけを更新する。クロール制御の列（etag / next_fetch_at 等）は
+ * ここから触らない。指定のあった項目だけを書き換える。
+ */
+export async function updateFeedSettings(
+  db: D1Database,
+  id: number,
+  settings: FeedSettings,
+): Promise<boolean> {
+  const assignments: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (settings.rate !== undefined) {
+    assignments.push('rate = ?');
+    params.push(settings.rate);
+  }
+  if (settings.folder !== undefined) {
+    assignments.push('folder = ?');
+    params.push(settings.folder);
+  }
+  if (settings.title !== undefined) {
+    assignments.push('title = ?');
+    params.push(settings.title);
+  }
+  if (settings.disabled !== undefined) {
+    assignments.push('disabled = ?');
+    params.push(settings.disabled ? 1 : 0);
+  }
+  // 無効化を解除したら次の cron で拾えるようにする。
+  // 連続失敗で自動的に無効化されたフィードを、手で戻せるようにするため
+  if (settings.disabled === false) {
+    assignments.push('consecutive_failures = 0', 'next_fetch_at = 0');
+  }
+  if (assignments.length === 0) return true;
+
+  params.push(id);
+  const result = await db
+    .prepare(`UPDATE feeds SET ${assignments.join(', ')} WHERE id = ?`)
+    .bind(...params)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+/** 記事は CASCADE で消える。ピンは非正規化してあるので残る（docs/DESIGN.md） */
+export async function deleteFeed(db: D1Database, id: number): Promise<boolean> {
+  const result = await db.prepare('DELETE FROM feeds WHERE id = ?').bind(id).run();
+  return (result.meta.changes ?? 0) > 0;
 }
 
 /** クローラが 1 フィードを処理するのに必要な列だけを引く */

@@ -7,14 +7,48 @@ import { GROUP_LABELS, KEYMAP, type KeyBinding } from '@/lib/keymap';
  * ここに一覧を書き写さないこと。書き写すと必ずキーの実体とずれる。
  */
 const groups = computed(() => {
-  const order: KeyBinding['group'][] = ['move', 'read', 'other'];
+  const order: KeyBinding['group'][] = ['move', 'read', 'feed', 'other'];
   return order
     .map((group) => ({
       label: GROUP_LABELS[group],
-      bindings: KEYMAP.filter((binding) => binding.group === group),
+      // レートの 1–5 は同じ操作なので 1 行にまとめる。5 行並べても読みにくいだけ
+      bindings: collapseArguments(KEYMAP.filter((binding) => binding.group === group)),
     }))
     .filter((group) => group.bindings.length > 0);
 });
+
+/**
+ * 同じ Action を引数違いで持つキー（レートの 1–5）を 1 行に畳む。
+ * 表示だけの都合なので keymap.ts 側は分けたままにする（判定は 1 対 1 で行いたい）。
+ *
+ * 範囲は argument（数値）から作る。畳んだ後のラベルを読み返して作ると、
+ * 表示の書式を変えただけで壊れる。
+ */
+function collapseArguments(bindings: readonly KeyBinding[]): KeyBinding[] {
+  const collapsed: KeyBinding[] = [];
+  const rows = new Map<KeyBinding['action'], { row: KeyBinding; first: number }>();
+
+  for (const binding of bindings) {
+    if (binding.argument === undefined) {
+      collapsed.push(binding);
+      continue;
+    }
+
+    const found = rows.get(binding.action);
+    if (found === undefined) {
+      const row = { ...binding, description: descriptionOf(binding.action) };
+      rows.set(binding.action, { row, first: binding.argument });
+      collapsed.push(row);
+      continue;
+    }
+    found.row.label = `${found.first}–${binding.argument}`;
+  }
+  return collapsed;
+}
+
+function descriptionOf(action: KeyBinding['action']): string {
+  return action === 'setRate' ? 'このフィードのレートを変える（読む順が変わる）' : '';
+}
 
 defineEmits<{ close: [] }>();
 </script>

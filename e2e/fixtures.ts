@@ -1,12 +1,16 @@
 import type { Page } from '@playwright/test';
 import type {
   BootstrapResponse,
+  CreateFeedResponse,
   EntriesResponse,
   Entry,
   Feed,
+  FeedResponse,
+  FetchFeedResponse,
   ReadMark,
   ReadRequest,
   ReadResponse,
+  UpdateFeedRequest,
 } from '../shared/types';
 import { HELP_SEEN_KEY } from '../web/src/lib/prefs';
 
@@ -79,10 +83,22 @@ export interface MockOptions {
 export interface ApiRecorder {
   readMarks: ReadMark[];
   unreadCalls: { entryId: number; unread: boolean }[];
+  /** PATCH /api/feeds/:id で届いた設定変更 */
+  updates: { id: number; params: UpdateFeedRequest }[];
+  created: { url: string; rate?: number; folder?: string }[];
+  deleted: number[];
+  refetched: number[];
 }
 
 export async function mockApi(page: Page, options: MockOptions = {}): Promise<ApiRecorder> {
-  const recorder: ApiRecorder = { readMarks: [], unreadCalls: [] };
+  const recorder: ApiRecorder = {
+    readMarks: [],
+    unreadCalls: [],
+    updates: [],
+    created: [],
+    deleted: [],
+    refetched: [],
+  };
 
   if (options.showHelp !== true) {
     await page.addInitScript((key) => localStorage.setItem(key, '1'), HELP_SEEN_KEY);
@@ -117,6 +133,68 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
     recorder.unreadCalls.push({ entryId, unread: route.request().method() === 'POST' });
     const empty: ReadResponse = { feeds: [] };
     await route.fulfill({ json: empty });
+  });
+
+  // 購読管理（M5）。サーバ側の検出とクロールは Vitest で見ているので、
+  // ここでは「画面から呼べて、結果が一覧に反映される」ことだけを見る
+  await page.route('**/api/feeds', async (route) => {
+    const params = route.request().postDataJSON() as {
+      url: string;
+      rate?: number;
+      folder?: string;
+    };
+    recorder.created.push(params);
+
+    // サイトの URL を渡したときだけ候補を返す。候補（= フィードの URL）を
+    // 選び直したときは普通に登録されないと、選択の意味が無い
+    if (params.url === 'https://multi.example.com/') {
+      await route.fulfill({
+        status: 300,
+        json: {
+          candidates: [
+            { url: 'https://multi.example.com/rss', title: '記事' },
+            { url: 'https://multi.example.com/comments', title: 'コメント' },
+          ],
+        },
+      });
+      return;
+    }
+
+    const added = feed(9, '追加したフィード', params.rate ?? 3, 1);
+    added.folder = params.folder ?? '';
+    added.url = params.url;
+    const body: CreateFeedResponse = {
+      feed: added,
+      entries: [entry(91, 9, '追加したフィードの記事', SHORT)],
+    };
+    await route.fulfill({ status: 201, json: body });
+  });
+
+  // glob の * は / をまたがないので、手動更新は別のパターンで受ける
+  await page.route('**/api/feeds/*/fetch', async (route) => {
+    const id = Number(/\/feeds\/(\d+)\/fetch$/.exec(route.request().url())?.[1]);
+    recorder.refetched.push(id);
+    const body: FetchFeedResponse = {
+      feed: { ...FEEDS.find((candidate) => candidate.id === id)!, unreadCount: 1 },
+      entries: [],
+    };
+    await route.fulfill({ json: body });
+  });
+
+  await page.route('**/api/feeds/*', async (route) => {
+    const id = Number(/\/feeds\/(\d+)/.exec(route.request().url())?.[1]);
+
+    if (route.request().method() === 'DELETE') {
+      recorder.deleted.push(id);
+      await route.fulfill({ json: { deleted: id } });
+      return;
+    }
+
+    const params = route.request().postDataJSON() as UpdateFeedRequest;
+    recorder.updates.push({ id, params });
+    const current = FEEDS.find((candidate) => candidate.id === id)!;
+    const body: FeedResponse = { feed: { ...current, ...params } };
+    await route.fulfill({ json: body });
   });
 
   return recorder;

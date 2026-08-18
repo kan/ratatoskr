@@ -1,10 +1,17 @@
 import type {
   ApiErrorBody,
   BootstrapResponse,
+  CreateFeedRequest,
+  CreateFeedResponse,
   EntriesResponse,
+  FeedCandidatesResponse,
+  FeedResponse,
+  FetchFeedResponse,
+  OpmlImportResponse,
   ReadMark,
   ReadRequest,
   ReadResponse,
+  UpdateFeedRequest,
 } from '@shared/types';
 
 /**
@@ -82,16 +89,24 @@ export function getEntries(params: EntriesParams = {}): Promise<EntriesResponse>
  * keepalive を付けると、タブが閉じられた後もブラウザが送信を続けてくれる。
  * outbox の吐き出しは離脱時に走ることがあるので既定で付ける。
  */
-async function send<T>(method: 'POST' | 'DELETE', path: string, body?: unknown): Promise<T> {
+async function send<T>(
+  method: 'POST' | 'PATCH' | 'DELETE',
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  // FormData は境界文字列込みの Content-Type をブラウザに決めさせる。自分で付けない
+  const isForm = body instanceof FormData;
   const response = await fetch(`/api${path}`, {
     method,
     headers: {
       accept: 'application/json',
-      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      ...(body === undefined || isForm ? {} : { 'content-type': 'application/json' }),
     },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
     credentials: 'same-origin',
-    keepalive: true,
+    // 離脱時にも送り切るための keepalive。ただしボディは 64KB までなので、
+    // OPML のような大きい本文には付けない
+    keepalive: !isForm,
   });
 
   if (!response.ok) throw await toApiError(response);
@@ -123,4 +138,50 @@ export function beaconRead(marks: ReadMark[]): boolean {
   // Content-Type は Blob の type がそのまま載る
   const blob = new Blob([JSON.stringify(body)], { type: 'application/json' });
   return navigator.sendBeacon('/api/read', blob);
+}
+
+/**
+ * 購読の追加。フィードの検出も初回クロールもサーバ側でしかできないので、
+ * ここだけは応答を待つ（購読管理画面は普通のフォーム UI。docs/ROADMAP.md M5）。
+ *
+ * フィードが複数見つかった場合はサーバが 300 を返す。エラーではなく
+ * 「どれにするか決まらなかった」なので、候補を添えて呼び出し側に返す。
+ */
+export type CreateFeedResult =
+  | { kind: 'created'; body: CreateFeedResponse }
+  | { kind: 'candidates'; candidates: FeedCandidatesResponse['candidates'] };
+
+export async function createFeed(params: CreateFeedRequest): Promise<CreateFeedResult> {
+  const response = await fetch('/api/feeds', {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify(params),
+    credentials: 'same-origin',
+  });
+
+  if (response.status === 300) {
+    const body = (await response.json()) as FeedCandidatesResponse;
+    return { kind: 'candidates', candidates: body.candidates };
+  }
+  if (!response.ok) throw await toApiError(response);
+  return { kind: 'created', body: (await response.json()) as CreateFeedResponse };
+}
+
+export function updateFeed(id: number, params: UpdateFeedRequest): Promise<FeedResponse> {
+  return send<FeedResponse>('PATCH', `/feeds/${id}`, params);
+}
+
+export function deleteFeed(id: number): Promise<{ deleted: number }> {
+  return send<{ deleted: number }>('DELETE', `/feeds/${id}`);
+}
+
+/** 手動更新（r キー）。next_fetch_at を無視して取りに行く */
+export function refetchFeed(id: number): Promise<FetchFeedResponse> {
+  return send<FetchFeedResponse>('POST', `/feeds/${id}/fetch`);
+}
+
+export function importOpml(file: File): Promise<OpmlImportResponse> {
+  const form = new FormData();
+  form.set('file', file);
+  return send<OpmlImportResponse>('POST', '/opml', form);
 }

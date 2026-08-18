@@ -158,6 +158,19 @@ export async function saveEntries(entries: Entry[]): Promise<void> {
   await tx.done;
 }
 
+/** 購読解除。フィードの行と、そのフィードの記事をまとめて捨てる */
+export async function deleteFeedData(feedId: number): Promise<void> {
+  const database = await db();
+  const tx = database.transaction(['feeds', 'entries'], 'readwrite');
+  const entries = tx.objectStore('entries');
+  const keys = await entries.index('feedId').getAllKeys(feedId);
+  await Promise.all([
+    tx.objectStore('feeds').delete(feedId),
+    ...keys.map((key) => entries.delete(key)),
+  ]);
+  await tx.done;
+}
+
 export async function saveCursor(entryCursor: number, syncedAt: number): Promise<void> {
   const database = await db();
   const tx = database.transaction('meta', 'readwrite');

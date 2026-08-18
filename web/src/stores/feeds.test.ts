@@ -402,3 +402,80 @@ describe('未読に戻す（u）', () => {
     expect(feeds.currentFeed?.id).toBe(2);
   });
 });
+
+describe('レート（1–5）', () => {
+  it('レートを変えると左ペインの並びがその場で組み替わる', () => {
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    entriesStore.ingest(entries(1, [10]));
+    entriesStore.ingest(entries(2, [20]));
+    feeds.setFeeds([feed(1, { rate: 5, unreadCount: 1 }), feed(2, { rate: 3, unreadCount: 1 })]);
+    feeds.enterFirstUnread();
+    expect(feeds.currentFeed?.id).toBe(1);
+
+    // いま読んでいるフィードを最下位に落とす
+    feeds.setRate(1);
+
+    expect(feeds.feeds.map((f) => f.id)).toEqual([2, 1]);
+    // 並びが変わってもカーソルは同じフィードに乗ったまま
+    expect(feeds.currentFeed?.id).toBe(1);
+    expect(feeds.currentEntry?.id).toBe(10);
+  });
+
+  it('同じ値なら何もしない（送信も並べ替えも起こさない）', () => {
+    const feeds = useFeedsStore();
+    useEntriesStore().ingest(entries(1, [10]));
+    feeds.setFeeds([feed(1, { rate: 3, unreadCount: 1 })]);
+    feeds.enterFirstUnread();
+    const before = feeds.settingsRevision;
+
+    feeds.setRate(3);
+    expect(feeds.settingsRevision).toBe(before);
+  });
+});
+
+describe('購読の増減', () => {
+  it('追加したフィードは読む順序の位置に入る', () => {
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    entriesStore.ingest(entries(1, [10]));
+    entriesStore.ingest(entries(2, [20]));
+    feeds.setFeeds([feed(1, { rate: 5, unreadCount: 1 }), feed(2, { rate: 1, unreadCount: 1 })]);
+    feeds.enterFirstUnread();
+
+    entriesStore.ingest(entries(3, [30]));
+    feeds.upsertFeed(feed(3, { rate: 3, unreadCount: 1 }));
+
+    expect(feeds.feeds.map((f) => f.id)).toEqual([1, 3, 2]);
+    expect(feeds.currentFeed?.id).toBe(1);
+  });
+
+  it('サーバの readSeq で手元の既読を巻き戻さない', () => {
+    const feeds = useFeedsStore();
+    useEntriesStore().ingest(entries(1, [10, 11]));
+    feeds.setFeeds([feed(1, { unreadCount: 2 })]);
+    feeds.enterFirstUnread();
+    feeds.nextEntry(); // 11 まで既読
+
+    // 送信が届く前のサーバの値が返ってきた場合
+    feeds.upsertFeed(feed(1, { readSeq: 0, unreadCount: 2 }));
+    expect(feeds.feeds[0].readSeq).toBe(11);
+    expect(feeds.feeds[0].unreadCount).toBe(0);
+  });
+
+  it('購読を解除すると記事ごと消え、読んでいたなら次の未読へ移る', () => {
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    entriesStore.ingest(entries(1, [10]));
+    entriesStore.ingest(entries(2, [20]));
+    feeds.setFeeds([feed(1, { unreadCount: 1 }), feed(2, { unreadCount: 1 })]);
+    feeds.enterFirstUnread();
+    expect(feeds.currentFeed?.id).toBe(1);
+
+    feeds.dropFeed(1);
+
+    expect(feeds.feeds.map((f) => f.id)).toEqual([2]);
+    expect(entriesStore.of(1)).toEqual([]);
+    expect(feeds.currentFeed?.id).toBe(2);
+  });
+});

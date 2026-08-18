@@ -21,7 +21,7 @@ const props = defineProps<{
   currentEntryId: number | null;
 }>();
 
-defineEmits<{ select: [id: number]; selectEntry: [id: number] }>();
+defineEmits<{ select: [id: number]; selectEntry: [id: number]; manage: [] }>();
 
 const nav = ref<HTMLElement | null>(null);
 
@@ -51,6 +51,21 @@ watch(
 
 <template>
   <nav ref="nav" class="h-full overflow-y-auto border-r border-neutral-300 dark:border-neutral-700">
+    <!--
+      購読管理への入口。キーは割り当てない（docs/UX.md のキー表に無いものを増やさない）。
+      読んでいる最中に使う機能ではないので、ここに置いておけば足りる
+    -->
+    <div class="flex items-center justify-between px-3 py-1.5 text-xs text-neutral-500">
+      <span>Ratatoskr</span>
+      <button
+        type="button"
+        class="hover:underline"
+        data-testid="open-manager"
+        @click="$emit('manage')"
+      >
+        購読管理
+      </button>
+    </div>
     <ul>
       <li v-for="feed in feeds" :key="feed.id">
         <button

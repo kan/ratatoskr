@@ -1,8 +1,8 @@
 /**
  * テスト用の足場。ここだけは src/db/ の外で SQL を書く。
  *
- * フィードの登録は M5（POST /api/feeds）の仕事なので、クエリ層には
- * まだ INSERT を置かない。テストが必要とする分だけをここに閉じ込める。
+ * クエリ層（src/db/）の INSERT は本番の経路が必要とするものだけを置く。
+ * テストが必要とする細かい初期状態（etag や連続失敗回数）はここで作る。
  */
 
 export interface FeedSeed {
@@ -10,6 +10,7 @@ export interface FeedSeed {
   title: string;
   siteUrl: string | null;
   rate: number;
+  folder: string;
   readSeq: number;
   etag: string | null;
   lastModified: string | null;
@@ -25,6 +26,8 @@ export interface FeedRow {
   url: string;
   title: string;
   site_url: string | null;
+  rate: number;
+  folder: string;
   read_seq: number;
   etag: string | null;
   last_modified: string | null;
@@ -68,6 +71,7 @@ export async function seedFeed(
     title: '',
     siteUrl: null,
     rate: 3,
+    folder: '',
     readSeq: 0,
     etag: null,
     lastModified: null,
@@ -82,9 +86,9 @@ export async function seedFeed(
   const row = await db
     .prepare(
       `INSERT INTO feeds
-         (url, title, site_url, rate, read_seq, etag, last_modified, content_hash,
+         (url, title, site_url, rate, folder, read_seq, etag, last_modified, content_hash,
           next_fetch_at, fetch_interval, consecutive_failures, disabled, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING id`,
     )
     .bind(
@@ -92,6 +96,7 @@ export async function seedFeed(
       seed.title,
       seed.siteUrl,
       seed.rate,
+      seed.folder,
       seed.readSeq,
       seed.etag,
       seed.lastModified,

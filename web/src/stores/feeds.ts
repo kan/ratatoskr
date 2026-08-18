@@ -52,6 +52,9 @@ export const useFeedsStore = defineStore('feeds', () => {
    */
   const readRevision = ref(0);
 
+  /** レートなど、ユーザが決める設定が変わるたびに増える。用途は readRevision と同じ */
+  const settingsRevision = ref(0);
+
   const currentFeed = computed<Feed | null>(() => feeds.value[feedIndex.value] ?? null);
   const currentEntry = computed<Entry | null>(() => currentEntries.value[entryIndex.value] ?? null);
   const entryCount = computed(() => currentEntries.value.length);
@@ -69,6 +72,17 @@ export const useFeedsStore = defineStore('feeds', () => {
   /** 左ペインの未読数は手元の記事から数える。数え方を 1 箇所に閉じておく */
   function syncUnreadCount(feed: Feed): void {
     feed.unreadCount = entriesStore.countUnread(feed.id, feed.readSeq);
+  }
+
+  /**
+   * 読む順序に並べ直す。現在位置は id で引き継ぐ（並びが変わっても同じフィードに乗せる）。
+   * 並べ直すのはユーザが明示的に順序を変えたときだけで、読み進めただけでは動かさない。
+   */
+  function resortKeepingCursor(): void {
+    const currentId = currentFeed.value?.id ?? null;
+    feeds.value = sortByReadingOrder(feeds.value);
+    if (currentId === null) return;
+    feedIndex.value = feeds.value.findIndex((feed) => feed.id === currentId);
   }
 
   /**
@@ -102,12 +116,101 @@ export const useFeedsStore = defineStore('feeds', () => {
   }
 
   /**
+   * 購読の追加と設定変更を一覧に反映する（購読管理画面から呼ぶ）。
+   *
+   * 並びは読む順序に保つ。追加も設定変更もユーザの明示的な操作なので、
+   * ここで並べ替わるのは意図どおり（読み進めただけでは並べ替えない）。
+   */
+  function upsertFeed(next: Feed): void {
+    const index = feeds.value.findIndex((feed) => feed.id === next.id);
+
+    if (index === -1) {
+      feeds.value = [...feeds.value, next];
+    } else {
+      // 既読は手元の方が進んでいることがある。サーバの値で巻き戻さない（不変条件 1）
+      const local = feeds.value[index];
+      feeds.value[index] = { ...next, readSeq: Math.max(local.readSeq, next.readSeq) };
+      syncUnreadCount(feeds.value[index]);
+    }
+    resortKeepingCursor();
+  }
+
+  /**
+   * まだサーバに届いていないレート変更を、サーバの一覧に当て直す。
+   *
+   * setFeeds はサーバの値をそのまま受けるので、送信待ちのレートがあると
+   * 一度サーバの古い値に戻ってしまう（左ペインの並びも戻る）。
+   * 手元の変更が勝つのは既読と同じ考え方（不変条件 1・3）。
+   */
+  function applyPendingRates(rates: Map<number, number>): void {
+    if (rates.size === 0) return;
+
+    let changed = false;
+    for (const feed of feeds.value) {
+      const rate = rates.get(feed.id);
+      if (rate === undefined || feed.rate === rate) continue;
+      feed.rate = rate;
+      changed = true;
+    }
+    if (changed) resortKeepingCursor();
+  }
+
+  /**
+   * 購読を解除する。読んでいたフィードが消えたら次の未読へ逃がす。
+   * 消えた記事のうち未読例外だったものを返す（手元の記録の後始末に使う）。
+   */
+  function dropFeed(id: number): number[] {
+    const currentId = currentFeed.value?.id ?? null;
+    feeds.value = feeds.value.filter((feed) => feed.id !== id);
+    const droppedUnread = entriesStore.dropFeed(id);
+
+    if (currentId === id) enterFirstUnread();
+    else if (currentId !== null) {
+      feedIndex.value = feeds.value.findIndex((feed) => feed.id === currentId);
+    }
+    return droppedUnread;
+  }
+
+  /**
    * 未読数を手元の記事から数え直す。
    * 背景取得が終わって「未読記事を全て持っている」状態になってから呼ぶこと。
    * 途中で呼ぶと、まだ届いていない記事の分だけ未読数が少なく出る。
    */
   function recountUnread(): void {
     for (const feed of feeds.value) syncUnreadCount(feed);
+  }
+
+  /**
+   * レートを変える（1–5 キー）。左ペインの並びは**その場で**組み替える。
+   * レートは「読む順の管理」そのものなので、変えた結果が次の s / a に効かないと
+   * 意味がない（docs/UX.md「レート」）。
+   *
+   * 読み進めている間に並びを変えないのは未読数が減ったときの話で、
+   * ユーザが明示的に順序を変えたこのときは別。現在位置は id で引き継ぐ。
+   */
+  function setRate(rate: number): void {
+    const feed = currentFeed.value;
+    if (feed === null || feed.rate === rate) return;
+
+    feed.rate = rate;
+    resortKeepingCursor();
+    settingsRevision.value += 1;
+  }
+
+  /**
+   * 手動更新（r キー）で増えた記事を、いま読んでいるフィードに反映する。
+   * 取得そのものはサーバ仕事なので、呼び出し側が結果を持ってくる。
+   */
+  function applyFetched(feed: Feed): void {
+    const index = feeds.value.findIndex((candidate) => candidate.id === feed.id);
+    if (index === -1) return;
+    // 既読は手元の方が進んでいることがある。サーバの値で巻き戻さない（不変条件 1）
+    const local = feeds.value[index];
+    local.readSeq = Math.max(local.readSeq, feed.readSeq);
+    local.lastFetchedAt = feed.lastFetchedAt;
+    local.lastError = feed.lastError;
+    syncUnreadCount(local);
+    if (index === feedIndex.value) absorbNewEntries();
   }
 
   /** 起動時に 1 回。未読の先頭フィードにカーソルを置く */
@@ -183,11 +286,16 @@ export const useFeedsStore = defineStore('feeds', () => {
     return -1;
   }
 
-  /** 前に進むときは未読のあるフィードだけを辿る。未読 0 のフィードは一覧には出るが飛ばす */
+  /**
+   * 前に進むときは未読のあるフィードだけを辿る。未読 0 のフィードは一覧には出るが飛ばす。
+   *
+   * 探すのは**前方向だけ**。先頭には戻さない（既読の記事を回り続けないため。
+   * docs/ROADMAP.md の M3「全て読み終えたら先頭に戻らず止まる」）。
+   * s で飛ばした未読は a で戻って読む。
+   */
   function nextFeed(): void {
     const index = findFeed(feedIndex.value + 1, 1, isReadable);
     if (index === -1) {
-      // 最後まで読み切った。先頭には戻さない（既読の記事を回り続けないため）
       finished.value = true;
       return;
     }
@@ -324,6 +432,7 @@ export const useFeedsStore = defineStore('feeds', () => {
     currentEntries,
     finished,
     readRevision,
+    settingsRevision,
     currentFeed,
     currentEntry,
     entryCount,
@@ -336,6 +445,11 @@ export const useFeedsStore = defineStore('feeds', () => {
     selectEntry,
     readAllAndNext,
     markCurrentUnread,
+    setRate,
+    applyFetched,
+    upsertFeed,
+    applyPendingRates,
+    dropFeed,
     nextEntry,
     prevEntry,
     nextFeed,

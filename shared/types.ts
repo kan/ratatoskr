@@ -102,6 +102,56 @@ export interface ReadResponse {
   feeds: FeedReadState[];
 }
 
+/**
+ * POST /api/feeds
+ *
+ * url はサイト URL でもフィード URL でもよい。サイト URL の場合は
+ * <link rel="alternate"> からフィードを探す。
+ */
+export interface CreateFeedRequest {
+  url: string;
+  rate?: number;
+  folder?: string;
+}
+
+/** 登録できた場合。登録直後に読めるよう、同期的な初回クロールの結果を添える */
+export interface CreateFeedResponse {
+  feed: Feed;
+  entries: Entry[];
+}
+
+/** フィードが複数見つかった場合（HTTP 300）。どれを購読するかはユーザが選ぶ */
+export interface FeedCandidatesResponse {
+  candidates: { url: string; title: string | null }[];
+}
+
+/** PATCH /api/feeds/:id。指定した項目だけを更新する */
+export interface UpdateFeedRequest {
+  rate?: number;
+  folder?: string;
+  /** フィードの名乗りを上書きするユーザ指定値 */
+  title?: string;
+  disabled?: boolean;
+}
+
+export interface FeedResponse {
+  feed: Feed;
+}
+
+/** POST /api/feeds/:id/fetch。entries は今回の取得で増えた分だけ */
+export interface FetchFeedResponse {
+  feed: Feed;
+  entries: Entry[];
+}
+
+/** POST /api/opml */
+export interface OpmlImportResponse {
+  imported: number;
+  /** 既に購読していて飛ばした数 */
+  skipped: number;
+  failed: { url: string; reason: string }[];
+}
+
 /** エラーレスポンスの形。HTTP ステータスは別に付く */
 export interface ApiErrorBody {
   error: {
