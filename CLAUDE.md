@@ -154,6 +154,15 @@ Claude Code が間違えやすい点です。
 - **1 リクエストあたりのサブリクエスト数に上限がある。** クローラは 1 回の cron 実行で処理するフィード数を必ず上限付きで絞る（`docs/DESIGN.md` 参照）
 - **`fetch` の待ち時間は CPU 時間に計上されない。** I/O 待ちが多いこと自体は問題にならない
 - **D1 には長時間トランザクションがない。** 複数ステートメントは `batch()` にまとめる
+- **Static Assets の SPA フォールバックは、ナビゲーション要求を Worker より先に横取りする。**
+  `not_found_handling: "single-page-application"` は、アセットに一致しない要求のうち
+  `Sec-Fetch-Mode: navigate` のものを `index.html` で返し、Worker を呼ばない。
+  そのため `wrangler.jsonc` の `assets.run_worker_first` に `/api/*` を指定して、
+  API は必ず Worker に渡す。**外すと、リンクを踏んで開く API だけが静かに壊れる**
+  （M5 の OPML 書き出しで実際に踏んだ。`<a href="/api/opml" download>` のクリックが
+  ナビゲーション要求にあたり、OPML の代わりに画面の HTML がダウンロードされた）。
+  `fetch` / XHR / `curl` では再現しないので、リンクや `window.open` で開く API を
+  足したときは実際のブラウザで確かめること
 
 ## フロントエンドの制約
 
