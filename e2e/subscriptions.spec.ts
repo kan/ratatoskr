@@ -93,3 +93,28 @@ test('r で今すぐ取得し直す', async ({ page }) => {
   await page.keyboard.press('r');
   await expect.poll(() => recorder.refetched).toEqual([1]);
 });
+
+test('取得できないフィードだけをまとめて解除できる', async ({ page }) => {
+  const recorder = await mockApi(page);
+  page.on('dialog', (dialog) => dialog.accept());
+
+  await page.goto('/');
+  await page.getByTestId('open-manager').click();
+
+  // 取りに行っても直らない失敗（404 / 応答なし）が対象。接続断は数に入れない
+  const bar = page.getByTestId('unreachable-bar');
+  await expect(bar).toContainText('2 件');
+
+  await page.getByTestId('toggle-problems').click();
+  await expect(page.getByTestId('manage-feed-4')).toBeVisible();
+  await expect(page.getByTestId('manage-feed-5')).toBeVisible();
+  await expect(page.getByTestId('manage-feed-6')).toBeHidden();
+  await expect(page.getByTestId('manage-feed-1')).toBeHidden();
+
+  await page.getByTestId('remove-unreachable').click();
+
+  await expect.poll(() => recorder.deleted).toEqual([4, 5]);
+  // 相手の一時障害で落ちているフィードは残す
+  await expect(page.getByTestId('unreachable-bar')).toBeHidden();
+  await expect(page.getByTestId('manage-feed-6')).toBeVisible();
+});

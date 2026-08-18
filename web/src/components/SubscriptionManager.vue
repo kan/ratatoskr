@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import type { Feed } from '@shared/types';
+import type { Feed, FeedErrorKind } from '@shared/types';
 import { sortByReadingOrder, useFeedsStore } from '@/stores/feeds';
 import { useSessionStore } from '@/stores/session';
 
@@ -18,6 +18,32 @@ const emit = defineEmits<{ close: [] }>();
 /** レートは 1–5（docs/UX.md）。高い方が先に読まれるので降順で並べる */
 const RATE_OPTIONS = [5, 4, 3, 2, 1];
 
+/**
+ * 一括解除の対象にする失敗と、その理由の表示。
+ *
+ * 「もう一度取りに行っても直らない」ものを入れる。タイムアウトは一時的な不調でも
+ * 起きうるが、実際の購読を見ると、応答が返らないまま放置されたサイトばかりだったので
+ * 対象に含めている。接続断（connection_lost）と 5xx は相手の一時障害で普通に起きるので
+ * 含めない。
+ */
+const REMOVABLE: Record<string, string> = {
+  not_found: '見つからない（404 / 410）',
+  forbidden: '拒否される（401 / 403）',
+  not_a_feed: 'フィードではない',
+  unreachable: '接続できない（ドメイン消滅）',
+  timeout: '応答が無い（打ち切り）',
+};
+
+function isRemovable(feed: Feed): boolean {
+  return feed.lastErrorKind !== null && feed.lastErrorKind in REMOVABLE;
+}
+
+/** 失敗の分類を日本語にする。分類が無い（成功している）場合は空 */
+function reasonLabel(kind: FeedErrorKind | null): string {
+  if (kind === null) return '';
+  return REMOVABLE[kind] ?? kind;
+}
+
 const url = ref('');
 const rate = ref(3);
 const folder = ref('');
@@ -30,6 +56,38 @@ const candidates = ref<{ url: string; title: string | null }[]>([]);
 // 並びは左ペインと同じ読む順序にする。ここだけ別の規則で並べると、
 // 「上にあるものから読まれる」という前提が画面ごとに食い違う
 const sorted = computed(() => sortByReadingOrder(feeds.feeds));
+
+/** 取りに行っても直らない失敗をしているフィード。一括解除の対象そのもの */
+const removable = computed(() => sorted.value.filter(isRemovable));
+
+/** 一覧を「問題のあるフィードだけ」に絞る。消す前に中身を見せるための表示 */
+const problemsOnly = ref(false);
+const rows = computed(() => (problemsOnly.value ? removable.value : sorted.value));
+
+async function removeUnreachable(): Promise<void> {
+  const targets = removable.value;
+  const summary = Object.entries(
+    targets.reduce<Record<string, number>>((count, feed) => {
+      const label = reasonLabel(feed.lastErrorKind);
+      count[label] = (count[label] ?? 0) + 1;
+      return count;
+    }, {}),
+  )
+    .map(([label, count]) => `  ${label}: ${count} 件`)
+    .join('\n');
+
+  // 記事ごと消える。取り消せないので、理由の内訳を見せてから確認する
+  if (!window.confirm(`${targets.length} 件の購読を解除する。記事も消える\n\n${summary}`)) return;
+
+  await run(async () => {
+    const removed = await session.unsubscribeMany(targets.map((feed) => feed.id));
+    message.value =
+      removed.length === targets.length
+        ? `${removed.length} 件の購読を解除した`
+        : `${removed.length} 件を解除した（${targets.length - removed.length} 件は失敗）`;
+    if (removable.value.length === 0) problemsOnly.value = false;
+  });
+}
 
 function report(err: unknown): void {
   error.value = err instanceof Error ? err.message : String(err);
@@ -209,7 +267,7 @@ async function onOpmlSelected(event: Event): Promise<void> {
         </thead>
         <tbody>
           <tr
-            v-for="feed in sorted"
+            v-for="feed in rows"
             :key="feed.id"
             class="border-t border-neutral-200 align-top dark:border-neutral-800"
             :data-testid="`manage-feed-${feed.id}`"
@@ -231,6 +289,7 @@ async function onOpmlSelected(event: Event): Promise<void> {
               </a>
               <p v-if="feed.lastError" class="text-red-700 dark:text-red-400">
                 {{ feed.lastError }}
+                <span v-if="isRemovable(feed)">（{{ reasonLabel(feed.lastErrorKind) }}）</span>
               </p>
             </td>
             <td class="py-1 pr-2">
@@ -269,6 +328,29 @@ async function onOpmlSelected(event: Event): Promise<void> {
           </tr>
         </tbody>
       </table>
+
+      <div
+        v-if="removable.length > 0"
+        class="mt-3 flex flex-wrap items-center gap-3 rounded bg-amber-50 px-3 py-2 text-xs dark:bg-amber-950"
+        data-testid="unreachable-bar"
+      >
+        <span>取得できないフィードが {{ removable.length }} 件ある</span>
+        <button
+          class="hover:underline"
+          data-testid="toggle-problems"
+          @click="problemsOnly = !problemsOnly"
+        >
+          {{ problemsOnly ? '全て表示' : '問題のあるフィードだけ表示' }}
+        </button>
+        <button
+          class="text-red-700 hover:underline dark:text-red-400"
+          :disabled="busy"
+          data-testid="remove-unreachable"
+          @click="removeUnreachable"
+        >
+          {{ removable.length }} 件をまとめて解除
+        </button>
+      </div>
 
       <div
         class="mt-5 flex items-center gap-4 border-t border-neutral-200 pt-3 dark:border-neutral-800"

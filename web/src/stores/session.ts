@@ -207,6 +207,30 @@ export const useSessionStore = defineStore('session', () => {
     ]);
   }
 
+  /**
+   * まとめて購読を解除する（購読管理画面の一括解除）。
+   *
+   * 1 件ずつの DELETE を並べるだけにしてある。専用の API を足しても、途中で失敗
+   * したときに「どこまで消えたか」を返す必要があり、結局 1 件ずつと同じ扱いになる。
+   * 相手は自分のサーバなので、少しだけ並列にして待ち時間を詰める。
+   *
+   * @returns 実際に解除できた id
+   */
+  async function unsubscribeMany(ids: number[]): Promise<number[]> {
+    const removed: number[] = [];
+    const CONCURRENCY = 4;
+
+    for (let i = 0; i < ids.length; i += CONCURRENCY) {
+      const chunk = ids.slice(i, i + CONCURRENCY);
+      const results = await Promise.allSettled(chunk.map((id) => unsubscribe(id)));
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') removed.push(chunk[index]);
+        else console.error('購読の解除に失敗', chunk[index], result.reason);
+      });
+    }
+    return removed;
+  }
+
   /** 購読管理画面からの設定変更。1–5 キーのレート変更は outbox 経由（別経路） */
   async function editFeed(id: number, params: UpdateFeedRequest): Promise<void> {
     const { feed } = await updateFeed(id, params);
@@ -341,6 +365,7 @@ export const useSessionStore = defineStore('session', () => {
     boot,
     subscribe,
     unsubscribe,
+    unsubscribeMany,
     editFeed,
     refresh,
     restoreFromOpml,
