@@ -3,8 +3,13 @@
  * 純関数だけを置く。時刻も DB もここでは触らない。
  */
 
-/** 更新があったフィードはこの間隔に戻す */
-export const INITIAL_INTERVAL = 900; // 15 分
+/**
+ * 更新があったフィードはこの間隔に戻す。
+ *
+ * feeds.fetch_interval の DB 既定値（900）はフィードを登録した直後にしか効かない。
+ * 初回の取得でここの値に上書きされるので、実運用の間隔はこの定数が決める。
+ */
+export const INITIAL_INTERVAL = 3600; // 1 時間
 /** 更新が無いフィードを間引く上限 */
 export const MAX_INTERVAL = 21600; // 6 時間
 const INTERVAL_GROWTH = 1.5;

@@ -10,13 +10,13 @@ import {
 } from './schedule';
 
 describe('取得間隔の適応制御', () => {
-  it('更新があれば 15 分に戻す', () => {
+  it('更新があれば 1 時間に戻す', () => {
     expect(intervalAfterUpdate()).toBe(INITIAL_INTERVAL);
   });
 
   it('更新が無ければ 1.5 倍に伸ばす', () => {
-    expect(intervalAfterNoUpdate(900)).toBe(1350);
-    expect(intervalAfterNoUpdate(1350)).toBe(2025);
+    expect(intervalAfterNoUpdate(3600)).toBe(5400);
+    expect(intervalAfterNoUpdate(5400)).toBe(8100);
   });
 
   it('6 時間で頭打ちにする', () => {
@@ -27,10 +27,10 @@ describe('取得間隔の適応制御', () => {
 });
 
 describe('失敗バックオフ', () => {
-  it('1 回目は 15 分、以降は倍々', () => {
-    expect(backoffAfterFailure(1)).toBe(900);
-    expect(backoffAfterFailure(2)).toBe(1800);
-    expect(backoffAfterFailure(3)).toBe(3600);
+  it('1 回目は取得間隔と同じ 1 時間、以降は倍々', () => {
+    expect(backoffAfterFailure(1)).toBe(3600);
+    expect(backoffAfterFailure(2)).toBe(7200);
+    expect(backoffAfterFailure(3)).toBe(14400);
   });
 
   it('24 時間で頭打ちにする', () => {

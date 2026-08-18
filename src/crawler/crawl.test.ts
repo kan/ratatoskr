@@ -77,9 +77,9 @@ describe('crawl', () => {
     expect(feed.last_fetched_at).toBe(NOW);
     expect(feed.last_error).toBeNull();
     expect(feed.consecutive_failures).toBe(0);
-    // 更新があったので間隔は 15 分に戻る
-    expect(feed.fetch_interval).toBe(900);
-    expect(feed.next_fetch_at).toBe(NOW + 900);
+    // 更新があったので間隔は 1 時間に戻る
+    expect(feed.fetch_interval).toBe(3600);
+    expect(feed.next_fetch_at).toBe(NOW + 3600);
     // 空だったタイトルはフィードの名乗りで埋める
     expect(feed.title).toBe('テストブログ');
     expect(feed.site_url).toBe('https://example.com/');
@@ -125,7 +125,7 @@ describe('crawl', () => {
     await crawl(env, { now: NOW, feedIds: [id], fetchImpl: first.fetch });
 
     const second = stubFetch(() => xmlResponse(rss2WithExtraItem()));
-    const summary = await crawl(env, { now: NOW + 900, feedIds: [id], fetchImpl: second.fetch });
+    const summary = await crawl(env, { now: NOW + 3600, feedIds: [id], fetchImpl: second.fetch });
 
     expect(summary.inserted).toBe(1);
     const entries = await getEntryRows(env.DB, id);
@@ -136,7 +136,7 @@ describe('crawl', () => {
     const id = await seedFeed(env.DB, 'https://cond.example.com/feed.xml', {
       etag: 'W/"v1"',
       lastModified: 'Mon, 03 Aug 2026 00:00:00 GMT',
-      fetchInterval: 900,
+      fetchInterval: 3600,
     });
     const stub = stubFetch(() => new Response(null, { status: 304 }));
 
@@ -147,8 +147,8 @@ describe('crawl', () => {
     expect(summary).toMatchObject({ inserted: 0, failed: 0 });
 
     const feed = await getFeedRow(env.DB, id);
-    expect(feed.fetch_interval).toBe(1350);
-    expect(feed.next_fetch_at).toBe(NOW + 1350);
+    expect(feed.fetch_interval).toBe(5400);
+    expect(feed.next_fetch_at).toBe(NOW + 5400);
     expect(feed.last_fetched_at).toBe(NOW);
   });
 
@@ -163,7 +163,7 @@ describe('crawl', () => {
 
     // 同じ本文をもう一度返す。ETag は付けない
     const summary = await crawl(env, {
-      now: NOW + 900,
+      now: NOW + 3600,
       feedIds: [id],
       fetchImpl: stubFetch(() => xmlResponse(rss2Xml)).fetch,
     });
@@ -172,7 +172,7 @@ describe('crawl', () => {
     expect(await getEntryRows(env.DB, id)).toHaveLength(2);
     const feed = await getFeedRow(env.DB, id);
     expect(feed.content_hash).toBe(afterFirst.content_hash);
-    expect(feed.fetch_interval).toBe(1350);
+    expect(feed.fetch_interval).toBe(5400);
   });
 
   it('取得に失敗したら last_error に残してバックオフする', async () => {
@@ -185,7 +185,7 @@ describe('crawl', () => {
     const feed = await getFeedRow(env.DB, id);
     expect(feed.consecutive_failures).toBe(1);
     expect(feed.last_error).toContain('500');
-    expect(feed.next_fetch_at).toBe(NOW + 900);
+    expect(feed.next_fetch_at).toBe(NOW + 3600);
     expect(feed.disabled).toBe(0);
   });
 
