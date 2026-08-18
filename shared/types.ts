@@ -3,6 +3,23 @@
  * 時刻は全て Unix 秒（整数）。ミリ秒と混在させない。
  */
 
+/**
+ * 取得に失敗した理由。last_error（人が読む文言）とは別に、機械的に扱うために持つ。
+ *
+ * 直しようがないもの（not_found / forbidden / not_a_feed / unreachable）と、
+ * 時間を置けば直りうるもの（timeout / connection_lost / server_error）を
+ * 区別できるようにしてある。購読管理画面の一括解除は前者だけを対象にする。
+ */
+export type FeedErrorKind =
+  | 'not_found'
+  | 'forbidden'
+  | 'server_error'
+  | 'not_a_feed'
+  | 'unreachable'
+  | 'timeout'
+  | 'connection_lost'
+  | 'other';
+
 export interface Feed {
   id: number;
   url: string;
@@ -15,6 +32,7 @@ export interface Feed {
   unreadCount: number;
   lastFetchedAt: number | null;
   lastError: string | null;
+  lastErrorKind: FeedErrorKind | null;
   disabled: boolean;
 }
 

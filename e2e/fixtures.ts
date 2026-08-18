@@ -32,6 +32,7 @@ function feed(id: number, title: string, rate: number, unreadCount: number): Fee
     unreadCount,
     lastFetchedAt: 1786000000,
     lastError: null,
+    lastErrorKind: null,
     disabled: false,
   };
 }

@@ -185,6 +185,8 @@ describe('crawl', () => {
     const feed = await getFeedRow(env.DB, id);
     expect(feed.consecutive_failures).toBe(1);
     expect(feed.last_error).toContain('500');
+    // 5xx は時間を置けば直りうるので、消してよい失敗とは分けて記録する
+    expect(feed.last_error_kind).toBe('server_error');
     expect(feed.next_fetch_at).toBe(NOW + 3600);
     expect(feed.disabled).toBe(0);
   });
@@ -198,6 +200,8 @@ describe('crawl', () => {
     const feed = await getFeedRow(env.DB, id);
     expect(feed.consecutive_failures).toBe(1);
     expect(feed.last_error).not.toBeNull();
+    // 取れてはいるがフィードではない。URL を直すまで直らない
+    expect(feed.last_error_kind).toBe('not_a_feed');
     expect(await getEntryRows(env.DB, id)).toHaveLength(0);
   });
 

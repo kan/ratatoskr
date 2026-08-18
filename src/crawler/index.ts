@@ -1,3 +1,4 @@
+import type { FeedErrorKind } from '../../shared/types';
 import {
   markFetchFailure,
   markFetchSuccess,
@@ -106,7 +107,7 @@ async function crawlFeed(
   const outcome = await fetchFeed(target, fetchImpl);
 
   if (outcome.kind === 'error') {
-    await recordFailure(db, target, now, outcome.message);
+    await recordFailure(db, target, now, outcome.message, outcome.reason);
     return { inserted: 0, failed: true };
   }
 
@@ -125,7 +126,8 @@ async function crawlFeed(
   try {
     parsed = parseFeed(outcome.body, now);
   } catch (err) {
-    await recordFailure(db, target, now, errorMessage(err));
+    // 取れてはいるがフィードではない。URL の付け替えでしか直らないので分けて記録する
+    await recordFailure(db, target, now, errorMessage(err), 'not_a_feed');
     return { inserted: 0, failed: true };
   }
 
@@ -193,6 +195,7 @@ async function recordFailure(
   target: CrawlTarget,
   now: number,
   message: string,
+  reason: FeedErrorKind,
 ): Promise<void> {
   const failures = target.consecutiveFailures + 1;
   await markFetchFailure(db, {
@@ -201,6 +204,7 @@ async function recordFailure(
     nextFetchAt: now + backoffAfterFailure(failures),
     failures,
     message: message.slice(0, MAX_ERROR_LENGTH),
+    reason,
     disabled: shouldDisable(failures),
   });
 }

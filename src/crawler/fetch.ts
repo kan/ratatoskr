@@ -1,3 +1,4 @@
+import type { FeedErrorKind } from '../../shared/types';
 import { errorMessage } from '../lib/errors';
 import { sha256Hex } from '../lib/hash';
 
@@ -18,7 +19,7 @@ export type FetchOutcome =
       lastModified: string | null;
       contentHash: string;
     }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string; reason: FeedErrorKind };
 
 export interface FetchTarget {
   url: string;
@@ -47,22 +48,55 @@ const ACCEPT =
  */
 export async function readBoundedText(
   response: Response,
-): Promise<{ kind: 'ok'; body: string } | { kind: 'error'; message: string }> {
+): Promise<
+  { kind: 'ok'; body: string } | { kind: 'error'; message: string; reason: FeedErrorKind }
+> {
   const declaredLength = Number(response.headers.get('content-length') ?? NaN);
   if (Number.isFinite(declaredLength) && declaredLength > MAX_BYTES) {
-    return { kind: 'error', message: `応答が大きすぎる: ${declaredLength} bytes` };
+    return { kind: 'error', message: `応答が大きすぎる: ${declaredLength} bytes`, reason: 'other' };
   }
 
   let body: string;
   try {
     body = await response.text();
   } catch (err) {
-    return { kind: 'error', message: `本文の読み出しに失敗: ${errorMessage(err)}` };
+    return { ...describeNetworkError(err), kind: 'error' };
   }
   if (body.length > MAX_BYTES) {
-    return { kind: 'error', message: `応答が大きすぎる: ${body.length} 文字` };
+    return { kind: 'error', message: `応答が大きすぎる: ${body.length} 文字`, reason: 'other' };
   }
   return { kind: 'ok', body };
+}
+
+/**
+ * fetch が投げた例外を、人が読める文言と分類に落とす。
+ *
+ * workerd は接続できない相手（消えたドメインを含む）を
+ * `internal error; reference = ...` と報告する。そのまま last_error に入れると
+ * 購読管理画面に意味の通らない文字列が並ぶので、ここで噛み砕く。
+ */
+export function describeNetworkError(err: unknown): { message: string; reason: FeedErrorKind } {
+  const raw = errorMessage(err);
+
+  if (raw.includes('aborted due to timeout')) {
+    return { message: `応答が無い（${TIMEOUT_MS / 1000} 秒で打ち切り）`, reason: 'timeout' };
+  }
+  if (raw.includes('Network connection lost')) {
+    return { message: '接続が途中で切れた', reason: 'connection_lost' };
+  }
+  if (raw.includes('internal error')) {
+    return { message: '接続できない（ドメインが消えている可能性）', reason: 'unreachable' };
+  }
+  return { message: `取得に失敗: ${raw}`, reason: 'other' };
+}
+
+/** HTTP のステータスから分類する。4xx は直しようがなく、5xx は時間を置けば直りうる */
+function describeHttpStatus(response: Response): { message: string; reason: FeedErrorKind } {
+  const message = `HTTP ${response.status} ${response.statusText}`.trim();
+  if (response.status === 404 || response.status === 410) return { message, reason: 'not_found' };
+  if (response.status === 401 || response.status === 403) return { message, reason: 'forbidden' };
+  if (response.status >= 500) return { message, reason: 'server_error' };
+  return { message, reason: 'other' };
 }
 
 export async function fetchFeed(
@@ -82,13 +116,11 @@ export async function fetchFeed(
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (err) {
-    return { kind: 'error', message: `取得に失敗: ${errorMessage(err)}` };
+    return { ...describeNetworkError(err), kind: 'error' };
   }
 
   if (response.status === 304) return { kind: 'notModified' };
-  if (!response.ok) {
-    return { kind: 'error', message: `HTTP ${response.status} ${response.statusText}`.trim() };
-  }
+  if (!response.ok) return { ...describeHttpStatus(response), kind: 'error' };
 
   const read = await readBoundedText(response);
   if (read.kind === 'error') return read;

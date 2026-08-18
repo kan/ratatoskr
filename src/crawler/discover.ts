@@ -1,5 +1,4 @@
-import { errorMessage } from '../lib/errors';
-import { readBoundedText, TIMEOUT_MS, USER_AGENT } from './fetch';
+import { describeNetworkError, readBoundedText, TIMEOUT_MS, USER_AGENT } from './fetch';
 import { parseFeed } from './parse';
 
 /**
@@ -52,7 +51,7 @@ export async function discoverFeed(
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (err) {
-    return { kind: 'error', message: `取得に失敗: ${errorMessage(err)}` };
+    return { kind: 'error', message: describeNetworkError(err).message };
   }
 
   if (!response.ok) {
@@ -60,7 +59,7 @@ export async function discoverFeed(
   }
 
   const read = await readBoundedText(response);
-  if (read.kind === 'error') return read;
+  if (read.kind === 'error') return { kind: 'error', message: read.message };
   const body = read.body;
 
   // リダイレクトの後の URL を基準にする。相対 href の解決先がずれないように

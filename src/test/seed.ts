@@ -36,6 +36,7 @@ export interface FeedRow {
   fetch_interval: number;
   consecutive_failures: number;
   last_error: string | null;
+  last_error_kind: string | null;
   last_fetched_at: number | null;
   disabled: number;
 }

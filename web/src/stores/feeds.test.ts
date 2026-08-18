@@ -22,6 +22,7 @@ function feed(id: number, overrides: Partial<Feed> = {}): Feed {
     unreadCount: 0,
     lastFetchedAt: null,
     lastError: null,
+    lastErrorKind: null,
     disabled: false,
     ...overrides,
   };

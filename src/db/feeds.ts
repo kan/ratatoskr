@@ -1,4 +1,4 @@
-import type { Feed, FeedReadState, ReadMark } from '../../shared/types';
+import type { Feed, FeedErrorKind, FeedReadState, ReadMark } from '../../shared/types';
 import { UNREAD_COUNT_SUBQUERY } from './unread';
 
 /**
@@ -17,6 +17,7 @@ interface FeedRow {
   unread_count: number;
   last_fetched_at: number | null;
   last_error: string | null;
+  last_error_kind: string | null;
   disabled: number;
 }
 
@@ -33,12 +34,13 @@ function toFeed(row: FeedRow): Feed {
     unreadCount: row.unread_count,
     lastFetchedAt: row.last_fetched_at,
     lastError: row.last_error,
+    lastErrorKind: row.last_error_kind as FeedErrorKind | null,
     disabled: row.disabled === 1,
   };
 }
 
 const FEED_COLUMNS = `f.id, f.url, f.site_url, f.title, f.icon_url, f.rate, f.folder, f.read_seq,
-              f.last_fetched_at, f.last_error, f.disabled`;
+              f.last_fetched_at, f.last_error, f.last_error_kind, f.disabled`;
 
 /**
  * 全フィードを未読数付きで返す。
@@ -336,7 +338,8 @@ export async function markFetchSuccess(db: D1Database, p: FetchSuccessParams): P
       `UPDATE feeds
           SET etag = ?, last_modified = ?, content_hash = ?,
               next_fetch_at = ?, fetch_interval = ?,
-              consecutive_failures = 0, last_error = NULL, last_fetched_at = ?,
+              consecutive_failures = 0, last_error = NULL, last_error_kind = NULL,
+              last_fetched_at = ?,
               title = CASE WHEN title = '' THEN ? ELSE title END,
               site_url = COALESCE(site_url, ?)
         WHERE id = ?`,
@@ -368,7 +371,8 @@ export async function markFetchUnchanged(db: D1Database, p: FetchUnchangedParams
     .prepare(
       `UPDATE feeds
           SET next_fetch_at = ?, fetch_interval = ?,
-              consecutive_failures = 0, last_error = NULL, last_fetched_at = ?
+              consecutive_failures = 0, last_error = NULL, last_error_kind = NULL,
+              last_fetched_at = ?
         WHERE id = ?`,
     )
     .bind(p.nextFetchAt, p.fetchInterval, p.now, p.id)
@@ -382,6 +386,8 @@ export interface FetchFailureParams {
   /** 今回の失敗を含めた連続失敗回数 */
   failures: number;
   message: string;
+  /** 機械的に扱うための分類。購読管理画面の一括解除がこれで対象を選ぶ */
+  reason: FeedErrorKind;
   disabled: boolean;
 }
 
@@ -390,10 +396,10 @@ export async function markFetchFailure(db: D1Database, p: FetchFailureParams): P
   await db
     .prepare(
       `UPDATE feeds
-          SET next_fetch_at = ?, consecutive_failures = ?, last_error = ?,
+          SET next_fetch_at = ?, consecutive_failures = ?, last_error = ?, last_error_kind = ?,
               last_fetched_at = ?, disabled = ?
         WHERE id = ?`,
     )
-    .bind(p.nextFetchAt, p.failures, p.message, p.now, p.disabled ? 1 : 0, p.id)
+    .bind(p.nextFetchAt, p.failures, p.message, p.reason, p.now, p.disabled ? 1 : 0, p.id)
     .run();
 }
