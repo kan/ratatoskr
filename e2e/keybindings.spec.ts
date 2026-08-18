@@ -115,10 +115,30 @@ test('Shift+S でフィードを全て既読にして次へ進む', async ({ pag
   await expect(page.getByTestId('feed-1')).not.toContainText('(');
 });
 
-test('左ペインのクリックでもフィードを選べる', async ({ page }) => {
+test('左ペインのフィード名で記事一覧を開閉する', async ({ page }) => {
   await open(page);
+
+  // 読んでいる最中のフィードは開いた状態で始まる
+  await expect(page.getByTestId('entry-list-1')).toBeVisible();
+  await expect(page.getByTestId('entry-list-2')).toBeHidden();
+
+  // 別のフィードを開いても、読んでいる記事は変わらない（移動ではなく開閉）
   await page.getByTestId('feed-2').click();
+  await expect(page.getByTestId('entry-list-2')).toBeVisible();
+  await expect(title(page)).toHaveText('朝刊の 1 本目');
+
+  // 開いた一覧から記事を選ぶとそのフィードへ移る
+  await page.getByTestId('entry-21').click();
   await expect(title(page)).toHaveText('夕刊の 1 本目');
+
+  // 読んでいるフィードは畳める
+  await page.getByTestId('feed-2').click();
+  await expect(page.getByTestId('entry-list-2')).toBeHidden();
+
+  // ただしカーソルが動いたら開き直す。記事を送っている最中に
+  // 一覧が出てこないと、どこを読んでいるのか分からなくなる
+  await page.keyboard.press('k');
+  await expect(page.getByTestId('entry-list-2')).toBeVisible();
 });
 
 test('? でヘルプが開き、Esc で閉じる', async ({ page }) => {
@@ -167,7 +187,7 @@ test('入力欄にフォーカスがある間はキーバインドを無効化�
 
 test('読んでいるフィードの記事が左ペインに並び、クリックで飛べる', async ({ page }) => {
   await open(page);
-  const list = page.getByTestId('entry-list');
+  const list = page.getByTestId('entry-list-1');
   await expect(list).toBeVisible();
   await expect(list.getByRole('button')).toHaveCount(2);
 
@@ -185,7 +205,7 @@ test('読んでいるフィードの記事が左ペインに並び、クリッ�
   await expect(page.getByTestId('entry-11')).toHaveAttribute('data-read', 'true');
   await expect(page.getByTestId('entry-12')).toHaveAttribute('data-read', 'true');
 
-  // 別のフィードに移ると、そちらの記事に入れ替わる
+  // 別のフィードに移ると、そちらの記事に入れ替わる（手で開いたものではないので畳まれる）
   await page.keyboard.press('s');
   await expect(page.getByTestId('entry-21')).toBeVisible();
   await expect(page.getByTestId('entry-11')).toBeHidden();

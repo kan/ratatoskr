@@ -157,10 +157,9 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
     <FeedList
       :feeds="feeds.feeds"
       :current-feed-id="feeds.currentFeed?.id ?? null"
-      :entries="feeds.currentEntries"
       :current-entry-id="feeds.currentEntry?.id ?? null"
-      @select="feeds.selectFeed"
-      @select-entry="feeds.selectEntry"
+      :entries-of="feeds.entriesFor"
+      @select-entry="feeds.selectEntryIn"
       @manage="activeOverlay = 'subscriptions'"
     />
 

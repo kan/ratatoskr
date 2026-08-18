@@ -350,6 +350,29 @@ export const useFeedsStore = defineStore('feeds', () => {
   }
 
   /**
+   * 左ペインで開いた別のフィードの記事に飛ぶ。
+   * まずそのフィードに入ってから記事を選ぶ（カーソルの持ち主はここ 1 つ。不変条件 2）。
+   */
+  function selectEntryIn(feedId: number, entryId: number): void {
+    if (currentFeed.value?.id !== feedId) selectFeed(feedId);
+    selectEntry(entryId);
+  }
+
+  /**
+   * 左ペインに並べる記事。読んでいる最中のフィードは、入った時点で確定した一覧を返す
+   * （未読を都度計算し直すと、最終記事を表示した瞬間に一覧が消える）。
+   * それ以外のフィードは未読を、未読が無ければ手元にある分を返す（enterFeed と同じ規則）。
+   */
+  function entriesFor(feedId: number): Entry[] {
+    if (currentFeed.value?.id === feedId) return currentEntries.value;
+
+    const feed = feeds.value.find((candidate) => candidate.id === feedId);
+    if (feed === undefined) return [];
+    const unread = entriesStore.unreadOf(feed.id, feed.readSeq);
+    return unread.length > 0 ? unread : entriesStore.of(feed.id);
+  }
+
+  /**
    * このフィードを全部既読にして次へ。未読が溜まって「もう今日は読まない」ときに使う。
    * LDR の touch_all にあたる操作。
    */
@@ -443,6 +466,8 @@ export const useFeedsStore = defineStore('feeds', () => {
     absorbNewEntries,
     selectFeed,
     selectEntry,
+    selectEntryIn,
+    entriesFor,
     readAllAndNext,
     markCurrentUnread,
     setRate,
