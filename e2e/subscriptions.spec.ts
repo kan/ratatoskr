@@ -121,3 +121,31 @@ test('取得できないフィードだけをまとめて解除できる', async
   await expect(page.getByTestId('manage-feed-6')).toBeVisible();
   await expect(page.getByTestId('manage-feed-7')).toBeVisible();
 });
+
+/**
+ * 全文取得（M7）。要約しか配信しないフィードで、記事ページから本文を取ってくる設定。
+ * 抽出そのものは Vitest（src/crawler/）で見ているので、ここでは画面から入切できて
+ * その場で取りに行くことだけを見る。
+ */
+test('要約しか配信しないフィードには全文取得を勧める', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/');
+  await page.getByTestId('open-manager').click();
+
+  await expect(page.getByTestId('manage-full-text-hint-2')).toBeVisible();
+  // 勧めるのは要約だけのフィードに限る。朝刊は本文を配っている
+  await expect(page.getByTestId('manage-full-text-hint-1')).toBeHidden();
+});
+
+test('全文取得を入れると、その場で取りに行く', async ({ page }) => {
+  const recorder = await mockApi(page);
+  await page.goto('/');
+  await page.getByTestId('open-manager').click();
+
+  await page.getByTestId('manage-full-text-2').click();
+
+  await expect.poll(() => recorder.updates).toEqual([{ id: 2, params: { fullText: true } }]);
+  // 設定だけ変えて次の定期取得を待たせると「入れたのに何も変わらない」ように見える
+  await expect.poll(() => recorder.refetched).toEqual([2]);
+  await expect(page.getByTestId('manage-full-text-2')).toHaveText('全文 ✓');
+});

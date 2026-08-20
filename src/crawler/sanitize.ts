@@ -60,6 +60,58 @@ function safeUrl(value: string, baseUrl: string | null): string | null {
   return SAFE_SCHEMES.has(url.protocol) ? url.href : null;
 }
 
+/** ホワイトリストを 1 要素に当てる。sanitizeHtml と sanitizeWithin で共有する */
+function applyPolicy(element: Element, baseUrl: string | null): void {
+  const tag = element.tagName.toLowerCase();
+
+  if (DROPPED_TAGS.has(tag)) {
+    element.remove();
+    return;
+  }
+  if (!ALLOWED_TAGS.has(tag)) {
+    // 未知のタグは中身だけ残す。span/font のような装飾は消えて本文は残る
+    element.removeAndKeepContent();
+    return;
+  }
+
+  const allowed = ALLOWED_ATTRS[tag] ?? [];
+  // 走査中に消すと反復子が壊れるので、先に一覧を取る
+  for (const [name, value] of [...element.attributes]) {
+    const lower = name.toLowerCase();
+    if (!allowed.includes(lower)) {
+      element.removeAttribute(name);
+      continue;
+    }
+    if (!URL_ATTRS.has(lower)) continue;
+
+    const resolved = safeUrl(value, baseUrl);
+    if (resolved === null) element.removeAttribute(name);
+    else element.setAttribute(name, resolved);
+  }
+
+  // width/height を落として max-width: 100% を効かせる（docs/DESIGN.md §5）
+  if (tag === 'img') {
+    element.removeAttribute('width');
+    element.removeAttribute('height');
+  }
+  // 記事内リンクは別タブで開く。opener 経由で元ページを触らせない
+  if (tag === 'a') {
+    element.setAttribute('target', '_blank');
+    element.setAttribute('rel', 'noopener noreferrer');
+  }
+}
+
+// 記事ページ 1 枚まるごとを渡されることがある（crawler/extract.ts）。body に入るのは
+// 断片なので doctype は要らない。HTMLRewriter の Doctype には remove() が無く
+// ハンドラからは落とせないので、渡す前に削っておく
+const LEADING_DOCTYPE = /^\uFEFF?\s*<!doctype[^>]*>/i;
+
+export function htmlResponse(html: string): Response {
+  return new Response(html.replace(LEADING_DOCTYPE, ''), {
+    headers: { 'content-type': 'text/html; charset=utf-8' },
+  });
+}
+
 export async function sanitizeHtml(html: string, baseUrl: string | null = null): Promise<string> {
   if (html.trim() === '') return '';
 
@@ -72,46 +124,71 @@ export async function sanitizeHtml(html: string, baseUrl: string | null = null):
     })
     .on('*', {
       element(element) {
-        const tag = element.tagName.toLowerCase();
-
-        if (DROPPED_TAGS.has(tag)) {
-          element.remove();
-          return;
-        }
-        if (!ALLOWED_TAGS.has(tag)) {
-          // 未知のタグは中身だけ残す。span/font のような装飾は消えて本文は残る
-          element.removeAndKeepContent();
-          return;
-        }
-
-        const allowed = ALLOWED_ATTRS[tag] ?? [];
-        // 走査中に消すと反復子が壊れるので、先に一覧を取る
-        for (const [name, value] of [...element.attributes]) {
-          const lower = name.toLowerCase();
-          if (!allowed.includes(lower)) {
-            element.removeAttribute(name);
-            continue;
-          }
-          if (!URL_ATTRS.has(lower)) continue;
-
-          const resolved = safeUrl(value, baseUrl);
-          if (resolved === null) element.removeAttribute(name);
-          else element.setAttribute(name, resolved);
-        }
-
-        // width/height を落として max-width: 100% を効かせる（docs/DESIGN.md §5）
-        if (tag === 'img') {
-          element.removeAttribute('width');
-          element.removeAttribute('height');
-        }
-        // 記事内リンクは別タブで開く。opener 経由で元ページを触らせない
-        if (tag === 'a') {
-          element.setAttribute('target', '_blank');
-          element.setAttribute('rel', 'noopener noreferrer');
-        }
+        applyPolicy(element, baseUrl);
       },
     })
-    .transform(new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } }));
+    .transform(htmlResponse(html));
 
   return await response.text();
+}
+
+/**
+ * セレクタで指した要素の**中身だけ**をサニタイズして返す。見つからなければ null。
+ *
+ * 記事ページから本文を取り出すのに使う（crawler/extract.ts）。切り出してから
+ * サニタイズするのではなく 1 回の走査で済ませているのは、HTMLRewriter が要素の
+ * 位置を教えてくれないため。位置を得るために自前で HTML を走査すると、閉じ忘れや
+ * 属性値の中の `>` で簡単に壊れる。
+ *
+ * 外側は「タグを剥がして中身を残す」ではなく「テキストごと捨てる」。本文の前後には
+ * ナビゲーションや関連記事が必ずあり、剥がすだけではそれが本文に混ざる。
+ */
+export async function sanitizeWithin(
+  html: string,
+  selector: string,
+  baseUrl: string | null = null,
+): Promise<string | null> {
+  let matched = false;
+  /** 対象の中にいるか。開始タグで立て、終了タグで倒す */
+  let inside = false;
+
+  const response = new HTMLRewriter()
+    .onDocument({
+      comments(comment) {
+        comment.remove();
+      },
+    })
+    .on(selector, {
+      element(element) {
+        // 同じセレクタに複数当たることは無い前提だが（extract.ts が一意なものしか
+        // 選ばない）、当たったら最初の 1 つだけを見る
+        if (matched) return;
+        matched = true;
+        inside = true;
+        element.onEndTag(() => {
+          inside = false;
+        });
+      },
+    })
+    .on('*', {
+      element(element) {
+        if (!inside) {
+          // 対象の祖先はまだ「外側」として通る。remove() で消すと対象ごと消えるので、
+          // タグだけ剥がして中身は流す。外側のテキストは下の text で落ちるので、
+          // 剥がした結果が本文に混ざることはない
+          const tag = element.tagName.toLowerCase();
+          if (DROPPED_TAGS.has(tag)) element.remove();
+          else element.removeAndKeepContent();
+          return;
+        }
+        applyPolicy(element, baseUrl);
+      },
+      text(chunk) {
+        if (!inside) chunk.remove();
+      },
+    })
+    .transform(htmlResponse(html));
+
+  const body = await response.text();
+  return matched ? body.trim() : null;
 }

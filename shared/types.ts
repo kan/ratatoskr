@@ -37,6 +37,13 @@ export interface Feed {
   /** 連続で失敗した回数。1 回きりの失敗と、ずっと死んでいるものを区別する */
   consecutiveFailures: number;
   disabled: boolean;
+  /**
+   * 記事ページから本文を取ってくるか（M7）。要約しか配信しないフィード向け。
+   * 既定は false で、決めるのはユーザ（相手のサーバに記事の数だけ取りに行くため）
+   */
+  fullText: boolean;
+  /** クロール時に「要約しか配信していない」と見えた。購読管理画面で勧めるのに使う */
+  fullTextSuggested: boolean;
 }
 
 export interface Entry {
@@ -153,6 +160,7 @@ export interface UpdateFeedRequest {
   /** フィードの名乗りを上書きするユーザ指定値 */
   title?: string;
   disabled?: boolean;
+  fullText?: boolean;
 }
 
 export interface FeedResponse {

@@ -3,6 +3,7 @@ import {
   markFetchFailure,
   markFetchSuccess,
   markFetchUnchanged,
+  markFullTextSuggested,
   selectCrawlTargets,
   selectCrawlTargetsByIds,
   type CrawlTarget,
@@ -10,7 +11,8 @@ import {
 import { insertEntries, type NewEntry } from '../db/entries';
 import { errorMessage } from '../lib/errors';
 import { sha256Hex } from '../lib/hash';
-import { fetchFeed } from './fetch';
+import { fetchFeed, type FetchBudget } from './fetch';
+import { fillFullText, looksSummaryOnly, type FullTextOptions } from './fulltext';
 import { parseFeed } from './parse';
 import { sanitizeHtml } from './sanitize';
 import {
@@ -37,6 +39,15 @@ const MAX_ITEMS_PER_FEED = 100;
 /** last_error に入れる長さの上限 */
 const MAX_ERROR_LENGTH = 500;
 
+/**
+ * 1 回の cron で取りに行く記事ページの上限（全フィード合わせて）。
+ *
+ * フィード本体を 20 本取ったうえに積み上がるので、サブリクエスト上限に収まる幅に
+ * 抑える（docs/DESIGN.md §5）。全文取得を入れたフィードは数本のはずなので、
+ * 定常状態ではここに当たらない
+ */
+const MAX_FULL_TEXT_PER_RUN = 20;
+
 export interface CrawlOptions {
   now?: number;
   limit?: number;
@@ -45,6 +56,10 @@ export interface CrawlOptions {
   fetchImpl?: typeof fetch;
   /** 指定すると next_fetch_at を無視してこのフィードだけを処理する */
   feedIds?: number[];
+  /** 記事ページのどこが本文かを判定させる（M7）。無ければ点数だけで決める */
+  ai?: Ai;
+  /** 記事ページを取りに行ける数の上限。既定は MAX_FULL_TEXT_PER_RUN */
+  fullTextLimit?: number;
 }
 
 export interface CrawlSummary {
@@ -56,6 +71,14 @@ export interface CrawlSummary {
   inserted: number;
   /** 取得・パースに失敗したフィード数 */
   failed: number;
+  /**
+   * 記事ページから本文を埋めた記事の id（M7）。
+   *
+   * 件数ではなく id を返すのは、手動更新（POST /api/feeds/:id/fetch）が
+   * 「本文が差し替わった記事」をクライアントに返すため。既にクライアントが
+   * 持っている記事なので、id が無いと差分として取り出しようがない
+   */
+  filledEntryIds: number[];
 }
 
 export async function crawl(env: Env, options: CrawlOptions = {}): Promise<CrawlSummary> {
@@ -67,13 +90,23 @@ export async function crawl(env: Env, options: CrawlOptions = {}): Promise<Crawl
     ? await selectCrawlTargetsByIds(env.DB, options.feedIds)
     : await selectCrawlTargets(env.DB, now, options.limit ?? MAX_FEEDS_PER_RUN);
 
-  const summary: CrawlSummary = { checked: targets.length, updated: 0, inserted: 0, failed: 0 };
+  const summary: CrawlSummary = {
+    checked: targets.length,
+    updated: 0,
+    inserted: 0,
+    failed: 0,
+    filledEntryIds: [],
+  };
+  // フィードをまたいで減っていく。1 本のフィードが使い切ることがある
+  const budget: FetchBudget = { remaining: options.fullTextLimit ?? MAX_FULL_TEXT_PER_RUN };
 
   // Promise.allSettled をチャンクに分けて回す。1 本の失敗で他を巻き込まない
   for (let i = 0; i < targets.length; i += concurrency) {
     const chunk = targets.slice(i, i + concurrency);
     const results = await Promise.allSettled(
-      chunk.map((target) => crawlFeed(env.DB, target, now, fetchImpl)),
+      chunk.map((target) =>
+        crawlFeed(env.DB, target, now, { fetchImpl, ai: options.ai ?? env.AI, budget }),
+      ),
     );
 
     for (const [index, result] of results.entries()) {
@@ -87,6 +120,7 @@ export async function crawl(env: Env, options: CrawlOptions = {}): Promise<Crawl
       if (result.value.failed) summary.failed += 1;
       if (result.value.inserted > 0) summary.updated += 1;
       summary.inserted += result.value.inserted;
+      summary.filledEntryIds.push(...result.value.filled);
     }
   }
 
@@ -96,19 +130,21 @@ export async function crawl(env: Env, options: CrawlOptions = {}): Promise<Crawl
 interface FeedResult {
   inserted: number;
   failed: boolean;
+  /** 記事ページから本文を埋めた記事の id（M7） */
+  filled: number[];
 }
 
 async function crawlFeed(
   db: D1Database,
   target: CrawlTarget,
   now: number,
-  fetchImpl: typeof fetch,
+  options: FullTextOptions,
 ): Promise<FeedResult> {
-  const outcome = await fetchFeed(target, fetchImpl);
+  const outcome = await fetchFeed(target, options.fetchImpl);
 
   if (outcome.kind === 'error') {
     await recordFailure(db, target, now, outcome.message, outcome.reason);
-    return { inserted: 0, failed: true };
+    return { inserted: 0, failed: true, filled: [] };
   }
 
   if (outcome.kind === 'notModified' || outcome.kind === 'unchanged') {
@@ -119,7 +155,10 @@ async function crawlFeed(
       nextFetchAt: now + fetchInterval,
       fetchInterval,
     });
-    return { inserted: 0, failed: false };
+    // 新着が無くても、まだ全文の入っていない未読は埋める。設定を入れた直後に
+    // 手持ちの未読が置き去りになるのを防ぐ
+    const { filled } = await fillFullText(db, target, options);
+    return { inserted: 0, failed: false, filled };
   }
 
   let parsed;
@@ -128,7 +167,7 @@ async function crawlFeed(
   } catch (err) {
     // 取れてはいるがフィードではない。URL の付け替えでしか直らないので分けて記録する
     await recordFailure(db, target, now, errorMessage(err), 'not_a_feed');
-    return { inserted: 0, failed: true };
+    return { inserted: 0, failed: true, filled: [] };
   }
 
   // フィードは新しい記事から並べるのが通例。逆順に入れて、古い記事ほど小さい
@@ -153,7 +192,13 @@ async function crawlFeed(
     siteUrl: parsed.siteUrl,
   });
 
-  return { inserted, failed: false };
+  // 要約しか配信していないなら、購読管理画面で全文取得を勧める。
+  // 勧めるだけで取りには行かない。相手のサーバに記事の数だけ取りに行く動作なので、
+  // 始めるかどうかはユーザが決める（migrations/0003_full_text.sql）
+  if (!target.fullText && looksSummaryOnly(rows)) await markFullTextSuggested(db, target.id);
+
+  const { filled } = await fillFullText(db, target, options);
+  return { inserted, failed: false, filled };
 }
 
 async function toNewEntry(feedId: number, item: ParsedItem, baseUrl: string): Promise<NewEntry> {

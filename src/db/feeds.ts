@@ -1,4 +1,5 @@
 import type { Feed, FeedErrorKind, FeedReadState, ReadMark } from '../../shared/types';
+import { CLEAR_FULL_BODIES } from './entries';
 import { UNREAD_COUNT_SUBQUERY } from './unread';
 
 /**
@@ -20,6 +21,8 @@ interface FeedRow {
   last_error_kind: string | null;
   consecutive_failures: number;
   disabled: number;
+  full_text: number;
+  full_text_suggested: number;
 }
 
 function toFeed(row: FeedRow): Feed {
@@ -38,12 +41,15 @@ function toFeed(row: FeedRow): Feed {
     lastErrorKind: row.last_error_kind as FeedErrorKind | null,
     consecutiveFailures: row.consecutive_failures,
     disabled: row.disabled === 1,
+    fullText: row.full_text === 1,
+    // 2 は「ユーザが決めた」。勧めるのは 1 のときだけ（migrations/0003_full_text.sql）
+    fullTextSuggested: row.full_text_suggested === 1,
   };
 }
 
 const FEED_COLUMNS = `f.id, f.url, f.site_url, f.title, f.icon_url, f.rate, f.folder, f.read_seq,
               f.last_fetched_at, f.last_error, f.last_error_kind, f.consecutive_failures,
-              f.disabled`;
+              f.disabled, f.full_text, f.full_text_suggested`;
 
 /**
  * 全フィードを未読数付きで返す。
@@ -187,6 +193,8 @@ export interface FeedSettings {
   /** フィードの名乗りを上書きするユーザ指定値 */
   title?: string;
   disabled?: boolean;
+  /** 記事ページから本文を取ってくるか（M7） */
+  fullText?: boolean;
 }
 
 /**
@@ -217,6 +225,13 @@ export async function updateFeedSettings(
     assignments.push('disabled = ?');
     params.push(settings.disabled ? 1 : 0);
   }
+  if (settings.fullText !== undefined) {
+    assignments.push('full_text = ?');
+    params.push(settings.fullText ? 1 : 0);
+    // 勧める必要はもう無い。入れたのであれ断ったのであれ、ユーザが決めた。
+    // 0 に戻すと次のクロールで同じ判定が出て勧めが復活するので、2 を入れる
+    assignments.push('full_text_suggested = 2');
+  }
   // 無効化を解除したら次の cron で拾えるようにする。
   // 連続失敗で自動的に無効化されたフィードを、手で戻せるようにするため
   if (settings.disabled === false) {
@@ -225,10 +240,17 @@ export async function updateFeedSettings(
   if (assignments.length === 0) return true;
 
   params.push(id);
-  const result = await db
+  const update = db
     .prepare(`UPDATE feeds SET ${assignments.join(', ')} WHERE id = ?`)
-    .bind(...params)
-    .run();
+    .bind(...params);
+
+  // 全文取得を切ったら、取ってあった本文も捨てる。読み出しは COALESCE なので、
+  // 捨てないと「抽出が本文でないものを掴んでいた」ときに元へ戻す手段が無くなる。
+  // 設定と後始末を 1 つの batch にまとめて、片方だけ適用された状態を作らない
+  const statements =
+    settings.fullText === false ? [update, db.prepare(CLEAR_FULL_BODIES).bind(id)] : [update];
+
+  const [result] = await db.batch(statements);
   return (result.meta.changes ?? 0) > 0;
 }
 
@@ -249,6 +271,10 @@ export interface CrawlTarget {
   contentHash: string | null;
   fetchInterval: number;
   consecutiveFailures: number;
+  /** 記事ページから本文を取ってくるか（M7） */
+  fullText: boolean;
+  /** 記事ページのどこが本文か。NULL なら次の取得時に判定する */
+  fullTextSelector: string | null;
 }
 
 interface CrawlTargetRow {
@@ -261,6 +287,8 @@ interface CrawlTargetRow {
   content_hash: string | null;
   fetch_interval: number;
   consecutive_failures: number;
+  full_text: number;
+  full_text_selector: string | null;
 }
 
 function toCrawlTarget(row: CrawlTargetRow): CrawlTarget {
@@ -274,11 +302,13 @@ function toCrawlTarget(row: CrawlTargetRow): CrawlTarget {
     contentHash: row.content_hash,
     fetchInterval: row.fetch_interval,
     consecutiveFailures: row.consecutive_failures,
+    fullText: row.full_text === 1,
+    fullTextSelector: row.full_text_selector,
   };
 }
 
 const CRAWL_COLUMNS = `id, url, title, site_url, etag, last_modified, content_hash,
-         fetch_interval, consecutive_failures`;
+         fetch_interval, consecutive_failures, full_text, full_text_selector`;
 
 /**
  * 期限が来たフィードを古い順に取る。LIMIT は必ず付ける
@@ -404,5 +434,37 @@ export async function markFetchFailure(db: D1Database, p: FetchFailureParams): P
         WHERE id = ?`,
     )
     .bind(p.nextFetchAt, p.failures, p.message, p.reason, p.now, p.disabled ? 1 : 0, p.id)
+    .run();
+}
+
+/**
+ * 記事ページのどこが本文かを覚える（src/crawler/choose.ts が決めた結果）。
+ * null を渡すと忘れさせる。サイトが作り替えられて引けなくなったときに、
+ * 次の取得で判定し直させるために使う。
+ */
+export async function updateFullTextSelector(
+  db: D1Database,
+  id: number,
+  selector: string | null,
+  source: string | null,
+): Promise<void> {
+  await db
+    .prepare('UPDATE feeds SET full_text_selector = ?, full_text_source = ? WHERE id = ?')
+    .bind(selector, source, id)
+    .run();
+}
+
+/**
+ * 「要約しか配信していない」と見えたことを覚える。購読管理画面で勧めるだけで、
+ * 取りに行き始めはしない（相手のサーバに記事の数だけ取りに行く動作なので、
+ * こちらが勝手に決めない）。
+ *
+ * 既にユーザが決めた後（full_text_suggested = 2）は触らない。触ると、勧めを断った
+ * フィードで次のクロックごとに勧めが復活する。
+ */
+export async function markFullTextSuggested(db: D1Database, id: number): Promise<void> {
+  await db
+    .prepare('UPDATE feeds SET full_text_suggested = 1 WHERE id = ? AND full_text_suggested = 0')
+    .bind(id)
     .run();
 }

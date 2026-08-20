@@ -170,6 +170,29 @@ function toggleDisabled(feed: Feed): Promise<void> {
   return run(() => session.editFeed(feed.id, { disabled: !feed.disabled }));
 }
 
+/**
+ * 全文取得の入切（M7）。入れた直後はそのまま取りに行く。
+ *
+ * 設定だけ変えて次の定期取得を待たせると、手持ちの未読が要約のまま残って
+ * 「入れたのに何も変わらない」ように見える。取得の中で未取得の未読が埋まる
+ * （src/crawler/fulltext.ts）ので、手動更新と同じ経路に乗せれば足りる。
+ */
+async function toggleFullText(feed: Feed): Promise<void> {
+  const fullText = !feed.fullText;
+  await run(async () => {
+    await session.editFeed(feed.id, { fullText });
+    if (!fullText) {
+      // サーバ側は取ってあった本文を捨てている。手元にも差し替わったものが
+      // 残っているので、取り直して要約に戻す（抽出を仕損じたときの戻し道）
+      await session.reloadFeedEntries(feed.id);
+      message.value = '全文取得を止めて、本文をフィードの配信内容に戻した';
+      return;
+    }
+    await session.refresh(feed.id);
+    message.value = '全文取得を入れて、未読の本文を取りに行った';
+  });
+}
+
 function refresh(feed: Feed): Promise<void> {
   return run(async () => {
     const added = await session.refresh(feed.id);
@@ -297,6 +320,13 @@ async function onOpmlSelected(event: Event): Promise<void> {
               >
                 {{ feed.url }}
               </a>
+              <p
+                v-if="feed.fullTextSuggested && !feed.fullText"
+                class="text-amber-700 dark:text-amber-500"
+                :data-testid="`manage-full-text-hint-${feed.id}`"
+              >
+                要約しか配信していない。「全文」で記事ページから本文を取ってこられる
+              </p>
               <p v-if="feed.lastError" class="text-red-700 dark:text-red-400">
                 {{ feed.lastError }}
                 <span v-if="feed.consecutiveFailures > 1">
@@ -326,6 +356,20 @@ async function onOpmlSelected(event: Event): Promise<void> {
             <td class="py-1 pr-2 text-right tabular-nums">{{ feed.unreadCount }}</td>
             <td class="space-x-2 py-1 text-right">
               <button class="hover:underline" :disabled="busy" @click="refresh(feed)">更新</button>
+              <button
+                class="hover:underline"
+                :class="feed.fullText ? 'text-neutral-900 dark:text-neutral-100' : ''"
+                :disabled="busy"
+                :title="
+                  feed.fullText
+                    ? '記事ページから本文を取ってくる（入）'
+                    : '要約しか配信しないフィードで、記事ページから本文を取ってくる'
+                "
+                :data-testid="`manage-full-text-${feed.id}`"
+                @click="toggleFullText(feed)"
+              >
+                {{ feed.fullText ? '全文 ✓' : '全文' }}
+              </button>
               <button class="hover:underline" :disabled="busy" @click="toggleDisabled(feed)">
                 {{ feed.disabled ? '再開' : '停止' }}
               </button>

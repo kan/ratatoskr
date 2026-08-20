@@ -19,6 +19,11 @@ export default defineConfig({
         plugins: [
           cloudflareTest({
             wrangler: { configPath: './wrangler.jsonc' },
+            // Workers AI（M7 の全文取得）は必ずリモートに繋ぎに行くバインディングで、
+            // 有効にしたままだとテストが Cloudflare への接続を張り、認証が要るうえに
+            // 終了時にプロセスが残る。テストは AI を差し替えて呼ぶ（choose.test.ts）ので、
+            // ここでは繋がせない
+            remoteBindings: false,
             miniflare: {
               bindings: {
                 TEST_MIGRATIONS: migrations,

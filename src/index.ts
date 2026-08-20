@@ -16,7 +16,9 @@ export default {
 
   async scheduled(_event, env, _ctx): Promise<void> {
     // 例外は握りつぶさず投げ直す。cron の失敗として観測できるようにするため
-    const summary = await crawl(env);
-    console.log('crawl', JSON.stringify(summary));
+    const { filledEntryIds, ...counts } = await crawl(env);
+    // filledEntryIds は記事の id をそのまま持つので、件数だけを残す。
+    // cron のログは毎回出るものなので、追える形で短くしておく
+    console.log('crawl', JSON.stringify({ ...counts, filled: filledEntryIds.length }));
   },
 } satisfies ExportedHandler<Env>;

@@ -7,6 +7,36 @@ import { sha256Hex } from '../lib/hash';
  * パースやスケジューリングは呼び出し側に任せる。
  */
 
+/**
+ * cron 1 回で外部へ追加で取りに行ける回数。フィード本体の取得（1 フィード 1 回）とは別に、
+ * 記事ページの取得（全文取得）と埋め込みの解決（X の oEmbed）がここから引かれる。
+ *
+ * 1 リクエストあたりのサブリクエスト上限があるので、フィード本体 20 本の上に
+ * 無制限に積み上げられない（docs/DESIGN.md §5）。
+ */
+export interface FetchBudget {
+  remaining: number;
+}
+
+/**
+ * 取りに行く前に枠を確保する。**await を挟まずに読んで引く。**
+ * クロールはフィードを並列に回すので、取得を待ってから引くと、同じ残りを
+ * 複数のフィードが同時に読んで上限を超える。
+ *
+ * @returns 実際に確保できた数（0 なら取りに行かない）
+ */
+export function reserveBudget(budget: FetchBudget, want: number): number {
+  const granted = Math.min(want, budget.remaining);
+  if (granted <= 0) return 0;
+  budget.remaining -= granted;
+  return granted;
+}
+
+/** 使わなかった枠を返す。取りに行って失敗した分は返さない（叩き続けないため） */
+export function releaseBudget(budget: FetchBudget, unused: number): void {
+  if (unused > 0) budget.remaining += unused;
+}
+
 export type FetchOutcome =
   /** 304。本文を読まずに終わり */
   | { kind: 'notModified' }

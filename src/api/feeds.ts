@@ -1,5 +1,6 @@
 import type {
   CreateFeedResponse,
+  Entry,
   FeedCandidatesResponse,
   FeedResponse,
   FetchFeedResponse,
@@ -7,7 +8,7 @@ import type {
 } from '../../shared/types';
 import { crawl } from '../crawler';
 import { discoverFeed } from '../crawler/discover';
-import { selectEntries, selectMaxEntryId } from '../db/entries';
+import { selectEntries, selectEntriesByIds, selectMaxEntryId } from '../db/entries';
 import { deleteFeed, insertFeed, selectFeedById, updateFeedSettings } from '../db/feeds';
 import { badRequest, readJsonBody } from '../lib/body';
 import { ApiError, json } from '../lib/errors';
@@ -121,7 +122,8 @@ export async function updateFeed(request: Request, env: Env, id: number): Promis
     ...(input.rate === undefined ? {} : { rate: parseRate(input.rate) }),
     ...(input.folder === undefined ? {} : { folder: parseFolder(input.folder) }),
     ...(input.title === undefined ? {} : { title: parseTitle(input.title) }),
-    ...(input.disabled === undefined ? {} : { disabled: parseDisabled(input.disabled) }),
+    ...(input.disabled === undefined ? {} : { disabled: parseBoolean(input.disabled, 'disabled') }),
+    ...(input.fullText === undefined ? {} : { fullText: parseBoolean(input.fullText, 'fullText') }),
   };
 
   if (!(await updateFeedSettings(env.DB, id, settings))) {
@@ -141,8 +143,8 @@ function parseTitle(value: unknown): string {
   return title;
 }
 
-function parseDisabled(value: unknown): boolean {
-  if (typeof value !== 'boolean') badRequest('disabled は真偽値で指定する');
+function parseBoolean(value: unknown, name: string): boolean {
+  if (typeof value !== 'boolean') badRequest(`${name} は真偽値で指定する`);
   return value as boolean;
 }
 
@@ -165,9 +167,12 @@ export async function refetchFeed(env: Env, id: number): Promise<Response> {
   ]);
   if (current === null) throw new ApiError('not_found', `フィード ${id} は存在しない`, 404);
 
-  await crawl(env, { feedIds: [id] });
+  const summary = await crawl(env, { feedIds: [id] });
 
-  const [feed, entries] = await Promise.all([
+  // 増えた記事に加えて、全文取得（M7）で本文が差し替わった記事も返す。
+  // 既にクライアントが持っている記事なので、sinceId の差分には出てこない。
+  // 全文取得を入れた直後に手持ちの未読が要約のまま残るのを防ぐ
+  const [feed, added, refreshed] = await Promise.all([
     selectFeedById(env.DB, id),
     selectEntries(env.DB, {
       sinceId: before,
@@ -175,9 +180,17 @@ export async function refetchFeed(env: Env, id: number): Promise<Response> {
       unreadOnly: true,
       limit: INITIAL_ENTRIES,
     }),
+    selectEntriesByIds(env.DB, summary.filledEntryIds),
   ]);
   if (feed === null) throw new ApiError('not_found', `フィード ${id} は存在しない`, 404);
 
-  const body: FetchFeedResponse = { feed, entries };
+  const body: FetchFeedResponse = { feed, entries: mergeById(added, refreshed) };
   return json(body);
+}
+
+/** 新しく入った記事と本文が差し替わった記事。両方に出てくるものは 1 件にまとめる */
+function mergeById(added: Entry[], refreshed: Entry[]): Entry[] {
+  const byId = new Map(added.map((entry) => [entry.id, entry]));
+  for (const entry of refreshed) byId.set(entry.id, entry);
+  return [...byId.values()].sort((a, b) => a.id - b.id);
 }

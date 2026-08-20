@@ -38,6 +38,8 @@ function feed(id: number, title: string, rate: number, unreadCount: number): Fee
     lastErrorKind: null,
     consecutiveFailures: 0,
     disabled: false,
+    fullText: false,
+    fullTextSuggested: false,
   };
 }
 
@@ -82,7 +84,8 @@ function failing(
  */
 export const FEEDS: Feed[] = [
   feed(1, '朝刊', 5, 2),
-  feed(2, '夕刊', 3, 1),
+  // 夕刊は要約しか配信していないと見えたフィード（M7 の全文取得を勧める側）
+  { ...feed(2, '夕刊', 3, 1), fullTextSuggested: true },
   feed(3, '既読済み', 1, 0),
   failing(4, '消えたブログ', 'HTTP 404 Not Found', 'not_found'),
   failing(5, '重いサイト', '応答が無い（15 秒で打ち切り）', 'timeout', 2),
@@ -123,6 +126,17 @@ export interface ApiRecorder {
 }
 
 export async function mockApi(page: Page, options: MockOptions = {}): Promise<ApiRecorder> {
+  /**
+   * PATCH で書き換えられた設定。フィードを返す全ての経路がこれを重ねる。
+   * 重ねないと、設定を変えた直後の手動更新がサーバの初期値で上書きしてしまう
+   * （実際のサーバは書き換え後の値を返す）
+   */
+  const patched = new Map<number, Partial<Feed>>();
+  const current = (id: number): Feed => ({
+    ...FEEDS.find((candidate) => candidate.id === id)!,
+    ...patched.get(id),
+  });
+
   const recorder: ApiRecorder = {
     readMarks: [],
     pinned: [],
@@ -223,10 +237,7 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
   await page.route('**/api/feeds/*/fetch', async (route) => {
     const id = Number(/\/feeds\/(\d+)\/fetch$/.exec(route.request().url())?.[1]);
     recorder.refetched.push(id);
-    const body: FetchFeedResponse = {
-      feed: { ...FEEDS.find((candidate) => candidate.id === id)!, unreadCount: 1 },
-      entries: [],
-    };
+    const body: FetchFeedResponse = { feed: { ...current(id), unreadCount: 1 }, entries: [] };
     await route.fulfill({ json: body });
   });
 
@@ -241,8 +252,8 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
 
     const params = route.request().postDataJSON() as UpdateFeedRequest;
     recorder.updates.push({ id, params });
-    const current = FEEDS.find((candidate) => candidate.id === id)!;
-    const body: FeedResponse = { feed: { ...current, ...params } };
+    patched.set(id, { ...patched.get(id), ...params });
+    const body: FeedResponse = { feed: current(id) };
     await route.fulfill({ json: body });
   });
 

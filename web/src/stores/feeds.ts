@@ -225,6 +225,10 @@ export const useFeedsStore = defineStore('feeds', () => {
     local.lastError = feed.lastError;
     local.lastErrorKind = feed.lastErrorKind;
     local.consecutiveFailures = feed.consecutiveFailures;
+    // 全文取得の状態も持ち越す。クロール中に「要約しか配信していない」と判れば
+    // その場で勧めたい（次の起動まで待たせない）
+    local.fullText = feed.fullText;
+    local.fullTextSuggested = feed.fullTextSuggested;
     syncUnreadCount(local);
     if (index === feedIndex.value) absorbNewEntries();
   }
@@ -299,14 +303,20 @@ export const useFeedsStore = defineStore('feeds', () => {
     const feed = currentFeed.value;
     if (feed === null) return;
 
+    const stored = new Map(entriesStore.of(feed.id).map((entry) => [entry.id, entry]));
     const known = new Set(currentEntries.value.map((entry) => entry.id));
-    const additions = entriesStore
-      .of(feed.id)
-      .filter((entry) => entry.id > entryFloor.value && !known.has(entry.id));
-    if (additions.length === 0) return;
+    const additions = [...stored.values()].filter(
+      (entry) => entry.id > entryFloor.value && !known.has(entry.id),
+    );
+    // 本文が差し替わった記事も載せ替える（全文取得。M7）。貯蔵庫は同じ id を
+    // 新しいオブジェクトで置き換えるので、同一性が変わったかどうかで見分けられる。
+    // これをしないと、いま開いているフィードだけ要約のまま取り残される
+    const replaced = currentEntries.value.some((entry) => stored.get(entry.id) !== entry);
+    if (additions.length === 0 && !replaced) return;
 
     const currentId = currentEntry.value?.id ?? null;
-    const merged = [...currentEntries.value, ...additions].sort((a, b) => a.id - b.id);
+    const rebased = currentEntries.value.map((entry) => stored.get(entry.id) ?? entry);
+    const merged = [...rebased, ...additions].sort((a, b) => a.id - b.id);
 
     // 読んでいる記事を見失わないよう、id で位置を取り直す
     const moved = currentId === null ? -1 : merged.findIndex((entry) => entry.id === currentId);

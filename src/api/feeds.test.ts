@@ -6,8 +6,9 @@ import type {
   FeedResponse,
   FetchFeedResponse,
 } from '../../shared/types';
+import { markFullTextSuggested, selectFeedById } from '../db/feeds';
 import { apiSend } from '../test/request';
-import { getEntryRows, getFeedRow, seedFeed } from '../test/seed';
+import { getEntryRows, getFeedRow, seedEntry, seedFeed } from '../test/seed';
 
 /**
  * 購読管理。フィードの自動検出と初回クロールが絡むので、外向きの fetch は
@@ -225,5 +226,42 @@ describe('POST /api/feeds/:id/fetch', () => {
 
   it('存在しない id は 404', async () => {
     expect((await apiSend('POST', '/api/feeds/999999/fetch')).status).toBe(404);
+  });
+});
+
+/**
+ * 全文取得の設定（M7）。取得そのものは src/crawler/fulltext.test.ts で見ているので、
+ * ここでは「設定を切ったときに元へ戻せること」だけを見る。
+ */
+describe('PATCH /api/feeds/:id の fullText', () => {
+  it('切ると、取ってあった本文も捨ててフィードの配信内容に戻る', async () => {
+    const id = await seedFeed(env.DB, 'https://full.example.com/feed', { fullText: 1 });
+    const entryId = await seedEntry(env.DB, id, { body: '<p>要約</p>' });
+    await env.DB.prepare('UPDATE entries SET full_body = ? WHERE id = ?')
+      .bind('<p>記事ページから取った本文</p>', entryId)
+      .run();
+
+    const response = await apiSend('PATCH', `/api/feeds/${id}`, { fullText: false });
+    expect(response.status).toBe(200);
+
+    // 読み出しは COALESCE なので、捨てないと切っても差し替わったままになる。
+    // 抽出が本文でないものを掴んでいたときの戻し道が要る
+    expect((await getEntryRows(env.DB, id))[0].full_body).toBeNull();
+  });
+
+  it('ユーザが決めたら、次のクロールで勧めが復活しない', async () => {
+    const id = await seedFeed(env.DB, 'https://full.example.com/feed2');
+    await apiSend('PATCH', `/api/feeds/${id}`, { fullText: false });
+
+    // クロールが「要約しか配信していない」と判定しても、断った後なので勧め直さない
+    await markFullTextSuggested(env.DB, id);
+
+    const feed = await selectFeedById(env.DB, id);
+    expect(feed?.fullTextSuggested).toBe(false);
+  });
+
+  it('真偽値以外は 400', async () => {
+    const id = await seedFeed(env.DB, 'https://full.example.com/feed3');
+    expect((await apiSend('PATCH', `/api/feeds/${id}`, { fullText: 'yes' })).status).toBe(400);
   });
 });

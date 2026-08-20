@@ -19,6 +19,8 @@ export interface FeedSeed {
   fetchInterval: number;
   consecutiveFailures: number;
   disabled: number;
+  fullText: number;
+  fullTextSelector: string | null;
 }
 
 export interface FeedRow {
@@ -39,6 +41,10 @@ export interface FeedRow {
   last_error_kind: string | null;
   last_fetched_at: number | null;
   disabled: number;
+  full_text: number;
+  full_text_suggested: number;
+  full_text_selector: string | null;
+  full_text_source: string | null;
 }
 
 export interface EntryRow {
@@ -51,6 +57,7 @@ export interface EntryRow {
   body: string;
   published_at: number | null;
   stored_at: number;
+  full_body: string | null;
 }
 
 /**
@@ -81,6 +88,8 @@ export async function seedFeed(
     fetchInterval: 900,
     consecutiveFailures: 0,
     disabled: 0,
+    fullText: 0,
+    fullTextSelector: null,
     ...overrides,
   };
 
@@ -88,8 +97,9 @@ export async function seedFeed(
     .prepare(
       `INSERT INTO feeds
          (url, title, site_url, rate, folder, read_seq, etag, last_modified, content_hash,
-          next_fetch_at, fetch_interval, consecutive_failures, disabled, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          next_fetch_at, fetch_interval, consecutive_failures, disabled, created_at,
+          full_text, full_text_selector)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING id`,
     )
     .bind(
@@ -107,6 +117,8 @@ export async function seedFeed(
       seed.consecutiveFailures,
       seed.disabled,
       0,
+      seed.fullText,
+      seed.fullTextSelector,
     )
     .first<{ id: number }>();
 

@@ -29,7 +29,11 @@ function toEntry(row: EntryRow): Entry {
   };
 }
 
-const ENTRY_COLUMNS = `e.id, e.feed_id, e.url, e.title, e.author, e.body,
+// 全文が取れていればそちらを body として返す。フィードが配信した本文（e.body）は
+// 残したままにしてあるので、クライアントからはどちらが入っているか見えない（M7）。
+// full_body の '' は「取りに行ったが採らなかった」印なので、本文としては使わない
+const ENTRY_COLUMNS = `e.id, e.feed_id, e.url, e.title, e.author,
+         COALESCE(NULLIF(e.full_body, ''), e.body) AS body,
          e.published_at, e.stored_at`;
 
 export interface EntryQuery {
@@ -163,3 +167,103 @@ export async function insertEntries(
   }
   return inserted;
 }
+
+/** 記事ページから取ってくる対象。全文がまだ入っていない記事 */
+export interface FullTextTarget {
+  id: number;
+  url: string;
+  /** フィードが配信した本文。取れた全文がこれより短ければ抽出を疑う */
+  bodyLength: number;
+}
+
+/**
+ * 全文をまだ取りに行っていない未読記事を、**読む順（id 昇順）**に返す。
+ *
+ * 未読に絞るのは、読まないと決めた記事のために相手のサーバへ取りに行かないため。
+ * 読む順なのは、上限で打ち切られたときに埋まるのが「これから最初に読む分」に
+ * なるようにするため。新しい順にすると、未読 30 件のフィードで最初に埋まるのが
+ * 最後に読む 10 件になり、設定を入れた直後の見え方がちょうど逆になる。
+ *
+ * full_body が '' の記事は「取りに行ったが採らなかった」ので二度と拾わない
+ * （migrations/0003_full_text.sql）。
+ */
+export async function selectMissingFullText(
+  db: D1Database,
+  feedId: number,
+  limit: number,
+): Promise<FullTextTarget[]> {
+  if (limit <= 0) return [];
+
+  const { results } = await db
+    .prepare(
+      `SELECT e.id, e.url, LENGTH(e.body) AS body_length
+         FROM entries e
+         JOIN feeds f ON f.id = e.feed_id
+         ${UNREAD_JOIN}
+        WHERE e.feed_id = ? AND e.full_body IS NULL AND e.url IS NOT NULL
+          AND ${UNREAD_PREDICATE}
+        ORDER BY e.id
+        LIMIT ?`,
+    )
+    .bind(feedId, limit)
+    .all<{ id: number; url: string; body_length: number }>();
+
+  return results.map((row) => ({ id: row.id, url: row.url, bodyLength: row.body_length }));
+}
+
+/**
+ * 取れた全文を書き込む。body は触らない（元の要約を残す。migrations/0003 参照）。
+ * fullBody に '' を渡すと「取りに行ったが採らなかった」印になり、次から拾われない。
+ */
+export async function updateFullBodies(
+  db: D1Database,
+  bodies: { id: number; fullBody: string }[],
+): Promise<void> {
+  if (bodies.length === 0) return;
+
+  const statement = db.prepare('UPDATE entries SET full_body = ? WHERE id = ?');
+  for (let i = 0; i < bodies.length; i += BATCH_SIZE) {
+    await db.batch(
+      bodies.slice(i, i + BATCH_SIZE).map((body) => statement.bind(body.fullBody, body.id)),
+    );
+  }
+}
+
+/** 手動更新（POST /api/feeds/:id/fetch）が、全文を埋めた記事を返すために使う */
+export async function selectEntriesByIds(db: D1Database, ids: number[]): Promise<Entry[]> {
+  if (ids.length === 0) return [];
+
+  const placeholders = ids.map(() => '?').join(', ');
+  const { results } = await db
+    .prepare(
+      `SELECT ${ENTRY_COLUMNS}
+         FROM entries e
+        WHERE e.id IN (${placeholders})
+        ORDER BY e.id`,
+    )
+    .bind(...ids)
+    .all<EntryRow>();
+  return results.map(toEntry);
+}
+
+/**
+ * 「取りに行ったが採らなかった」印を消して、もう一度試させる。
+ *
+ * 本文の位置を判定し直したとき（サイトの作り替え）に呼ぶ。前のセレクタで採れなかった
+ * 記事は、新しいセレクタなら採れるかもしれない。取れている本文（'' でないもの）は残す。
+ */
+export async function clearRejectedFullText(db: D1Database, feedId: number): Promise<void> {
+  await db
+    .prepare(`UPDATE entries SET full_body = NULL WHERE feed_id = ? AND full_body = ''`)
+    .bind(feedId)
+    .run();
+}
+
+/**
+ * そのフィードの全文を全て捨てる文。全文取得を切ったときに、設定の更新と同じ
+ * batch に混ぜて使う（src/db/feeds.ts の updateFeedSettings）。
+ *
+ * 捨てないと、抽出が本文でないものを掴んでいた場合に元へ戻す手段が無くなる
+ * （読み出しは COALESCE なので、設定を切っただけでは差し替わったままになる）。
+ */
+export const CLEAR_FULL_BODIES = 'UPDATE entries SET full_body = NULL WHERE feed_id = ?';

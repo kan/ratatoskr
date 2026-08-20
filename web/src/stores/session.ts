@@ -263,13 +263,44 @@ export const useSessionStore = defineStore('session', () => {
     await putFeeds([feed]);
   }
 
-  /** 手動更新（r キー）。増えた記事だけが返る */
+  /**
+   * 手動更新（r キー）。
+   *
+   * 応答には新着だけでなく、全文取得（M7）で本文が差し替わった記事も入る
+   * （docs/API.md）。**「N 件の新着」として数えるのは手元に無かったものだけ。**
+   * 全部数えると、新着ゼロのフィードで r を押しただけで「10 件の新着」と出る。
+   */
   async function refresh(id: number): Promise<number> {
     const { feed, entries } = await refetchFeed(id);
+    const known = new Set(entriesStore.of(id).map((entry) => entry.id));
+    const added = entries.filter((entry) => !known.has(entry.id)).length;
+
     entriesStore.ingest(entries);
     feedsStore.applyFetched(feed);
     await Promise.all([putFeeds([feed]), saveEntries(entries)]);
-    return entries.length;
+    return added;
+  }
+
+  /**
+   * そのフィードの記事を取り直して手元を上書きする。
+   *
+   * 全文取得を切ったときに使う。サーバ側では本文が要約に戻っているが、手元には
+   * 差し替わったものが残っていて、差分取得（sinceId）では取り直せない。
+   * 抽出が本文でないものを掴んでいたときの戻し道なので、ここだけは全件引き直す。
+   */
+  async function reloadFeedEntries(id: number): Promise<void> {
+    // fillRemaining と同じ形で最後まで辿る。1 ページで切ると、記事数が
+    // PAGE_SIZE を超えるフィードで古い本文が手元に残り続ける
+    let sinceId = 0;
+    for (;;) {
+      const page = await getEntries({ feedId: id, sinceId, limit: PAGE_SIZE });
+      entriesStore.ingest(page.entries);
+      feedsStore.absorbNewEntries();
+      await saveEntries(page.entries);
+
+      if (!page.hasMore || page.nextSinceId === null) return;
+      sinceId = page.nextSinceId;
+    }
   }
 
   /**
@@ -416,6 +447,7 @@ export const useSessionStore = defineStore('session', () => {
     unsubscribeMany,
     editFeed,
     refresh,
+    reloadFeedEntries,
     restoreFromOpml,
   };
 });
