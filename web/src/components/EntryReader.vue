@@ -60,30 +60,40 @@ defineExpose({ pageDown, pageUp, scrollToBottom });
 </script>
 
 <template>
-  <article ref="scroller" class="h-full overflow-y-auto px-6 py-4" data-testid="reader">
-    <template v-if="entry">
-      <h1 class="text-xl font-bold">
-        <!-- ピンは目立たせない。読む邪魔をせず、目印として分かればよい。
-             タイトルの中には入れない（見出しの文言そのものを変えないため） -->
-        <span
-          v-if="pinned"
-          class="mr-1 align-middle text-sm text-amber-600 dark:text-amber-500"
-          data-testid="entry-pinned"
-          title="ピン済み"
-          >📌</span
-        ><span data-testid="entry-title">{{ entry.title || '(無題)' }}</span>
-      </h1>
-      <p class="mt-1 text-xs text-neutral-500">
-        <span v-if="entry.author">{{ entry.author }} / </span>
-        <span v-if="entry.publishedAt">{{
-          new Date(entry.publishedAt * 1000).toLocaleString('ja-JP')
-        }}</span>
-      </p>
-      <hr class="my-3 border-neutral-300 dark:border-neutral-700" />
-      <!-- body は取り込み時にサーバ側でサニタイズ済み（CLAUDE.md の不変条件 4） -->
-      <!-- eslint-disable-next-line vue/no-v-html -->
-      <div class="article-body" v-html="entry.body"></div>
-    </template>
-    <p v-else class="text-sm text-neutral-500">記事がありません</p>
+  <article
+    ref="scroller"
+    class="h-full overflow-y-auto px-5 py-5 sm:px-8 lg:px-12"
+    data-testid="reader"
+  >
+    <!--
+      本文の行長を抑える。広い画面で端から端まで文字が並ぶと、行を折り返すたびに
+      目が横へ大きく振られて読み進めづらい。44rem はおよそ全角 44 字ぶん
+    -->
+    <div class="mx-auto w-full max-w-[44rem]">
+      <template v-if="entry">
+        <h1 class="text-2xl font-bold">
+          <!-- ピンは目立たせない。読む邪魔をせず、目印として分かればよい。
+               タイトルの中には入れない（見出しの文言そのものを変えないため） -->
+          <span
+            v-if="pinned"
+            class="mr-1 align-middle text-sm text-amber-600 dark:text-amber-500"
+            data-testid="entry-pinned"
+            title="ピン済み"
+            >📌</span
+          ><span data-testid="entry-title">{{ entry.title || '(無題)' }}</span>
+        </h1>
+        <p class="mt-1.5 text-xs text-neutral-500">
+          <span v-if="entry.author">{{ entry.author }} / </span>
+          <span v-if="entry.publishedAt">{{
+            new Date(entry.publishedAt * 1000).toLocaleString('ja-JP')
+          }}</span>
+        </p>
+        <hr class="my-4 border-neutral-300 dark:border-neutral-700" />
+        <!-- body は取り込み時にサーバ側でサニタイズ済み（CLAUDE.md の不変条件 4） -->
+        <!-- eslint-disable-next-line vue/no-v-html -->
+        <div class="article-body" v-html="entry.body"></div>
+      </template>
+      <p v-else class="text-sm text-neutral-500">記事がありません</p>
+    </div>
   </article>
 </template>
