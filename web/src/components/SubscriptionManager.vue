@@ -355,21 +355,31 @@ async function onOpmlSelected(event: Event): Promise<void> {
             </td>
             <td class="py-1 pr-2 text-right tabular-nums">{{ feed.unreadCount }}</td>
             <td class="space-x-2 py-1 text-right">
-              <button class="hover:underline" :disabled="busy" @click="refresh(feed)">更新</button>
+              <!--
+                全文取得は入切の状態そのものを見せたいので、他と違って枠付きの
+                トグルにする。文言は入切で変えない。変えると幅が動いて、行ごとに
+                後ろのボタンの位置がずれる。枠は切のときも transparent で残す
+              -->
               <button
-                class="hover:underline"
-                :class="feed.fullText ? 'text-neutral-900 dark:text-neutral-100' : ''"
+                class="rounded border px-1.5"
+                :class="
+                  feed.fullText
+                    ? 'border-neutral-400 text-neutral-900 dark:border-neutral-500 dark:text-neutral-100'
+                    : 'border-transparent text-neutral-400 dark:text-neutral-600'
+                "
                 :disabled="busy"
+                :aria-pressed="feed.fullText"
                 :title="
                   feed.fullText
                     ? '記事ページから本文を取ってくる（入）'
-                    : '要約しか配信しないフィードで、記事ページから本文を取ってくる'
+                    : '要約しか配信しないフィードで、記事ページから本文を取ってくる（切）'
                 "
                 :data-testid="`manage-full-text-${feed.id}`"
                 @click="toggleFullText(feed)"
               >
-                {{ feed.fullText ? '全文 ✓' : '全文' }}
+                全文
               </button>
+              <button class="hover:underline" :disabled="busy" @click="refresh(feed)">更新</button>
               <button class="hover:underline" :disabled="busy" @click="toggleDisabled(feed)">
                 {{ feed.disabled ? '再開' : '停止' }}
               </button>

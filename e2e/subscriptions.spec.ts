@@ -142,10 +142,13 @@ test('全文取得を入れると、その場で取りに行く', async ({ page 
   await page.goto('/');
   await page.getByTestId('open-manager').click();
 
+  await expect(page.getByTestId('manage-full-text-2')).toHaveAttribute('aria-pressed', 'false');
   await page.getByTestId('manage-full-text-2').click();
 
   await expect.poll(() => recorder.updates).toEqual([{ id: 2, params: { fullText: true } }]);
   // 設定だけ変えて次の定期取得を待たせると「入れたのに何も変わらない」ように見える
   await expect.poll(() => recorder.refetched).toEqual([2]);
-  await expect(page.getByTestId('manage-full-text-2')).toHaveText('全文 ✓');
+  // 文言は入切で変えない（変えると幅が動いて後ろのボタンがずれる）。
+  // 状態はトグルとしての aria-pressed で見る
+  await expect(page.getByTestId('manage-full-text-2')).toHaveAttribute('aria-pressed', 'true');
 });
