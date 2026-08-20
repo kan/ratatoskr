@@ -152,3 +152,55 @@ test('全文取得を入れると、その場で取りに行く', async ({ page 
   // 状態はトグルとしての aria-pressed で見る
   await expect(page.getByTestId('manage-full-text-2')).toHaveAttribute('aria-pressed', 'true');
 });
+
+/**
+ * 購読の絞り込み（issue #1）。購読が増えると、目的の 1 件に辿り着く手間が
+ * 操作の大半を占める。
+ */
+test('名前・URL・フォルダで購読を絞り込める', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/');
+  await page.getByTestId('open-manager').click();
+
+  await page.getByTestId('feed-search').fill('夕刊');
+  await expect(page.getByTestId('manage-feed-2')).toBeVisible();
+  await expect(page.getByTestId('manage-feed-1')).toBeHidden();
+  await expect(page.getByTestId('search-count')).toContainText('1 / 7 件');
+
+  // URL でも引ける（同じ名前のブログを URL で見分けたいことがある）
+  await page.getByTestId('feed-search').fill('example.com/3/feed');
+  await expect(page.getByTestId('manage-feed-3')).toBeVisible();
+  await expect(page.getByTestId('manage-feed-1')).toBeHidden();
+
+  // 一致しないときは、そう分かるようにする
+  await page.getByTestId('feed-search').fill('存在しないフィード');
+  await expect(page.getByTestId('no-matching-feeds')).toBeVisible();
+
+  await page.getByTestId('clear-search').click();
+  await expect(page.getByTestId('manage-feed-1')).toBeVisible();
+});
+
+test('絞り込み中でもレート変更がそのまま効く', async ({ page }) => {
+  const recorder = await mockApi(page);
+  await page.goto('/');
+  await page.getByTestId('open-manager').click();
+  await page.getByTestId('feed-search').fill('夕刊');
+
+  await page.getByTestId('manage-feed-2').locator('select').selectOption('5');
+
+  await expect.poll(() => recorder.updates).toEqual([{ id: 2, params: { rate: 5 } }]);
+});
+
+test('「問題のあるフィードだけ」と絞り込みは重ねて効く', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/');
+  await page.getByTestId('open-manager').click();
+
+  await page.getByTestId('toggle-problems').click();
+  await expect(page.getByTestId('manage-feed-4')).toBeVisible();
+  await expect(page.getByTestId('manage-feed-5')).toBeVisible();
+
+  await page.getByTestId('feed-search').fill('消えた');
+  await expect(page.getByTestId('manage-feed-4')).toBeVisible();
+  await expect(page.getByTestId('manage-feed-5')).toBeHidden();
+});

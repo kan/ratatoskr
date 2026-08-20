@@ -70,9 +70,26 @@ const removable = computed(() => sorted.value.filter(isRemovable));
  * 対象が無くなったら自動で戻す（絞り込みを解除する導線ごと消えて詰むため）。
  */
 const problemsOnly = ref(false);
-const rows = computed(() =>
-  problemsOnly.value && removable.value.length > 0 ? removable.value : sorted.value,
-);
+
+/**
+ * 名前・URL・フォルダでの絞り込み。
+ *
+ * 購読が増えると、レート変更や解除といった「特定の 1 件」への操作より、
+ * その 1 件に辿り着く手間の方が大きくなる。突き合わせ先に URL を入れているのは、
+ * 同じ名前のブログを URL で見分けたいことがあるため。
+ */
+const search = ref('');
+
+function matches(feed: Feed, needle: string): boolean {
+  return `${feed.title}\n${feed.url}\n${feed.folder}`.toLowerCase().includes(needle);
+}
+
+/** 「問題のあるフィードだけ」と文字列の絞り込みは重ねて効く */
+const rows = computed(() => {
+  const base = problemsOnly.value && removable.value.length > 0 ? removable.value : sorted.value;
+  const needle = search.value.trim().toLowerCase();
+  return needle === '' ? base : base.filter((feed) => matches(feed, needle));
+});
 
 async function removeUnreachable(): Promise<void> {
   const targets = removable.value;
@@ -288,7 +305,25 @@ async function onOpmlSelected(event: Event): Promise<void> {
         </li>
       </ul>
 
-      <table class="mt-5 w-full table-fixed border-collapse text-xs">
+      <div class="mt-5 flex items-center gap-3 text-xs">
+        <input
+          v-model="search"
+          type="search"
+          class="w-full max-w-xs rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700"
+          placeholder="名前 / URL / フォルダで絞り込む"
+          data-testid="feed-search"
+        />
+        <template v-if="search.trim() !== ''">
+          <span class="text-neutral-500" data-testid="search-count">
+            {{ rows.length }} / {{ sorted.length }} 件
+          </span>
+          <button class="hover:underline" data-testid="clear-search" @click="search = ''">
+            絞り込みを消す
+          </button>
+        </template>
+      </div>
+
+      <table class="mt-2 w-full table-fixed border-collapse text-xs">
         <thead class="text-left text-neutral-500">
           <tr>
             <th class="w-auto py-1">タイトル</th>
@@ -395,6 +430,14 @@ async function onOpmlSelected(event: Event): Promise<void> {
           </tr>
         </tbody>
       </table>
+
+      <p
+        v-if="rows.length === 0 && search.trim() !== ''"
+        class="py-3 text-xs text-neutral-500"
+        data-testid="no-matching-feeds"
+      >
+        絞り込みに一致する購読が無い
+      </p>
 
       <div
         v-if="removable.length > 0"
