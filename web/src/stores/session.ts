@@ -293,7 +293,9 @@ export const useSessionStore = defineStore('session', () => {
     // PAGE_SIZE を超えるフィードで古い本文が手元に残り続ける
     let sinceId = 0;
     for (;;) {
-      const page = await getEntries({ feedId: id, sinceId, limit: PAGE_SIZE });
+      // unreadOnly の既定は true。既読の記事にも差し替わった本文が残っているので、
+      // ここでは明示的に全件を引く
+      const page = await getEntries({ feedId: id, sinceId, limit: PAGE_SIZE, unreadOnly: false });
       entriesStore.ingest(page.entries);
       feedsStore.absorbNewEntries();
       await saveEntries(page.entries);

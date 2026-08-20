@@ -199,7 +199,10 @@ function classList(value: string | null): string[] {
  * ページ内に何度も出てくるため（テクノエッジの関連記事がまさにこれ）。
  */
 function selectorOf(node: OpenNode): string | null {
-  if (node.id !== null && /^[A-Za-z_-][\w-]*$/.test(node.id)) return `#${node.id}`;
+  // id にもタグ名を付ける。一意かどうかを数えているのは候補のタグだけなので、
+  // <h1 id="content"> のように候補でない要素が同じ id を持つと、一意と誤って
+  // 数えたうえで先に出てくる方（見出し）を掴んでしまう
+  if (node.id !== null && /^[A-Za-z_-][\w-]*$/.test(node.id)) return `${node.tag}#${node.id}`;
   if (node.classes.length === 0) return null;
   return node.tag + node.classes.map((name) => `.${name}`).join('');
 }

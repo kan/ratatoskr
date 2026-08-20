@@ -147,26 +147,50 @@ describe('resolveTweetEmbeds', () => {
     expect(body).toContain(TWEET_TEXT);
   });
 
-  it('引けなければリンクに落とす（空のままにしない）', async () => {
+  it('引けなければ空の引用のまま残す（表示側がリンクとして描く）', async () => {
+    // 文言を保存側に焼き付けない。後から引き直せる状態を保つため
     const stub = stubFetch(() => new Response('not found', { status: 404 }));
+    const before = await sanitized();
 
-    const body = await resolveTweetEmbeds(await sanitized(), {
+    const body = await resolveTweetEmbeds(before, {
       fetchImpl: stub.impl,
       budget: { remaining: 10 },
     });
 
-    expect(body).toContain('X のポストを開く');
+    expect(body).toBe(before);
     expect(body).toContain('/status/2087892061412622819');
   });
 
-  it('予算が尽きていれば取りに行かず、リンクに落とす', async () => {
+  it('予算が尽きていれば取りに行かない', async () => {
     const stub = stubFetch(() => jsonResponse(oembedPayload(TWEET_TEXT)));
     const budget: FetchBudget = { remaining: 0 };
+    const before = await sanitized();
 
-    const body = await resolveTweetEmbeds(await sanitized(), { fetchImpl: stub.impl, budget });
+    const body = await resolveTweetEmbeds(before, { fetchImpl: stub.impl, budget });
 
     expect(stub.calls).toEqual([]);
-    expect(body).toContain('X のポストを開く');
+    expect(body).toBe(before);
+  });
+
+  it('確保した枠より多く投げない', async () => {
+    // 同時に走る何本かが「結果が入った件数」を見ると、まだ 0 件のまま全部が
+    // 通ってしまう。減らすのは取りに行くと決めた時点で同期的に行う
+    const quotes = [1, 2, 3]
+      .map(
+        (n) =>
+          '<blockquote class="twitter-tweet">' +
+          `<a href="https://twitter.com/someone/status/${n}00000000000000000"></a>` +
+          '</blockquote>',
+      )
+      .join('');
+    const html = await sanitizeHtml(quotes, 'https://example.com/');
+    const stub = stubFetch(() => jsonResponse(oembedPayload(TWEET_TEXT)));
+    const budget: FetchBudget = { remaining: 1 };
+
+    await resolveTweetEmbeds(html, { fetchImpl: stub.impl, budget });
+
+    expect(stub.calls).toHaveLength(1);
+    expect(budget.remaining).toBe(0);
   });
 
   it('本文がすでに入っている引用は触らない', async () => {

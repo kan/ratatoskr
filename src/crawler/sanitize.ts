@@ -115,8 +115,10 @@ function embedLink(src: string | null, baseUrl: string | null): string | null {
   const label = embedHostLabel(url.hostname);
   if (label === null) return null;
 
+  // p で包まない。WordPress の埋め込みは <p><iframe></iframe></p> の形なので、
+  // 包むと p の入れ子になり、ブラウザの解釈で段落が分断される
   const href = escapeAttribute(watchableUrl(url));
-  return `<p><a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a></p>`;
+  return `<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`;
 }
 
 /** ホワイトリストを 1 要素に当てる。sanitizeHtml と sanitizeWithin で共有する */

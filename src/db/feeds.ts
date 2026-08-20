@@ -228,6 +228,11 @@ export async function updateFeedSettings(
   if (settings.fullText !== undefined) {
     assignments.push('full_text = ?');
     params.push(settings.fullText ? 1 : 0);
+    // 切るときは本文の位置も忘れる。覚えたままだと、入れ直しても同じセレクタを
+    // そのまま使うので、抽出を仕損じたフィードをやり直す道が無くなる
+    if (!settings.fullText) {
+      assignments.push('full_text_selector = NULL', 'full_text_source = NULL');
+    }
     // 勧める必要はもう無い。入れたのであれ断ったのであれ、ユーザが決めた。
     // 0 に戻すと次のクロールで同じ判定が出て勧めが復活するので、2 を入れる
     assignments.push('full_text_suggested = 2');

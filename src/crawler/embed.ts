@@ -21,8 +21,7 @@ import { sanitizeHtml } from './sanitize';
  * 引用として埋め込む。認証は要らない。返ってきた HTML は必ずサニタイズを通す
  * （CLAUDE.md の不変条件 4）。
  *
- * 引けなかったときは「X のポストを開く」リンクに落とす。**空の引用のままにはしない。**
- * 埋め込みがあったこと自体は読み手に伝わるべきなので。
+ * 引けなかったときの扱いは resolveTweetEmbeds を参照。
  */
 
 const OEMBED_ENDPOINT = 'https://publish.x.com/oembed';
@@ -64,6 +63,11 @@ export function mayHaveTweetEmbed(html: string): boolean {
 /**
  * サニタイズ済みの本文から、空になっている X の埋め込みを読める形に直す。
  * 直すものが無ければ受け取った本文をそのまま返す。
+ *
+ * **引けなかったものは空の引用のまま残す。** 消された・非公開・予算切れ・
+ * 1 記事あたりの上限超えのどれでも同じ。空の引用は表示側で「X のポストを開く」
+ * リンクとして描く（web/src/style.css）ので、読み手には必ず何かが見える。
+ * こちらで文言を焼き付けないことで、後から引き直せる状態も保たれる。
  */
 export async function resolveTweetEmbeds(html: string, options: EmbedOptions): Promise<string> {
   if (!mayHaveTweetEmbed(html)) return html;
@@ -71,9 +75,8 @@ export async function resolveTweetEmbeds(html: string, options: EmbedOptions): P
   const found = await findEmptyTweetQuotes(html);
   if (found.length === 0) return html;
 
-  const targets = found.slice(0, MAX_PER_ENTRY);
-  const resolved = await resolveAll(targets, options);
-  return await replaceQuotes(html, resolved);
+  const resolved = await resolveAll(found.slice(0, MAX_PER_ENTRY), options);
+  return resolved.size === 0 ? html : await replaceQuotes(html, resolved);
 }
 
 /** 空の引用（= 中身がリンクだけの blockquote）。index は文書中の blockquote の順番 */
@@ -136,26 +139,30 @@ async function resolveAll(targets: EmptyQuote[], options: EmbedOptions): Promise
   const replacements: Replacements = new Map();
   // 取りに行く前に枠を確保する（クロールは並列に走る。fetch.ts の reserveBudget）
   const granted = reserveBudget(options.budget, targets.length);
+  /**
+   * まだ使っていない枠。**取りに行くと決めた時点で同期的に減らす。**
+   * 「結果が入った件数」で見ると、同時に走る何本かが同じ値を読んでしまい、
+   * 確保した数より多く投げることになる
+   */
   let unused = granted;
 
   for (let i = 0; i < targets.length; i += CONCURRENCY) {
     const chunk = targets.slice(i, i + CONCURRENCY);
     const results = await Promise.all(
       chunk.map(async (target) => {
-        // 予算が尽きたら取りに行かず、リンク表示に落とす
-        if (replacements.size >= granted) return { target, html: null };
-        unused -= 1;
-        const canonical = canonicalTweetUrl(target.url);
+        const canonical = unused > 0 ? canonicalTweetUrl(target.url) : null;
         if (canonical === null) return { target, html: null };
+        unused -= 1;
         return { target, html: await fetchTweet(canonical, options.fetchImpl) };
       }),
     );
     for (const { target, html } of results) {
-      replacements.set(target.index, html ?? fallbackLink(target.url));
+      // 引けたものだけ差し替える。引けなかったものは空の引用のまま残す
+      if (html !== null) replacements.set(target.index, html);
     }
   }
 
-  releaseBudget(options.budget, Math.max(0, unused));
+  releaseBudget(options.budget, unused);
   return replacements;
 }
 
@@ -195,11 +202,6 @@ async function fetchTweet(url: string, fetchImpl: typeof fetch): Promise<string 
   // 相対 URL は無い想定だが、基準は X に置いておく
   const safe = await sanitizeHtml(quoted, 'https://x.com/');
   return safe === '' ? null : safe;
-}
-
-function fallbackLink(url: string): string {
-  const href = url.replaceAll('&', '&amp;').replaceAll('"', '&quot;');
-  return `<blockquote><p><a href="${href}" target="_blank" rel="noopener noreferrer">X のポストを開く</a></p></blockquote>`;
 }
 
 /** 拾ったときと同じ順番で blockquote を数え直し、対象を差し替える */

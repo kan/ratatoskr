@@ -76,7 +76,11 @@ export async function fillFullText(
   releaseBudget(budget, limit - targets.length);
   if (targets.length === 0) return { filled: [] };
 
-  const pages = await fetchArticles(targets, options.fetchImpl);
+  const { pages, gone } = await fetchArticles(targets, options.fetchImpl);
+  // 記事ページが消えている（404 / 410）ものには印を残す。残さないと、サイト移転で
+  // URL が全滅したフィードの同じ 10 件を 15 分ごとに叩き続けることになる。
+  // 一時的な失敗（打ち切り・5xx・接続断）は印を付けず、次の機会に回す
+  if (gone.length > 0) await markTried(db, gone);
   if (pages.length === 0) return { filled: [] };
 
   let selector = feed.fullTextSelector;
@@ -85,12 +89,15 @@ export async function fillFullText(
     // 本文らしい入れ物が 1 つも無いページだった（JavaScript で描くサイト等）。
     // 取りに行った記事には印を残す。残さないと毎クロール同じ記事を叩き続ける
     if (selector === null) {
-      await markTried(db, pages);
+      await markTried(
+        db,
+        pages.map((page) => page.target.id),
+      );
       return { filled: [] };
     }
   }
 
-  let extraction = await extractAll(pages, selector, options);
+  let extraction = await extractAll(pages, selector);
 
   // **覚えていたセレクタがどの記事にも当たらなくなったときだけ**判定し直す。
   // サイトが作り替えられた場合にあたる。「当たったが短くて採らなかった」を
@@ -103,23 +110,33 @@ export async function fillFullText(
       // 前のセレクタで採れなかった記事も、新しいセレクタなら採れるかもしれない
       await clearRejectedFullText(db, feed.id);
       // 取り直しはしないので、余分な取得は増えない
-      extraction = await extractAll(pages, selector, options);
+      extraction = await extractAll(pages, selector);
     }
   }
 
-  // 採らなかった記事にも印を残す。残さないと毎クロール同じ記事を取りに行く
+  // **埋め込みの解決は、抽出が確定してから 1 回だけ。** 抽出の中でやると、
+  // セレクタを判定し直したときの再抽出でもう一度 X に問い合わせることになる
+  // （記事ページは取り直さないのに、埋め込みだけ二重に取りに行ってしまう）
+  for (const body of extraction.bodies) {
+    body.fullBody = await resolveTweetEmbeds(body.fullBody, options);
+  }
+
+  // 採らなかった記事にも印を残す。残さないと毎クロール同じ記事を取りに行く。
+  // **セレクタが当たらなかったものも同じ。** 判定し直しても同じ答えになる場合
+  // （再判定で選び直せなかった / 同じセレクタが返った）に取り直しが止まらなくなる。
+  // 印は本文の位置を判定し直したときに消えるので、後から拾い直す道は残る
   await updateFullBodies(db, [
     ...extraction.bodies,
-    ...extraction.rejected.map((id) => ({ id, fullBody: '' })),
+    ...[...extraction.rejected, ...extraction.unmatched].map((id) => ({ id, fullBody: '' })),
   ]);
   return { filled: extraction.bodies.map((body) => body.id) };
 }
 
 /** 「取りに行ったが採らなかった」印だけを付ける（migrations/0003_full_text.sql） */
-function markTried(db: D1Database, pages: ArticlePage[]): Promise<void> {
+function markTried(db: D1Database, entryIds: number[]): Promise<void> {
   return updateFullBodies(
     db,
-    pages.map((page) => ({ id: page.target.id, fullBody: '' })),
+    entryIds.map((id) => ({ id, fullBody: '' })),
   );
 }
 
@@ -128,27 +145,42 @@ interface ArticlePage {
   html: string;
 }
 
-/** 記事ページを取ってくる。取れなかったものは黙って落とす（次の機会に回る） */
+/**
+ * 記事ページを取ってくる。
+ *
+ * 取れなかったものは「二度と取れない（gone）」と「今回は駄目だった」に分ける。
+ * 前者には印を残して取り直しを止め、後者は次の機会に回す。
+ */
 async function fetchArticles(
   targets: FullTextTarget[],
   fetchImpl: typeof fetch,
-): Promise<ArticlePage[]> {
+): Promise<{ pages: ArticlePage[]; gone: number[] }> {
   const pages: ArticlePage[] = [];
+  const gone: number[] = [];
 
   for (let i = 0; i < targets.length; i += CONCURRENCY) {
     const chunk = targets.slice(i, i + CONCURRENCY);
     const results = await Promise.allSettled(
-      chunk.map(async (target) => ({ target, html: await fetchArticle(target.url, fetchImpl) })),
+      chunk.map(async (target) => ({ target, outcome: await fetchArticle(target.url, fetchImpl) })),
     );
     for (const result of results) {
-      if (result.status !== 'fulfilled' || result.value.html === null) continue;
-      pages.push({ target: result.value.target, html: result.value.html });
+      if (result.status !== 'fulfilled') continue;
+      const { target, outcome } = result.value;
+      if (outcome.kind === 'ok') pages.push({ target, html: outcome.html });
+      else if (outcome.kind === 'gone') gone.push(target.id);
     }
   }
-  return pages;
+  return { pages, gone };
 }
 
-async function fetchArticle(url: string, fetchImpl: typeof fetch): Promise<string | null> {
+type ArticleOutcome =
+  | { kind: 'ok'; html: string }
+  /** 記事ページが消えている。取り直しても結果は変わらない */
+  | { kind: 'gone' }
+  /** 一時的な失敗。次の機会に回す */
+  | { kind: 'retry' };
+
+async function fetchArticle(url: string, fetchImpl: typeof fetch): Promise<ArticleOutcome> {
   // 条件付き GET は使わない。記事ページは 1 度しか取りに行かないので、
   // etag を覚えておく先も、覚えておく意味も無い
   let response: Response;
@@ -162,12 +194,14 @@ async function fetchArticle(url: string, fetchImpl: typeof fetch): Promise<strin
     // 記事 1 本が取れなくてもフィードの取得は成功している。
     // feeds.last_error に書くとフィード自体が壊れているように見えるので書かない
     console.warn('全文の取得に失敗', url, describeNetworkError(err).message);
-    return null;
+    return { kind: 'retry' };
   }
-  if (!response.ok) return null;
+  // 404 / 410 は何度引いても同じ。それ以外（5xx や 429）は時間を置けば直りうる
+  if (response.status === 404 || response.status === 410) return { kind: 'gone' };
+  if (!response.ok) return { kind: 'retry' };
 
   const read = await readBoundedText(response);
-  return read.kind === 'ok' ? read.body : null;
+  return read.kind === 'ok' ? { kind: 'ok', html: read.body } : { kind: 'retry' };
 }
 
 /**
@@ -206,11 +240,7 @@ interface Extraction {
  * 「当たらなかった」と「当たったが採らなかった」を分けて返す。前者はサイトの
  * 作り替えを疑う材料で、後者は判定し直しても直らない（同じ記事が短いだけ）。
  */
-async function extractAll(
-  pages: ArticlePage[],
-  selector: string,
-  options: FullTextOptions,
-): Promise<Extraction> {
+async function extractAll(pages: ArticlePage[], selector: string): Promise<Extraction> {
   const extraction: Extraction = { bodies: [], rejected: [], unmatched: [] };
 
   for (const page of pages) {
@@ -220,12 +250,7 @@ async function extractAll(
     } else if (fullBody.length <= page.target.bodyLength) {
       extraction.rejected.push(page.target.id);
     } else {
-      // 記事ページに埋め込まれた X のポストは、この時点では空の引用になっている。
-      // 保存する前に読める形へ直す（src/crawler/embed.ts）
-      extraction.bodies.push({
-        id: page.target.id,
-        fullBody: await resolveTweetEmbeds(fullBody, options),
-      });
+      extraction.bodies.push({ id: page.target.id, fullBody });
     }
   }
   return extraction;

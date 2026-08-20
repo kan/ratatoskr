@@ -249,6 +249,20 @@ describe('PATCH /api/feeds/:id の fullText', () => {
     expect((await getEntryRows(env.DB, id))[0].full_body).toBeNull();
   });
 
+  it('切ると、本文の位置も忘れる（入れ直しがやり直しになる）', async () => {
+    const id = await seedFeed(env.DB, 'https://full.example.com/feed4', {
+      fullText: 1,
+      fullTextSelector: 'article.wrong',
+    });
+
+    await apiSend('PATCH', `/api/feeds/${id}`, { fullText: false });
+
+    // 覚えたままだと、入れ直しても同じセレクタをそのまま使う
+    const row = await getFeedRow(env.DB, id);
+    expect(row.full_text_selector).toBeNull();
+    expect(row.full_text_source).toBeNull();
+  });
+
   it('ユーザが決めたら、次のクロールで勧めが復活しない', async () => {
     const id = await seedFeed(env.DB, 'https://full.example.com/feed2');
     await apiSend('PATCH', `/api/feeds/${id}`, { fullText: false });

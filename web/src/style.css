@@ -74,13 +74,19 @@
  * 節なら h2 になるので、**そこに裸の div が並んでいたらそれは本文ではない**
  * （テクノエッジの記事 30 本で、本文直下の div 86 個は全て埋め込みだった）。
  *
- * 2 つの除外は、本文そのものを囲ってしまわないための保険:
- *   - :only-child … 本文全体が 1 つの div に包まれているだけのフィード
- *   - :has(p)     … 段落を抱えている = 埋め込みではなく本文の入れ物
+ * 条件は 4 つとも要る。手元の全フィードで数えて決めた:
+ *   - :not(:only-child) … 本文全体が 1 つの div に包まれているだけのフィードを外す
+ *   - :not(:has(p))     … 段落を抱えている = 埋め込みではなく本文の入れ物
+ *   - :has(img)         … 見出し画像やサムネイルを持つ = カード状のもの
+ *   - :has(div)         … 入れ子になっている = 組まれた部品
+ *
+ * 前 2 つだけだと、段落を div と br で作るフィード（POSTD や MAKE: Japan）の
+ * 本文が丸ごと枠で囲まれる。実測では 370 箇所で誤爆していた。後ろ 2 つを足すと
+ * 3 箇所まで減り、テクノエッジ側は 112 箇所中 108 箇所を拾えたままになる。
  *
  * :has() が使えない環境ではこの規則ごと無視される（枠が出ないだけで壊れない）。
  */
-.article-body > div:not(:only-child):not(:has(p)) {
+.article-body > div:not(:only-child):not(:has(p)):has(img):has(div) {
   margin-block: 1.5rem;
   padding: 0.75rem 1rem;
   border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
@@ -200,4 +206,15 @@
   margin-block: 1.75rem;
   border: 0;
   border-block-start: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+}
+
+/**
+ * 引けなかった X のポスト（消された・非公開・取得の予算切れ）。
+ *
+ * サーバは引けたものだけを引用に差し替え、引けなかったものは**空のリンクのまま**
+ * 残す（src/crawler/embed.ts）。文言を保存側に焼き付けないことで、後から引き直せる
+ * 状態を保つ。読み手には何も見えないままにはできないので、ここで名前を与える。
+ */
+.article-body blockquote a[href*='/status/']:empty::after {
+  content: 'X のポストを開く';
 }

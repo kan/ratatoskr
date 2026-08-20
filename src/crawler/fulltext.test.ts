@@ -274,7 +274,7 @@ describe('fillFullText', () => {
     expect((await getFeedRow(env.DB, feedId)).full_text_selector).toBe('article.entry');
   });
 
-  it('取れなかった記事は次の機会に回す', async () => {
+  it('消えた記事ページには印を残し、他の記事は取り込む', async () => {
     const feedId = await seedFeed(env.DB, 'https://example.com/feed', { fullText: 1 });
     await seedEntry(env.DB, feedId, { url: 'https://example.com/gone', body: SUMMARY });
     await seedEntry(env.DB, feedId, { url: 'https://example.com/a', body: SUMMARY });
@@ -289,7 +289,51 @@ describe('fillFullText', () => {
 
     expect(result.filled).toHaveLength(1);
     const rows = await getEntryRows(env.DB, feedId);
-    expect(rows.find((row) => row.url?.endsWith('/gone'))?.full_body).toBeNull();
+    // 404 は何度引いても 404。印を残さないと、サイト移転で URL が全滅した
+    // フィードの同じ記事を 15 分ごとに叩き続けることになる
+    expect(rows.find((row) => row.url?.endsWith('/gone'))?.full_body).toBe('');
+  });
+
+  it('一時的な失敗は次の機会に回す', async () => {
+    const feedId = await seedFeed(env.DB, 'https://example.com/feed', { fullText: 1 });
+    await seedEntry(env.DB, feedId, { url: 'https://example.com/flaky', body: SUMMARY });
+    // 5xx は時間を置けば直りうる。印を付けると、直っても二度と拾えなくなる
+    const impl = (() =>
+      Promise.resolve(new Response('boom', { status: 503 }))) as unknown as typeof fetch;
+
+    await fillFullText(env.DB, await targetOf(feedId), {
+      fetchImpl: impl,
+      ai: undefined,
+      budget: { remaining: 10 },
+    });
+
+    expect((await getEntryRows(env.DB, feedId))[0].full_body).toBeNull();
+  });
+
+  it('セレクタが当たらない記事にも印を残す', async () => {
+    const feedId = await seedFeed(env.DB, 'https://example.com/feed', {
+      fullText: 1,
+      // 判定し直しても同じ答えになる状況を作る
+      fullTextSelector: 'article.entry',
+    });
+    await seedEntry(env.DB, feedId, { url: 'https://example.com/a', body: SUMMARY });
+    const stub = stubFetch({
+      'https://example.com/a':
+        '<html><body><section class="other"><p>' +
+        '本文の入れ物はあるが、覚えているセレクタには当たらない。'.repeat(3) +
+        '</p></section></body></html>',
+    });
+
+    for (let i = 0; i < 2; i += 1) {
+      await fillFullText(env.DB, await targetOf(feedId), {
+        fetchImpl: stub.impl,
+        ai: undefined,
+        budget: { remaining: 10 },
+      });
+    }
+
+    // 2 回目は取りに行かない。印が無いと毎クロール取り直しが止まらない
+    expect(stub.calls).toHaveLength(1);
   });
 
   it('フィードの本文より短い抽出は採らない', async () => {

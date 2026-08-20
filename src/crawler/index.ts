@@ -181,6 +181,15 @@ async function crawlFeed(
   // 要約しか配信していないフィードを取りこぼす
   const summaryOnly = !target.fullText && looksSummaryOnly(rows);
 
+  // **全文取得を入れているフィードでもここで解決する。** 記事ページ側の本文が
+  // 採用されたときは無駄になるが、採用されなかった記事（抽出が短すぎた・ページが
+  // 取れなかった）はフィード本文が読み出しに使われるので、飛ばすと「全文取得を
+  // 入れたせいで埋め込みが消える」ことになる。
+  //
+  // 無駄の側はほぼ起きない。全文取得を入れるのは要約しか配信しないフィードで、
+  // その要約に埋め込みは載っていない（手元の購読を数えたところ、フィード本文に
+  // ポストの引用を持つフィードは全て全文取得を入れていないものだった）。
+  // mayHaveTweetEmbed の足切りで、そういうフィードは 1 回も取りに行かない
   await resolveEmbedsInNewEntries(db, target.id, rows, options);
   const inserted = await insertEntries(db, rows, now);
 
