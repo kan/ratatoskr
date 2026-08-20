@@ -8,9 +8,10 @@ import {
   selectCrawlTargetsByIds,
   type CrawlTarget,
 } from '../db/feeds';
-import { insertEntries, type NewEntry } from '../db/entries';
+import { insertEntries, selectKnownGuidHashes, type NewEntry } from '../db/entries';
 import { errorMessage } from '../lib/errors';
 import { sha256Hex } from '../lib/hash';
+import { mayHaveTweetEmbed, resolveTweetEmbeds } from './embed';
 import { fetchFeed, type FetchBudget } from './fetch';
 import { fillFullText, looksSummaryOnly, type FullTextOptions } from './fulltext';
 import { parseFeed } from './parse';
@@ -176,6 +177,11 @@ async function crawlFeed(
   const baseUrl = parsed.siteUrl ?? target.url;
   const rows = await Promise.all(items.map((item) => toNewEntry(target.id, item, baseUrl)));
 
+  // 埋め込みを埋める前に測る。埋めた分だけ本文が伸びるので、後で測ると
+  // 要約しか配信していないフィードを取りこぼす
+  const summaryOnly = !target.fullText && looksSummaryOnly(rows);
+
+  await resolveEmbedsInNewEntries(db, target.id, rows, options);
   const inserted = await insertEntries(db, rows, now);
 
   const fetchInterval =
@@ -195,10 +201,37 @@ async function crawlFeed(
   // 要約しか配信していないなら、購読管理画面で全文取得を勧める。
   // 勧めるだけで取りには行かない。相手のサーバに記事の数だけ取りに行く動作なので、
   // 始めるかどうかはユーザが決める（migrations/0003_full_text.sql）
-  if (!target.fullText && looksSummaryOnly(rows)) await markFullTextSuggested(db, target.id);
+  if (summaryOnly) await markFullTextSuggested(db, target.id);
 
   const { filled } = await fillFullText(db, target, options);
   return { inserted, failed: false, filled };
+}
+
+/**
+ * フィードが配信した本文に埋め込まれた X のポストを、読める形に直す（M7）。
+ *
+ * **まだ取り込んでいない記事だけを対象にする。** フィードは更新のたびに全件を
+ * 配り直すので、既知の記事まで対象にすると同じポストを何度も問い合わせることになる。
+ * 埋め込みを含む記事はごく一部なので、文字列で足切りしてから DB を引く。
+ */
+async function resolveEmbedsInNewEntries(
+  db: D1Database,
+  feedId: number,
+  rows: NewEntry[],
+  options: FullTextOptions,
+): Promise<void> {
+  const candidates = rows.filter((row) => mayHaveTweetEmbed(row.body));
+  if (candidates.length === 0) return;
+
+  const known = await selectKnownGuidHashes(
+    db,
+    feedId,
+    candidates.map((row) => row.guidHash),
+  );
+  for (const row of candidates) {
+    if (known.has(row.guidHash)) continue;
+    row.body = await resolveTweetEmbeds(row.body, options);
+  }
 }
 
 async function toNewEntry(feedId: number, item: ParsedItem, baseUrl: string): Promise<NewEntry> {

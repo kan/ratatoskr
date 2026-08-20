@@ -267,3 +267,34 @@ export async function clearRejectedFullText(db: D1Database, feedId: number): Pro
  * （読み出しは COALESCE なので、設定を切っただけでは差し替わったままになる）。
  */
 export const CLEAR_FULL_BODIES = 'UPDATE entries SET full_body = NULL WHERE feed_id = ?';
+
+/**
+ * 既に取り込み済みの guid_hash を返す。
+ *
+ * 取り込みは INSERT OR IGNORE なので、重複を避けるためだけならこれは要らない。
+ * 要るのは**新しい記事にだけ外部への問い合わせをしたい**ため（埋め込みの解決。
+ * src/crawler/embed.ts）。フィードは毎回全件を配るので、これが無いと更新のたびに
+ * 既知の記事のぶんまで X へ問い合わせることになる。
+ */
+export async function selectKnownGuidHashes(
+  db: D1Database,
+  feedId: number,
+  guidHashes: string[],
+): Promise<Set<string>> {
+  if (guidHashes.length === 0) return new Set();
+
+  const known = new Set<string>();
+  for (let i = 0; i < guidHashes.length; i += BATCH_SIZE) {
+    const chunk = guidHashes.slice(i, i + BATCH_SIZE);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db
+      .prepare(
+        `SELECT guid_hash FROM entries
+          WHERE feed_id = ? AND guid_hash IN (${placeholders})`,
+      )
+      .bind(feedId, ...chunk)
+      .all<{ guid_hash: string }>();
+    for (const row of results) known.add(row.guid_hash);
+  }
+  return known;
+}

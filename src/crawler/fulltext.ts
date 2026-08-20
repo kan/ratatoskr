@@ -6,6 +6,7 @@ import {
 } from '../db/entries';
 import { updateFullTextSelector, type CrawlTarget } from '../db/feeds';
 import { chooseBodySelector } from './choose';
+import { resolveTweetEmbeds } from './embed';
 import { scanCandidates } from './extract';
 import { sanitizeWithin } from './sanitize';
 import {
@@ -89,7 +90,7 @@ export async function fillFullText(
     }
   }
 
-  let extraction = await extractAll(pages, selector);
+  let extraction = await extractAll(pages, selector, options);
 
   // **覚えていたセレクタがどの記事にも当たらなくなったときだけ**判定し直す。
   // サイトが作り替えられた場合にあたる。「当たったが短くて採らなかった」を
@@ -102,7 +103,7 @@ export async function fillFullText(
       // 前のセレクタで採れなかった記事も、新しいセレクタなら採れるかもしれない
       await clearRejectedFullText(db, feed.id);
       // 取り直しはしないので、余分な取得は増えない
-      extraction = await extractAll(pages, selector);
+      extraction = await extractAll(pages, selector, options);
     }
   }
 
@@ -205,7 +206,11 @@ interface Extraction {
  * 「当たらなかった」と「当たったが採らなかった」を分けて返す。前者はサイトの
  * 作り替えを疑う材料で、後者は判定し直しても直らない（同じ記事が短いだけ）。
  */
-async function extractAll(pages: ArticlePage[], selector: string): Promise<Extraction> {
+async function extractAll(
+  pages: ArticlePage[],
+  selector: string,
+  options: FullTextOptions,
+): Promise<Extraction> {
   const extraction: Extraction = { bodies: [], rejected: [], unmatched: [] };
 
   for (const page of pages) {
@@ -215,7 +220,12 @@ async function extractAll(pages: ArticlePage[], selector: string): Promise<Extra
     } else if (fullBody.length <= page.target.bodyLength) {
       extraction.rejected.push(page.target.id);
     } else {
-      extraction.bodies.push({ id: page.target.id, fullBody });
+      // 記事ページに埋め込まれた X のポストは、この時点では空の引用になっている。
+      // 保存する前に読める形へ直す（src/crawler/embed.ts）
+      extraction.bodies.push({
+        id: page.target.id,
+        fullBody: await resolveTweetEmbeds(fullBody, options),
+      });
     }
   }
   return extraction;

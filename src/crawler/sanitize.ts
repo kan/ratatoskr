@@ -60,9 +60,76 @@ function safeUrl(value: string, baseUrl: string | null): string | null {
   return SAFE_SCHEMES.has(url.protocol) ? url.href : null;
 }
 
+/**
+ * 埋め込みの iframe を、行き先の分かるリンクに差し替える。
+ *
+ * iframe は通さない（中で何が動くか分からない）が、落とすだけだと動画やスライドが
+ * **跡形もなく消えて記事の意味が通らなくなる。** 提供元が分かるものに限って、
+ * 「開く」リンクに置き換える。ホストを絞るのは、計測用の隠し iframe まで
+ * リンクにしてしまわないため。
+ */
+const EMBED_HOSTS: readonly { readonly suffix: string; readonly label: string }[] = [
+  { suffix: 'youtube.com', label: 'YouTube の動画を開く' },
+  { suffix: 'youtube-nocookie.com', label: 'YouTube の動画を開く' },
+  { suffix: 'youtu.be', label: 'YouTube の動画を開く' },
+  { suffix: 'nicovideo.jp', label: 'ニコニコ動画を開く' },
+  { suffix: 'vimeo.com', label: 'Vimeo の動画を開く' },
+  { suffix: 'open.spotify.com', label: 'Spotify で開く' },
+  { suffix: 'soundcloud.com', label: 'SoundCloud で開く' },
+  { suffix: 'bandcamp.com', label: 'Bandcamp で開く' },
+  { suffix: 'speakerdeck.com', label: 'Speaker Deck を開く' },
+  { suffix: 'docswell.com', label: 'Docswell を開く' },
+  { suffix: 'x.com', label: 'X のポストを開く' },
+  { suffix: 'twitter.com', label: 'X のポストを開く' },
+];
+
+function embedHostLabel(host: string): string | null {
+  const lower = host.toLowerCase();
+  for (const entry of EMBED_HOSTS) {
+    if (lower === entry.suffix || lower.endsWith(`.${entry.suffix}`)) return entry.label;
+  }
+  return null;
+}
+
+/** 属性値に埋め込める形にする。ここで作る HTML は自分で組み立てるので必ず通す */
+function escapeAttribute(value: string): string {
+  return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
+}
+
+/** 埋め込み URL から、人が開いて意味のある URL に直す */
+function watchableUrl(url: URL): string {
+  // youtube.com/embed/ID は開けなくはないが、視聴ページの方が素直
+  const video = /^\/embed\/([A-Za-z0-9_-]{6,})$/.exec(url.pathname);
+  if (video !== null && embedHostLabel(url.hostname) === 'YouTube の動画を開く') {
+    return `https://www.youtube.com/watch?v=${video[1]}`;
+  }
+  return url.href;
+}
+
+function embedLink(src: string | null, baseUrl: string | null): string | null {
+  if (src === null) return null;
+  const resolved = safeUrl(src, baseUrl);
+  if (resolved === null) return null;
+
+  const url = new URL(resolved);
+  const label = embedHostLabel(url.hostname);
+  if (label === null) return null;
+
+  const href = escapeAttribute(watchableUrl(url));
+  return `<p><a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a></p>`;
+}
+
 /** ホワイトリストを 1 要素に当てる。sanitizeHtml と sanitizeWithin で共有する */
 function applyPolicy(element: Element, baseUrl: string | null): void {
   const tag = element.tagName.toLowerCase();
+
+  if (tag === 'iframe') {
+    // 中身ごと消えるのは remove と同じ。通すのはこちらが組み立てたリンクだけ
+    const link = embedLink(element.getAttribute('src'), baseUrl);
+    if (link === null) element.remove();
+    else element.replace(link, { html: true });
+    return;
+  }
 
   if (DROPPED_TAGS.has(tag)) {
     element.remove();
