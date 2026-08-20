@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
+    <!--
+      SVG を主にする。拡大縮小で潰れず、1 ファイルで全ての大きさに効く。
+      Safari は SVG の favicon を当てにできないので PNG も置く（対応している
+      ブラウザは type で SVG を選ぶ）。図柄は透過背景で、明暗どちらのタブでも沈まない。
+
+      ホーム画面のアイコン（apple-touch-icon / manifest）は M8 で入れる。
+      背景色付きの icon-brand.svg をそのときに使う
+    -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png" />
     <title>Ratatoskr</title>
   </head>
   <body>
