@@ -204,3 +204,37 @@ test('「問題のあるフィードだけ」と絞り込みは重ねて効く',
   await expect(page.getByTestId('manage-feed-4')).toBeVisible();
   await expect(page.getByTestId('manage-feed-5')).toBeHidden();
 });
+
+/**
+ * 読んでいる最中の購読解除（issue #2）。入口は左ペインのフィード名の行
+ * （docs/UX.md のキー表を増やさないため、キーは割り当てない）。
+ */
+test('左ペインからその場で購読を解除し、そのまま読み続けられる', async ({ page }) => {
+  const recorder = await mockApi(page);
+  page.on('dialog', (dialog) => dialog.accept());
+
+  await page.goto('/');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+
+  // いま読んでいるフィードを解除する
+  await page.getByTestId('feed-unsubscribe-1').click();
+
+  await expect.poll(() => recorder.deleted).toEqual([1]);
+  await expect(page.getByTestId('feed-1')).toBeHidden();
+  // カーソルは次の未読フィードへ移り、読み続けられる
+  await expect(page.getByTestId('entry-title')).toHaveText('夕刊の 1 本目');
+});
+
+test('解除の確認を断れば何も起きない', async ({ page }) => {
+  const recorder = await mockApi(page);
+  page.on('dialog', (dialog) => dialog.dismiss());
+
+  await page.goto('/');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+
+  await page.getByTestId('feed-unsubscribe-1').click();
+
+  // 取り消せない操作なので、確認を断ったら送らない
+  await expect(page.getByTestId('feed-1')).toBeVisible();
+  expect(recorder.deleted).toEqual([]);
+});

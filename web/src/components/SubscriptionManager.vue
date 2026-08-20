@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import type { Feed, FeedErrorKind } from '@shared/types';
+import { confirmUnsubscribe } from '@/lib/subscriptions';
 import { sortByReadingOrder, useFeedsStore } from '@/stores/feeds';
 import { useSessionStore } from '@/stores/session';
 
@@ -152,8 +153,7 @@ function add(feedUrl: string): Promise<void> {
 }
 
 function remove(feed: Feed): Promise<void> | undefined {
-  // 記事ごと消える操作なので確認する。取り消せない
-  if (!window.confirm(`「${feed.title || feed.url}」の購読を解除する。記事も消える`)) return;
+  if (!confirmUnsubscribe(feed)) return;
   return run(async () => {
     await session.unsubscribe(feed.id);
     message.value = '購読を解除した';

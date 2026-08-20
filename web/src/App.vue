@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import EntryReader from '@/components/EntryReader.vue';
 import FeedList from '@/components/FeedList.vue';
+import { confirmUnsubscribe } from '@/lib/subscriptions';
 import HelpOverlay from '@/components/HelpOverlay.vue';
 import PinList from '@/components/PinList.vue';
 import SubscriptionManager from '@/components/SubscriptionManager.vue';
@@ -166,6 +167,27 @@ function refreshCurrentFeed(): void {
 }
 
 /**
+ * 左ペインからの購読解除（issue #2）。
+ *
+ * 記事を読んでいる最中に「もう要らない」と判断したとき、購読管理を開かずに済ませる。
+ * 解除後の後始末は既存の経路が持っている。stores/session の unsubscribe がサーバと手元を片付け、
+ * stores/feeds の dropFeed が読んでいたフィードだったら次の未読へ逃がす。
+ */
+function unsubscribeFeed(id: number): void {
+  const feed = feeds.feeds.find((candidate) => candidate.id === id);
+  if (feed === undefined || !confirmUnsubscribe(feed)) return;
+
+  session
+    .unsubscribe(id)
+    .then(() => {
+      notify('購読を解除した');
+    })
+    .catch((err: unknown) => {
+      notify(`解除に失敗した: ${err instanceof Error ? err.message : String(err)}`);
+    });
+}
+
+/**
  * ピンを付ける / 外す（p）。**記事は切り替えない**（docs/UX.md）。
  * 押したことが分かるよう、短い知らせだけ出す。
  */
@@ -278,6 +300,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
       :pinned-urls="pins.urls"
       @select-entry="feeds.selectEntryIn"
       @manage="activeOverlay = 'subscriptions'"
+      @unsubscribe="unsubscribeFeed"
     />
 
     <main class="flex h-dvh flex-col overflow-hidden">

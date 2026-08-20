@@ -24,7 +24,12 @@ const props = defineProps<{
   pinnedUrls: Set<string>;
 }>();
 
-defineEmits<{ selectEntry: [feedId: number, entryId: number]; manage: [] }>();
+defineEmits<{
+  selectEntry: [feedId: number, entryId: number];
+  manage: [];
+  /** 読んでいる最中に「もう要らない」と判断したフィードの解除（issue #2） */
+  unsubscribe: [feedId: number];
+}>();
 
 const nav = ref<HTMLElement | null>(null);
 
@@ -91,31 +96,52 @@ watch(
     </div>
     <ul>
       <li v-for="feed in feeds" :key="feed.id">
-        <button
-          type="button"
-          class="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-sm hover:bg-neutral-200 dark:hover:bg-neutral-800"
+        <div
+          class="group flex items-center hover:bg-neutral-200 dark:hover:bg-neutral-800"
           :class="{
             // 記事一覧が長くなるので、読んでいるフィード名は上に貼り付けておく
-            'sticky top-0 z-1 bg-neutral-200 font-bold dark:bg-neutral-800':
-              feed.id === currentFeedId,
-            'text-neutral-500 dark:text-neutral-500': feed.unreadCount === 0,
+            'sticky top-0 z-1 bg-neutral-200 dark:bg-neutral-800': feed.id === currentFeedId,
           }"
-          :data-testid="`feed-${feed.id}`"
-          :data-active="feed.id === currentFeedId && currentEntryId === null ? 'true' : undefined"
-          :data-expanded="isExpanded(feed) ? 'true' : undefined"
-          :aria-current="feed.id === currentFeedId ? 'true' : undefined"
-          :aria-expanded="isExpanded(feed)"
-          @click="toggle(feed)"
         >
-          <span class="w-3 shrink-0 text-xs text-neutral-400 dark:text-neutral-600">
-            {{ isExpanded(feed) ? '▾' : '▸' }}
-          </span>
-          <!-- 未読 0 のフィードは (0) を出さない（docs/UX.md） -->
-          <span class="w-10 shrink-0 text-right tabular-nums">
-            {{ feed.unreadCount > 0 ? `(${feed.unreadCount})` : '' }}
-          </span>
-          <span class="truncate">{{ feed.title || feed.url }}</span>
-        </button>
+          <button
+            type="button"
+            class="flex min-w-0 flex-1 items-baseline gap-2 py-1.5 pl-3 text-left text-sm"
+            :class="{
+              'font-bold': feed.id === currentFeedId,
+              'text-neutral-500 dark:text-neutral-500': feed.unreadCount === 0,
+            }"
+            :data-testid="`feed-${feed.id}`"
+            :data-active="feed.id === currentFeedId && currentEntryId === null ? 'true' : undefined"
+            :data-expanded="isExpanded(feed) ? 'true' : undefined"
+            :aria-current="feed.id === currentFeedId ? 'true' : undefined"
+            :aria-expanded="isExpanded(feed)"
+            @click="toggle(feed)"
+          >
+            <span class="w-3 shrink-0 text-xs text-neutral-400 dark:text-neutral-600">
+              {{ isExpanded(feed) ? '▾' : '▸' }}
+            </span>
+            <!-- 未読 0 のフィードは (0) を出さない（docs/UX.md） -->
+            <span class="w-10 shrink-0 text-right tabular-nums">
+              {{ feed.unreadCount > 0 ? `(${feed.unreadCount})` : '' }}
+            </span>
+            <span class="truncate">{{ feed.title || feed.url }}</span>
+          </button>
+          <!--
+            読んでいる最中の解除（issue #2）。キーは割り当てない（docs/UX.md の
+            キー表に無いものを増やさない）。普段は文字色を透明にして場所だけ取り、
+            行に触れたときに出す。出したり消したりで幅が動くと、フィード名の
+            折り返し位置が変わって読みにくい
+          -->
+          <button
+            type="button"
+            class="shrink-0 px-2 py-1.5 text-xs text-transparent group-hover:text-neutral-500 hover:!text-red-700 focus-visible:text-neutral-500 dark:group-hover:text-neutral-400 dark:hover:!text-red-400"
+            :data-testid="`feed-unsubscribe-${feed.id}`"
+            :title="`「${feed.title || feed.url}」の購読を解除する`"
+            @click="$emit('unsubscribe', feed.id)"
+          >
+            解除
+          </button>
+        </div>
 
         <!--
           読んでいる最中でないフィードには currentEntryId を渡さない。
