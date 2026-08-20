@@ -15,6 +15,7 @@ import type {
   UpdateFeedRequest,
 } from '../shared/types';
 import { HELP_SEEN_KEY } from '../web/src/lib/prefs';
+import { CACHE_NAME } from '../web/src/lib/prefetch';
 
 /**
  * E2E は API をモックして UI だけを対象にする。
@@ -54,6 +55,8 @@ function entry(id: number, feedId: number, title: string, body: string): Entry {
 }
 
 const SHORT = '<p>短い本文</p>';
+/** 先読み（M7）を見るための画像。1x1 なので本文の高さには効かない */
+const image = (id: number): string => `<img src="https://img.example.com/${id}.jpg" alt="">`;
 // スクロールが発生する長さ。Space の境界挙動を試すために使う
 const LONG = '<p>長い本文</p>'.repeat(400);
 
@@ -89,9 +92,12 @@ export const FEEDS: Feed[] = [
 
 export const ENTRIES: Entry[] = [
   entry(11, 1, '朝刊の 1 本目', LONG),
-  entry(12, 1, '朝刊の 2 本目', SHORT),
-  entry(21, 2, '夕刊の 1 本目', SHORT),
+  entry(12, 1, '朝刊の 2 本目', SHORT + image(12)),
+  entry(21, 2, '夕刊の 1 本目', SHORT + image(21)),
 ];
+
+/** 画像の先読みが使う Cache API の名前。名前がずれると検証が空振りするので import する */
+export const IMAGE_CACHE = CACHE_NAME;
 
 export interface MockOptions {
   /** 初回起動時のヘルプを出したままにするか */
@@ -112,6 +118,8 @@ export interface ApiRecorder {
   created: { url: string; rate?: number; folder?: string }[];
   deleted: number[];
   refetched: number[];
+  /** 先読み（M7）が取りに行った画像。届いた順に入る */
+  images: string[];
 }
 
 export async function mockApi(page: Page, options: MockOptions = {}): Promise<ApiRecorder> {
@@ -124,11 +132,26 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
     created: [],
     deleted: [],
     refetched: [],
+    images: [],
   };
 
   if (options.showHelp !== true) {
     await page.addInitScript((key) => localStorage.setItem(key, '1'), HELP_SEEN_KEY);
   }
+
+  // 画像は全ての spec で握る。外に取りに行かせると、先読みの有無に関わらず
+  // 実在しないホストへの往復で不安定になる
+  await page.route('https://img.example.com/**', async (route) => {
+    recorder.images.push(route.request().url());
+    await route.fulfill({
+      contentType: 'image/gif',
+      // 実在する画像サーバと同じく、キャッシュしてよいことを名乗る。
+      // これが無いと先読みで温めた分がブラウザの HTTP キャッシュに残らず、
+      // 「先読みが効いているか」を確かめられない
+      headers: { 'cache-control': 'public, max-age=3600' },
+      body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'),
+    });
+  });
 
   await page.route('**/api/bootstrap*', async (route) => {
     const body: BootstrapResponse = {

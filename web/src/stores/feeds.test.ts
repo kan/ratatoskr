@@ -29,17 +29,22 @@ function feed(id: number, overrides: Partial<Feed> = {}): Feed {
   };
 }
 
-function entry(id: number, feedId: number): Entry {
+function entry(id: number, feedId: number, body = '<p>本文</p>'): Entry {
   return {
     id,
     feedId,
     url: `https://example.com/${feedId}/${id}`,
     title: `記事 ${id}`,
     author: null,
-    body: '<p>本文</p>',
+    body,
     publishedAt: null,
     storedAt: 0,
   };
+}
+
+/** 画像 1 枚だけを持つ記事。先読みウィンドウの並びを見るのに使う */
+function imageEntry(id: number, feedId: number): Entry {
+  return entry(id, feedId, `<img src="https://img.example.com/${id}.jpg">`);
 }
 
 function entries(feedId: number, ids: number[]): Entry[] {
@@ -479,5 +484,89 @@ describe('購読の増減', () => {
     expect(feeds.feeds.map((f) => f.id)).toEqual([2]);
     expect(entriesStore.of(1)).toEqual([]);
     expect(feeds.currentFeed?.id).toBe(2);
+  });
+});
+
+/**
+ * 先読みウィンドウ（docs/DESIGN.md §6）。見るのは「読む順に並ぶこと」。
+ * 読む順序と先読み順序が一致していることが、先読みが当たる前提条件。
+ */
+describe('先読みウィンドウ', () => {
+  function setup(): ReturnType<typeof useFeedsStore> {
+    const feeds = useFeedsStore();
+    const store = useEntriesStore();
+    for (const feedId of [1, 2, 3, 4, 5, 6]) {
+      store.ingest([imageEntry(feedId * 10, feedId), imageEntry(feedId * 10 + 1, feedId)]);
+    }
+    feeds.setFeeds([1, 2, 3, 4, 5, 6].map((id) => feed(id, { unreadCount: 2 })));
+    feeds.enterFirstUnread();
+    return feeds;
+  }
+
+  it('現在のフィードの先から、3 フィード先までを読む順に並べる', () => {
+    const feeds = setup();
+
+    // 先頭の記事は表示済みなので積まない。11 の後は 2〜4 番のフィード
+    expect(feeds.prefetchUrls).toEqual(
+      [11, 20, 21, 30, 31, 40, 41].map((id) => `https://img.example.com/${id}.jpg`),
+    );
+  });
+
+  it('記事を送るとウィンドウも前に動く', () => {
+    const feeds = setup();
+
+    // フィード 1 の最後まで読むと、残るのは先のフィードだけになる
+    feeds.nextEntry();
+    expect(feeds.prefetchUrls).toEqual(
+      [20, 21, 30, 31, 40, 41].map((id) => `https://img.example.com/${id}.jpg`),
+    );
+
+    // 次のフィードに移ると、ウィンドウ全体が 1 つ先へずれる
+    feeds.nextEntry();
+    expect(feeds.prefetchUrls).toEqual(
+      [21, 30, 31, 40, 41, 50, 51].map((id) => `https://img.example.com/${id}.jpg`),
+    );
+  });
+
+  it('未読の無いフィードは飛ばす（s の辿り方と揃える）', () => {
+    const feeds = setup();
+    // 2 番を読み終えた状態にする。実際には開かないので温めても無駄になる
+    feeds.feeds[1].readSeq = 21;
+    feeds.feeds[1].unreadCount = 0;
+
+    expect(feeds.prefetchUrls).toEqual(
+      [11, 30, 31, 40, 41, 50, 51].map((id) => `https://img.example.com/${id}.jpg`),
+    );
+  });
+
+  it('画像の多いフィードでも一度に温める枚数を区切る', () => {
+    const feeds = useFeedsStore();
+    const store = useEntriesStore();
+    // 1 記事 10 枚 × 20 記事 × 2 フィード = 400 枚。全部積むと落とし切れない
+    const many = (feedId: number, id: number): Entry =>
+      entry(
+        id,
+        feedId,
+        Array.from(
+          { length: 10 },
+          (_, n) => `<img src="https://img.example.com/${id}-${n}.jpg">`,
+        ).join(''),
+      );
+    for (const feedId of [1, 2]) {
+      store.ingest(Array.from({ length: 20 }, (_, n) => many(feedId, feedId * 100 + n)));
+    }
+    feeds.setFeeds([1, 2].map((id) => feed(id, { unreadCount: 20 })));
+    feeds.enterFirstUnread();
+
+    expect(feeds.prefetchUrls).toHaveLength(40);
+    // 打ち切っても順序は読む順のまま。先頭は表示済みの次の記事の画像
+    expect(feeds.prefetchUrls[0]).toBe('https://img.example.com/101-0.jpg');
+  });
+
+  it('読み始める前は何も温めない', () => {
+    const feeds = useFeedsStore();
+    feeds.setFeeds([feed(1, { unreadCount: 2 })]);
+
+    expect(feeds.prefetchUrls).toEqual([]);
   });
 });

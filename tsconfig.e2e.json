@@ -11,7 +11,14 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "baseUrl": ".",
+    // E2E から web 側のモジュール（keymap の定義やキャッシュ名）を import する。
+    // その先が使っているエイリアスをここでも解決できるようにしておく
+    "paths": {
+      "@/*": ["./web/src/*"],
+      "@shared/*": ["./shared/*"]
+    }
   },
   "include": ["e2e/**/*.ts", "playwright.config.ts", "shared/**/*.ts"]
 }

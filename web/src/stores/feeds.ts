@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref, watch } from 'vue';
 import type { Entry, Feed } from '@shared/types';
+import { imageUrlsOf, prefetchImages } from '@/lib/prefetch';
 import { useEntriesStore } from './entries';
 
 /**
@@ -13,6 +14,17 @@ import { useEntriesStore } from './entries';
 export function sortByReadingOrder(feeds: Feed[]): Feed[] {
   return [...feeds].sort((a, b) => b.rate - a.rate || b.unreadCount - a.unreadCount || a.id - b.id);
 }
+
+/** 画像を先読みするフィード数（現在のフィードの先。docs/DESIGN.md §6） */
+const PREFETCH_FEEDS = 3;
+
+/**
+ * 一度に温める画像の枚数。フィード数だけで区切ると、画像の多いフィードが 4 本
+ * 並んだだけで数百枚を取りに行くことになる。画像を落とし切れないからウィンドウに
+ * したのに、それでは元の木阿弥（docs/DESIGN.md §6）。LDRoid の PREFETCH_COUNT が
+ * 件数の上限だったのと同じ考え方。
+ */
+const PREFETCH_IMAGES = 40;
 
 /**
  * カーソルの単独所有者（CLAUDE.md の不変条件 2）。
@@ -453,6 +465,48 @@ export const useFeedsStore = defineStore('feeds', () => {
     syncUnreadCount(feed);
   }
 
+  /**
+   * 先読みするウィンドウ（docs/DESIGN.md §6）。**読む順そのままに並べる。**
+   * 読む順序と先読み順序が一致していることが、先読みが当たる前提条件。
+   *
+   * 現在のフィードは「いま読んでいる記事より先」だけを積む。既に表示した記事の
+   * 画像はもう取れているので、積み直しても順番待ちを増やすだけになる。
+   *
+   * 先のフィードの辿り方は s（nextFeed）と同じ規則にしてある。未読 0 のフィードを
+   * 飛ばさないと、実際には開かないフィードの画像でウィンドウが埋まる。
+   *
+   * **キーを押すたびに丸ごと計算し直す。** 前回のウィンドウをずらす形にはしていない。
+   * 100 フィード × 50 記事（docs/DESIGN.md の想定規模の上限）で記事送り 1 回あたり
+   * 0.176ms と実測した。1 フレームの 1% で、差分更新の状態を持つ価値がない。
+   */
+  const prefetchUrls = computed<string[]>(() => {
+    if (!started.value) return [];
+
+    const urls: string[] = [];
+    /** @returns 上限に達したか。達したらそこで打ち切る */
+    const take = (entry: Entry): boolean => {
+      urls.push(...imageUrlsOf(entry));
+      return urls.length >= PREFETCH_IMAGES;
+    };
+
+    for (const entry of currentEntries.value.slice(entryIndex.value + 1)) {
+      if (take(entry)) return urls.slice(0, PREFETCH_IMAGES);
+    }
+
+    let index = feedIndex.value;
+    for (let n = 0; n < PREFETCH_FEEDS; n += 1) {
+      index = findFeed(index + 1, 1, isReadable);
+      if (index === -1) break;
+      for (const entry of readingList(feeds.value[index])) {
+        if (take(entry)) return urls.slice(0, PREFETCH_IMAGES);
+      }
+    }
+    return urls;
+  });
+
+  // 先読みのスケジューリングもカーソルの所有者が行う（不変条件 2）
+  watch(prefetchUrls, (urls) => prefetchImages(urls));
+
   /** 直前に表示した記事。カーソルが動いたのか、足元のリストが入れ替わっただけかを見分ける */
   let displayed: number | null = null;
 
@@ -488,6 +542,7 @@ export const useFeedsStore = defineStore('feeds', () => {
     entryIndex,
     currentEntries,
     finished,
+    prefetchUrls,
     readRevision,
     settingsRevision,
     currentFeed,
