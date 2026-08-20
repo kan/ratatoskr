@@ -4,6 +4,9 @@ web/dist/
 pnpm-lock.yaml
 worker-configuration.d.ts
 
+# テストのフィクスチャは取ってきたものそのまま。整形すると再現性が失われる
+src/crawler/__fixtures__/
+
 # 人間が管理するファイルは整形対象にしない
 docs/
 migrations/

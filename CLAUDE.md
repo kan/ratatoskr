@@ -111,6 +111,10 @@ Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCE
 - `pnpm db:console` は SQL を引数で渡す: `pnpm db:console "SELECT * FROM feeds"`
 - cron のローカル発火: `curl "http://localhost:8787/cdn-cgi/local/scheduled"`
 - `pnpm test:e2e` は Playwright を入れる M3 まで存在しない
+- **Workers AI（`env.AI`）は必ずリモートに繋ぎに行く。** `wrangler dev` でもローカル実行はされず、
+  Cloudflare のアカウントに接続する（`wrangler login` 済みであること）。テストでは
+  `vitest.config.ts` の `remoteBindings: false` で無効にしてあるので、テストから実際に
+  呼ぶことはできない（`src/crawler/choose.test.ts` のように差し替えて呼ぶ）
 - `wrangler.jsonc` の `database_id` と `ACCESS_*` は `REPLACE_ME` のまま。ローカル開発には
   影響しないが、デプロイ前に設定する
 
@@ -169,7 +173,10 @@ Claude Code が間違えやすい点です。
 - **キーバインドは `web/src/lib/keymap.ts` に一元定義する。** 個別のコンポーネントに `keydown` ハンドラを散らさない。ヘルプ画面（`?`）はこの定義から自動生成する
 - **記事本文の描画で仮想スクロールを入れない。** 1 記事ずつ表示する設計なので不要。複雑さだけが増える
 - **アニメーションは入れない。** 記事送りにトランジションを付けると、それがそのまま体感遅延になる。`docs/UX.md` の意図に反する
-- **画像は遅延読み込みしない。** 先読みウィンドウで事前に Cache API に温めておくのが方針（`docs/DESIGN.md` の先読み節）
+- **画像は遅延読み込みしない。** 先読みウィンドウで事前に温めておくのが方針（`docs/DESIGN.md` の先読み節）。
+  ただし **`<img>` が読むのは HTTP キャッシュで、Cache API ではない**（Cache API は Service Worker が
+  リクエストを横取りして初めて効く）。`fetch` 1 回で両方温まるので、記事送りを速くしているのは前者、
+  Cache API への書き込みは M8 のオフライン用という関係になっている
 
 ## コーディング規約
 

@@ -25,6 +25,8 @@ export interface Feed {
   lastFetchedAt: number | null;
   lastError: string | null;
   disabled: boolean;
+  fullText: boolean;          // 記事ページから本文を取ってくるか（M7）
+  fullTextSuggested: boolean; // 要約しか配信していないと見えた（勧めるだけ）
 }
 
 export interface Entry {
@@ -37,6 +39,10 @@ export interface Entry {
   publishedAt: number | null;
   storedAt: number;
 }
+
+// body には、全文取得（M7）が成功していればフィードの要約ではなく記事ページの本文が
+// 入る。DB では別の列（entries.full_body）に持ち、読み出し時に COALESCE で 1 つに
+// 畳んでいる。クライアントからどちらが入っているかは見えない
 
 export interface Pin {
   id: number;
@@ -191,7 +197,9 @@ export interface Pin {
 
 ### `PATCH /api/feeds/:id`
 
-`rate`、`folder`、`title`、`disabled` を更新する。`title` はフィードの提供する値を上書きするユーザ指定値。
+`rate`、`folder`、`title`、`disabled`、`fullText` を更新する。`title` はフィードの提供する値を上書きするユーザ指定値。
+
+`fullText` は「記事ページから本文を取ってくるか」。**既定は false で、決めるのはユーザ。** 相手のサーバに記事の数だけ取りに行く動作なので、こちらが勝手に始めない。クロール時に要約しか配信していないと見えたフィードは `fullTextSuggested` が立ち、購読管理画面がそれを勧める。
 
 ### `DELETE /api/feeds/:id`
 
@@ -200,6 +208,8 @@ export interface Pin {
 ### `POST /api/feeds/:id/fetch`
 
 手動での即時クロール。`next_fetch_at` を無視して実行し、更新後の Feed と新着 Entry を返す。
+
+`entries` には**新着に加えて、全文取得（M7）で本文が差し替わった記事も入る。** 既にクライアントが持っている記事なので `sinceId` の差分には出てこず、これを返さないと `fullText` を入れた直後に手持ちの未読が要約のまま残る。クライアントは id で上書きマージする。
 
 ### `POST /api/feeds/fetch-all`
 
