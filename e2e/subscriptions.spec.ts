@@ -258,3 +258,45 @@ test('取得が止まったフィードは左ペインで知らせ、購読管�
   // 失敗が続いていても、しきい値を超えていないフィードは警告の対象にしない
   await expect(page.getByTestId('manage-stalled-5')).toHaveCount(0);
 });
+
+/**
+ * 見ているサイトをその場で購読する導線（issue #4）。
+ *
+ * ブックマークレットは `?add=<見ているページの URL>` でこの画面を開く。他のサイトから
+ * API を直接叩かせない（CORS と Access に阻まれるうえ、通すには資格情報を配ることになる）。
+ */
+test('?add= 付きで開くと、その URL をそのまま購読する', async ({ page }) => {
+  const recorder = await mockApi(page);
+  const target = 'https://example.com/blog/';
+
+  await page.goto(`/?add=${encodeURIComponent(target)}`);
+
+  // 購読管理が開いて、登録まで済んでいる
+  await expect(page.getByTestId('bookmarklet')).toBeVisible();
+  await expect.poll(() => recorder.created.map((c) => c.url)).toContain(target);
+  await expect(page.getByTestId('manage-feed-9')).toBeVisible();
+
+  // 再読み込みで二度押しにならないよう、アドレス欄からは消す
+  expect(new URL(page.url()).search).toBe('');
+});
+
+test('登録できない URL は無視して、普通に起動する', async ({ page }) => {
+  const recorder = await mockApi(page);
+
+  // このパラメータは誰でも付けられる。そのまま登録の入力にしない
+  await page.goto('/?add=javascript:alert(1)');
+
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+  expect(recorder.created).toEqual([]);
+});
+
+test('購読管理にブックマークレットが置いてある', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+  await page.getByTestId('open-manager').click();
+
+  const href = await page.getByTestId('bookmarklet').getAttribute('href');
+  expect(href).toContain('javascript:');
+  expect(href).toContain('/?add=');
+});

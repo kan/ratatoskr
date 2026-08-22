@@ -7,6 +7,7 @@ import { confirmUnsubscribe, isStalled } from '@/lib/subscriptions';
 import HelpOverlay from '@/components/HelpOverlay.vue';
 import PinList from '@/components/PinList.vue';
 import SubscriptionManager from '@/components/SubscriptionManager.vue';
+import { pendingSubscription } from '@/lib/bookmarklet';
 import { isTextInput, resolveBinding, type KeyBinding } from '@/lib/keymap';
 import { hasSeenHelp, markHelpSeen } from '@/lib/prefs';
 import { useCompact } from '@/lib/viewport';
@@ -50,6 +51,23 @@ function selectEntryIn(feedId: number, entryId: number): void {
 function openManager(): void {
   drawerOpen.value = false;
   activeOverlay.value = 'subscriptions';
+}
+
+/**
+ * ブックマークレットから渡された購読先（issue #4）。購読管理に渡してその場で登録させる。
+ *
+ * **アドレス欄からは消す。** 残したまま再読み込みされると、同じ URL をもう一度
+ * 登録しに行くことになる（サーバ側は重複を弾くが、押した覚えのない知らせが出る）
+ */
+const pendingUrl = ref<string | null>(null);
+
+function takePendingSubscription(): void {
+  const url = pendingSubscription(window.location.search);
+  if (url === null) return;
+
+  pendingUrl.value = url;
+  activeOverlay.value = 'subscriptions';
+  window.history.replaceState(null, '', window.location.pathname);
 }
 
 // オーバーレイは「いま何が開いているか」で持つ。ピン一覧（M6）が増えたときに
@@ -324,6 +342,8 @@ onMounted(() => {
   window.addEventListener('keydown', onKeydown);
   // キーボード前提の UI なので、知らないと何もできない。初回だけ自動で開く
   if (!hasSeenHelp()) activeOverlay.value = 'help';
+  // 購読の依頼が載っていればそちらを優先する（ヘルプを見に来たのではない）
+  takePendingSubscription();
   void session.boot();
 });
 
@@ -457,7 +477,14 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
     </main>
 
     <HelpOverlay v-if="activeOverlay === 'help'" @close="closeOverlay" />
-    <SubscriptionManager v-if="activeOverlay === 'subscriptions'" @close="activeOverlay = null" />
+    <SubscriptionManager
+      v-if="activeOverlay === 'subscriptions'"
+      :initial-url="pendingUrl"
+      @close="
+        activeOverlay = null;
+        pendingUrl = null;
+      "
+    />
     <PinList
       v-if="activeOverlay === 'pins'"
       @close="activeOverlay = null"

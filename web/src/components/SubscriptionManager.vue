@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import type { Feed, FeedErrorKind } from '@shared/types';
+import { bookmarkletFor } from '@/lib/bookmarklet';
 import { confirmUnsubscribe, isStalled } from '@/lib/subscriptions';
 import { sortByReadingOrder, useFeedsStore } from '@/stores/feeds';
 import { useSessionStore } from '@/stores/session';
@@ -49,6 +50,18 @@ function reasonLabel(kind: FeedErrorKind | null): string {
   if (kind === null) return '';
   return REMOVABLE[kind]?.label ?? kind;
 }
+
+/**
+ * ブックマークレットから渡された購読先（issue #4）。開いた時点でそのまま登録する。
+ *
+ * 確認を挟まないのは、押した本人が「このサイトを購読する」と決めて押しているため。
+ * 取り違えたら一覧からその場で解除できる。フィードが複数見つかったときだけ、
+ * いつもどおり候補を出して選んでもらう
+ */
+const props = defineProps<{ initialUrl?: string | null }>();
+
+/** ブックマークバーに入れる 1 行。リーダー自身の出どころから組み立てる */
+const bookmarklet = computed(() => bookmarkletFor(window.location.origin));
 
 const url = ref('');
 const rate = ref(3);
@@ -116,6 +129,28 @@ async function removeUnreachable(): Promise<void> {
     if (removable.value.length === 0) problemsOnly.value = false;
   });
 }
+
+onMounted(() => {
+  const initial = props.initialUrl;
+  if (initial === undefined || initial === null) return;
+  url.value = initial;
+
+  // **起動が落ち着くまで待つ。** 途中で足すと、後から届く bootstrap の一覧
+  // （足す前のもの）で上書きされ、サーバには居るのに画面から消える。
+  // 購読は待ってよい操作なので、ここは素直に待つ（読む操作は待たせない）
+  let done = false;
+  let stop: (() => void) | null = null;
+  stop = watch(
+    () => session.phase === 'ready' || session.error !== null,
+    (settled) => {
+      if (!settled || done) return;
+      done = true;
+      stop?.();
+      void add(initial);
+    },
+    { immediate: true },
+  );
+});
 
 function report(err: unknown): void {
   error.value = err instanceof Error ? err.message : String(err);
@@ -492,6 +527,27 @@ async function onOpmlSelected(event: Event): Promise<void> {
           />
         </label>
         <span class="text-xs text-neutral-500">取り込んだ購読は次回の定期取得で記事が入る</span>
+      </div>
+
+      <!--
+        見ているサイトをその場で購読する導線（issue #4）。
+        ブックマークバーへドラッグして使う。押すとこの画面が開いて登録まで済む
+      -->
+      <div
+        class="mt-3 flex flex-wrap items-center gap-3 border-t border-neutral-200 pt-3 text-xs dark:border-neutral-800"
+      >
+        <a
+          :href="bookmarklet"
+          class="rounded border border-neutral-400 px-2 py-1 dark:border-neutral-600"
+          data-testid="bookmarklet"
+          title="ブックマークバーにドラッグする"
+          @click.prevent
+        >
+          Ratatoskr に追加
+        </a>
+        <span class="text-neutral-500">
+          ブックマークバーにドラッグしておくと、見ているサイトのフィードをその場で購読できる
+        </span>
       </div>
     </div>
   </div>
