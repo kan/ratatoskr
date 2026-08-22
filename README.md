@@ -53,7 +53,26 @@ pnpm dev                         # vite(5173) と wrangler dev(8787) を同時�
 pnpm exec wrangler d1 create ratatoskr
 ```
 
-出力された `database_id` を `wrangler.jsonc` の `d1_databases[0].database_id` に書く（`REPLACE_ME` を置き換える）。
+出力された id を、git 管理外の `.prod.vars` に置く。**アカウント固有の値はこのファイルにだけ書く。**
+
+```bash
+cat > .prod.vars <<'EOF'
+D1_DATABASE_ID=<wrangler d1 create の出力の id>
+
+# Access の値。この時点ではまだ分からないので空でよい（4 で入れる）
+ACCESS_TEAM_DOMAIN=
+ACCESS_AUD=
+EOF
+```
+
+`pnpm deploy` は毎回ここから 2 つを組み立てる。`wrangler.jsonc` に `database_id` を差し込んだ
+`wrangler.deploy.json` と、secret を渡す `.wrangler/deploy-secrets.env`（どちらも git 管理外）。
+
+- `database_id` を設定ファイルに書かないのは、公開リポジトリに残さないため。デプロイ時に
+  この値は必須で、データベース名だけでは解決されない
+- secret を毎回渡すのは、**Worker を作り直したときに 1 コマンドで戻せるようにする**ため。
+  `wrangler.jsonc` に secret 名を宣言してあると、デプロイは前の版から値を引き継ごうとする。
+  Worker が消えていると引き継ぎ元が無く `no previous version exists` で止まる
 
 ### 2. スキーマを本番に適用する
 
@@ -66,29 +85,38 @@ pnpm db:migrate:remote
 ### 3. 一度デプロイして URL を確定させる
 
 ```bash
-pnpm deploy   # web をビルドして Worker ごと上げる
+pnpm deploy   # web をビルド → 設定と secret を生成 → Worker ごと上げる
 ```
 
-この時点では **まだ誰でも開ける**（`ACCESS_*` が `REPLACE_ME` のままなら `/api/*` は全て 401 になるので、実害は無い）。
-`https://ratatoskr.<subdomain>.workers.dev` か、割り当てたカスタムドメインが入口になる。
+`https://ratatoskr.<subdomain>.workers.dev` が入口になる。この時点では **まだ誰でも開ける**が、
+Access の値が空なので `/api/*` は全て 401 になり、記事は出ない。
 
 ### 4. Cloudflare Access を掛ける
 
-ダッシュボードの **Workers & Pages → 対象の Worker → Access** から「Protect this Worker behind Access」を選び、
-**All traffic** と自分だけを許可するポリシー（自分の Cloudflare アカウント、またはメールアドレス）を指定する。
-Worker に紐づく全ての経路（`workers.dev` ホスト名・カスタムドメイン・プレビュー）がまとめて保護される。
+Zero Trust ダッシュボード → **Access → Applications → Create new application → Self-hosted**。
 
-続いて Zero Trust ダッシュボードの **Access → Applications** で作られたアプリケーションを開き、
-次の 2 つを `wrangler.jsonc` の `vars` に書く。
+| 項目                           | 値                                                             |
+| ------------------------------ | -------------------------------------------------------------- |
+| Application name               | `ratatoskr`                                                    |
+| Destinations → Public hostname | `ratatoskr.<subdomain>.workers.dev`（3 で確定した入口）        |
+| Identity providers             | Accept all available identity providers（または One-time PIN） |
+| Policies                       | Action = Allow / Include = Emails → 自分のアドレス             |
 
-| 変数                 | 値                                                           |
-| -------------------- | ------------------------------------------------------------ |
-| `ACCESS_TEAM_DOMAIN` | `<team>.cloudflareaccess.com`（Zero Trust のチームドメイン） |
-| `ACCESS_AUD`         | そのアプリケーションの Application Audience (AUD) Tag        |
+**Workers & Pages の Worker → Access タブにある「Protect this Worker behind Access」は使わない。**
+ホスト名ではなく Worker を宛先にするアプリが作られ、こちらの手元では PIN のメールが永久に届かない
+状態になった（Destinations の preview が空のまま作られる）。ホスト名を宛先にした Self-hosted なら素直に通る。
 
-書いたらもう一度 `pnpm deploy`。Worker は `Cf-Access-Jwt-Assertion` の JWT を、このチームドメインが配る公開鍵で検証し、
-`aud` が一致するものだけ通す（`src/lib/auth.ts`）。**`ACCESS_AUD` を間違えると全ての API が 401 になる**ので、
-デプロイ後に画面を開いて記事が出ることを確かめる。
+作ったアプリの **Application Audience (AUD) Tag** と、Zero Trust のチームドメイン
+（`<team>.cloudflareaccess.com`。ログイン画面の URL のホスト部分でも分かる）を `.prod.vars` に書く。
+
+```
+ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com
+ACCESS_AUD=<AUD Tag>
+```
+
+書いたらもう一度 `pnpm deploy`。Worker は `Cf-Access-Jwt-Assertion` の JWT を、このチームドメインが配る
+公開鍵で検証し、`aud` が一致するものだけ通す（`src/lib/auth.ts`）。
+**`ACCESS_AUD` を間違えると全ての API が 401 になる**ので、デプロイ後に画面を開いて記事が出ることを確かめる。
 
 ### 5. 動いていることを確かめる
 
@@ -115,6 +143,21 @@ pnpm exec wrangler tail   # cron の実行ログ（crawl / purge）を眺める
 | ------------- | ------------------------------------------- |
 | `*/5 * * * *` | フィードの取得（1 回 20 フィードまで）      |
 | `23 17 * * *` | 保持期間を過ぎた既読記事の削除（02:23 JST） |
+
+無料プランは **1 アカウントあたり cron 5 個まで**なので、他の Worker と合わせて足りなければ
+デプロイの最後で「Cron schedules」だけが失敗する（Worker 本体は上がっている）。
+
+### 消してしまったときの戻し方
+
+Worker を消すと、それに紐づく secret も一緒に消える。D1 は別のリソースなので残る。
+`.prod.vars` さえ手元にあれば、次の 1 つで完全に戻せる。
+
+```bash
+pnpm deploy   # Worker・cron・secret がまとめて復旧する
+```
+
+Access のアプリケーションは Worker とは別に残るので、作り直す必要はない
+（ただし作り直した場合は AUD が変わるので `.prod.vars` を更新する）。
 
 ## バックアップ
 

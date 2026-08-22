@@ -92,8 +92,9 @@ pnpm dev
 デプロイ先に紛れ込んでも認証が素通りすることはない（`src/lib/auth.ts`）。
 
 **アカウント固有の値は追跡させない**（このリポジトリは公開）。`wrangler.jsonc` には
-D1 の `database_id` も Access の値も書かず、前者は `.prod.vars` の `D1_DATABASE_ID` を
-`scripts/deploy-config.mjs` が差し込み、後者は secret として入れる。手順は README の
+D1 の `database_id` も Access の値も書かない。全て `.prod.vars`（git 管理外）に置き、
+`scripts/deploy-config.mjs` が設定（`wrangler.deploy.json`）と secret
+（`.wrangler/deploy-secrets.env`）を組み立てて `pnpm deploy` が渡す。手順は README の
 「デプロイ」を参照。
 
 Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCES で失敗する場合は
@@ -124,10 +125,12 @@ Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCE
   Cloudflare のアカウントに接続する（`wrangler login` 済みであること）。テストでは
   `vitest.config.ts` の `remoteBindings: false` で無効にしてあるので、テストから実際に
   呼ぶことはできない（`src/crawler/choose.test.ts` のように差し替えて呼ぶ）
-- **`wrangler.jsonc` にアカウント固有の値を書かない。** D1 の `database_id` はデプロイ時に
-  `scripts/deploy-config.mjs` が `.prod.vars` から差し込み（生成物は `wrangler.deploy.json`）、
-  Access の 2 つは secret として入れる（名前だけ `secrets.required` に宣言してあるので、
-  `Env` の型はそこから生成される）
+- **`wrangler.jsonc` にアカウント固有の値を書かない。** デプロイ時に
+  `scripts/deploy-config.mjs` が `.prod.vars` から D1 の `database_id` を差し込んだ設定と、
+  secret の一覧を書き出す（Access の 2 つ。名前は `secrets.required` が正で、`Env` の型も
+  そこから生成される）。**secret を毎回渡すのは、Worker を消しても `pnpm deploy` 1 つで
+  戻せるようにするため**（宣言だけして渡さないと、引き継ぎ元が無い初回デプロイが
+  `no previous version exists` で止まる）
 
 ## 絶対に守るアーキテクチャ上の不変条件
 

@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "concurrently -k -n vite,worker -c cyan,magenta \"pnpm -C web dev\" \"wrangler dev\"",
     "build": "pnpm -C web build",
-    "deploy": "pnpm build && node scripts/deploy-config.mjs && wrangler deploy -c wrangler.deploy.json",
+    "deploy": "pnpm build && node scripts/deploy-config.mjs && wrangler deploy -c wrangler.deploy.json --secrets-file .wrangler/deploy-secrets.env",
     "db:migrate": "wrangler d1 migrations apply ratatoskr --local",
     "db:migrate:remote": "node scripts/deploy-config.mjs && wrangler d1 migrations apply ratatoskr --remote -c wrangler.deploy.json",
     "db:console": "wrangler d1 execute ratatoskr --local --command",

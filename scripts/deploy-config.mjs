@@ -1,37 +1,41 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 /**
- * 本番デプロイ用の設定を組み立てる。
+ * 本番デプロイに要る「アカウント固有の値」を、追跡していないファイルから組み立てる。
  *
- * **このリポジトリは公開なので、アカウント固有の値を wrangler.jsonc に書かない。**
- * D1 の database_id はデプロイ時に必須（wrangler は名前だけでは解決しない）なので、
- * 追跡している設定に手元の値を差し込んだものを .wrangler/ に書き出し、
- * `wrangler deploy -c` にそれを渡す。
+ * **このリポジトリは公開なので、wrangler.jsonc にアカウント固有の値を書かない。**
+ * 値は環境変数か .prod.vars（git 管理外）から取り、次の 2 つを生成する。
  *
- * 値の出どころは 2 つ。環境変数が優先で、無ければ .prod.vars（git 管理外）。
+ *   1. wrangler.deploy.json … wrangler.jsonc に D1 の database_id を差し込んだ設定。
+ *      デプロイ時に database_id は必須で、名前だけでは解決されない
+ *   2. .wrangler/deploy-secrets.env … secret（wrangler deploy --secrets-file に渡す）
  *
- * 生成先はリポジトリのルート（git 管理外）。wrangler は main や assets.directory を
- * **設定ファイルの場所を基準に**解決するので、別のディレクトリに置くと軒並み外れる。
+ * secret を毎回渡すのは、**Worker を作り直したときに 1 コマンドで戻せるようにする**ため。
+ * wrangler.jsonc に secret 名を宣言してあると、デプロイは前の版から値を引き継ごうとする。
+ * Worker が消えていると引き継ぎ元が無く `no previous version exists` で止まるので、
+ * 新規アカウントでの初回デプロイと、消してしまった後の復旧が詰む。
  */
 
 const SOURCE = 'wrangler.jsonc';
 const LOCAL_VARS = '.prod.vars';
-const OUTPUT = 'wrangler.deploy.json';
-const KEY = 'D1_DATABASE_ID';
+const CONFIG_OUT = 'wrangler.deploy.json';
+const SECRETS_OUT = '.wrangler/deploy-secrets.env';
+const DATABASE_ID = 'D1_DATABASE_ID';
 
-/** .prod.vars（dotenv 形式）から 1 つ読む。無くても環境変数があればよい */
-function fromLocalVars(key) {
+/** .prod.vars（dotenv 形式）を読む。無くても環境変数だけで動く */
+function readLocalVars() {
+  const values = new Map();
   let text;
   try {
     text = readFileSync(LOCAL_VARS, 'utf8');
   } catch {
-    return undefined;
+    return values;
   }
   for (const line of text.split('\n')) {
     const match = /^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/.exec(line);
-    if (match?.[1] === key) return match[2].replace(/^["']|["']$/g, '');
+    if (match !== null) values.set(match[1], match[2].replace(/^["']|["']$/g, ''));
   }
-  return undefined;
+  return values;
 }
 
 /** wrangler.jsonc を読む。行頭コメント（// …）だけを落とせば JSON として読める */
@@ -44,24 +48,46 @@ function readConfig(path) {
   return JSON.parse(json);
 }
 
-const databaseId = process.env[KEY] ?? fromLocalVars(KEY);
-if (databaseId === undefined || databaseId === '') {
-  console.error(
-    `${KEY} が無い。${LOCAL_VARS} に次の 1 行を置くか、環境変数で渡す:\n` +
-      `  ${KEY}=<wrangler d1 create ratatoskr が出力した id>\n` +
-      '（この値はアカウント固有なので git には入れない。README「デプロイ」を参照）',
-  );
+function fail(message) {
+  console.error(message);
   process.exit(1);
 }
+
+const local = readLocalVars();
+/** 環境変数が優先。CI や一時的な差し替えのため */
+const valueOf = (key) => process.env[key] ?? local.get(key);
 
 const config = readConfig(SOURCE);
 const d1 = config.d1_databases?.[0];
-if (d1 === undefined) {
-  console.error(`${SOURCE} に d1_databases が無い`);
-  process.exit(1);
+if (d1 === undefined) fail(`${SOURCE} に d1_databases が無い`);
+
+const databaseId = valueOf(DATABASE_ID);
+if (databaseId === undefined || databaseId === '') {
+  fail(
+    `${DATABASE_ID} が無い。${LOCAL_VARS} に次の 1 行を置くか、環境変数で渡す:\n` +
+      `  ${DATABASE_ID}=<wrangler d1 create ratatoskr が出力した id>\n` +
+      '（アカウント固有の値なので git には入れない。README「デプロイ」を参照）',
+  );
 }
 d1.database_id = databaseId;
 
-// 生成物なので、手で直しても次のデプロイで消える
-writeFileSync(OUTPUT, `${JSON.stringify(config, null, 2)}\n`);
-console.log(`${OUTPUT} を生成した（${SOURCE} + ${KEY}）`);
+// secret の名前は wrangler.jsonc の secrets.required が正。ここに一覧を持たない
+const required = config.secrets?.required ?? [];
+const missing = required.filter((name) => valueOf(name) === undefined);
+if (missing.length > 0) {
+  fail(
+    `secret の値が ${LOCAL_VARS} にも環境変数にも無い: ${missing.join(', ')}\n` +
+      `  ${LOCAL_VARS} に「名前=値」の行を足す。値がまだ分からない段階なら「名前=」と空で置いてよい\n` +
+      '（空で上げると /api/* は全て 401 になる。Access の設定後に入れ直す）',
+  );
+}
+const secrets = required.map((name) => `${name}=${valueOf(name)}`).join('\n');
+
+// どちらも生成物。手で直しても次のデプロイで消える
+writeFileSync(CONFIG_OUT, `${JSON.stringify(config, null, 2)}\n`);
+mkdirSync('.wrangler', { recursive: true });
+writeFileSync(SECRETS_OUT, `${secrets}\n`);
+
+const empty = required.filter((name) => valueOf(name) === '');
+if (empty.length > 0) console.warn(`空のまま上げる secret: ${empty.join(', ')}`);
+console.log(`${CONFIG_OUT} と ${SECRETS_OUT} を生成した（${SOURCE} + ${LOCAL_VARS}）`);
