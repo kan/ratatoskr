@@ -1,3 +1,5 @@
+import { MAX_CONSECUTIVE_FAILURES } from '../../shared/types';
+
 /**
  * 取得間隔の適応制御と失敗バックオフ（docs/DESIGN.md §5）。
  * 純関数だけを置く。時刻も DB もここでは触らない。
@@ -16,8 +18,6 @@ const INTERVAL_GROWTH = 1.5;
 
 /** 失敗時のバックオフ上限 */
 export const MAX_BACKOFF = 86400; // 24 時間
-/** これを超えたら disabled にして UI に警告を出す */
-export const MAX_CONSECUTIVE_FAILURES = 20;
 
 /** 新着があった場合。次も来ると仮定して最短間隔に戻す */
 export function intervalAfterUpdate(): number {

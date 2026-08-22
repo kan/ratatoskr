@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import type { Entry, Feed } from '@shared/types';
 import FeedEntries from '@/components/FeedEntries.vue';
+import { isStalled } from '@/lib/subscriptions';
 
 /**
  * 左ペイン。並びはサーバが返した順（レート降順 → 未読数降順）をそのまま使う。
@@ -42,6 +43,14 @@ defineEmits<{
 }>();
 
 const nav = ref<HTMLElement | null>(null);
+
+/**
+ * 連続失敗で取得が止まったフィードの数（M9）。
+ *
+ * 止まったフィードは記事が増えなくなるだけなので、放っておくと「最近更新が無いな」で
+ * 済んでしまう。読む場所は邪魔せず、購読の一覧の頭で知らせる
+ */
+const stalled = computed(() => props.feeds.filter(isStalled).length);
 
 /** 手で開いたフィード。カーソルが離れても閉じない */
 const opened = ref(new Set<number>());
@@ -119,6 +128,20 @@ watch(
         </button>
       </span>
     </div>
+    <!--
+      押すと購読管理へ。直すにも解除するにもそこでしかできないので、
+      知らせと入口を分けない
+    -->
+    <button
+      v-if="stalled > 0"
+      type="button"
+      class="block w-full bg-amber-100 px-3 py-1.5 text-left text-xs text-amber-900 hover:underline dark:bg-amber-950 dark:text-amber-100"
+      data-testid="stalled-feeds"
+      @click="$emit('manage')"
+    >
+      取得が止まっているフィードが {{ stalled }} 件ある
+    </button>
+
     <ul>
       <li v-for="feed in feeds" :key="feed.id">
         <div

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import type { Feed, FeedErrorKind } from '@shared/types';
-import { confirmUnsubscribe } from '@/lib/subscriptions';
+import { confirmUnsubscribe, isStalled } from '@/lib/subscriptions';
 import { sortByReadingOrder, useFeedsStore } from '@/stores/feeds';
 import { useSessionStore } from '@/stores/session';
 
@@ -367,6 +367,13 @@ async function onOpmlSelected(event: Event): Promise<void> {
                   :data-testid="`manage-full-text-hint-${feed.id}`"
                 >
                   要約しか配信していない。「全文」で記事ページから本文を取ってこられる
+                </p>
+                <p
+                  v-if="isStalled(feed)"
+                  class="text-amber-700 dark:text-amber-500"
+                  :data-testid="`manage-stalled-${feed.id}`"
+                >
+                  失敗が続いたので取得を止めた。直したら「再開」、要らなければ「解除」
                 </p>
                 <p v-if="feed.lastError" class="text-red-700 dark:text-red-400">
                   {{ feed.lastError }}

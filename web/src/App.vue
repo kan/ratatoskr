@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import BottomBar from '@/components/BottomBar.vue';
 import EntryReader from '@/components/EntryReader.vue';
 import FeedList from '@/components/FeedList.vue';
-import { confirmUnsubscribe } from '@/lib/subscriptions';
+import { confirmUnsubscribe, isStalled } from '@/lib/subscriptions';
 import HelpOverlay from '@/components/HelpOverlay.vue';
 import PinList from '@/components/PinList.vue';
 import SubscriptionManager from '@/components/SubscriptionManager.vue';
@@ -63,6 +63,15 @@ const currentPinned = computed(() => {
   const url = feeds.currentEntry?.url;
   return url !== null && url !== undefined && pins.has(url);
 });
+
+/**
+ * 取得が止まったフィードがあるか（M9）。
+ *
+ * 知らせの本体は左ペインの頭に出す（FeedList）。ただし狭い画面ではその左ペインが
+ * 引き出しの中なので、開くまで気付けない。**入口に印だけ出す。**
+ * 読む場所は邪魔せず、しかし放っておくと記事が増えないままになるのを防ぐ
+ */
+const hasStalledFeeds = computed(() => feeds.feeds.some(isStalled));
 
 /**
  * 境界にいるか（docs/UX.md「境界でのボタン変化」）。ボタンの位置は動かさず、
@@ -405,6 +414,13 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
             @click="drawerOpen = true"
           >
             <span aria-hidden="true">☰</span>
+            <span
+              v-if="hasStalledFeeds"
+              class="text-amber-700 dark:text-amber-500"
+              data-testid="stalled-mark"
+              title="取得が止まっているフィードがある"
+              >!</span
+            >
             <span class="truncate">{{ feedTitle }}</span>
             <span class="ml-auto shrink-0 tabular-nums"
               >({{ feeds.entryIndex + 1 }}/{{ feeds.entryCount }})</span

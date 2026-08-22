@@ -1,4 +1,4 @@
-import type { Feed } from '@shared/types';
+import { MAX_CONSECUTIVE_FAILURES, type Feed } from '@shared/types';
 
 /**
  * 購読解除の確認。
@@ -12,4 +12,17 @@ import type { Feed } from '@shared/types';
  */
 export function confirmUnsubscribe(feed: Feed): boolean {
   return window.confirm(`「${feed.title || feed.url}」の購読を解除する。記事も消える`);
+}
+
+/**
+ * 連続失敗が続いて、サーバが取得を止めたフィードか（M9）。
+ *
+ * 判定はサーバ側（src/crawler/schedule.ts の shouldDisable）と同じ式にしてある。
+ * 手で「停止」したフィードを巻き込まないよう、失敗回数まで見る。
+ *
+ * **止まったことは黙っていると分からない。** 記事が増えなくなるだけで、画面上は
+ * 「更新の無いフィード」と見分けが付かないので、左ペインで件数を知らせる。
+ */
+export function isStalled(feed: Feed): boolean {
+  return feed.disabled && feed.consecutiveFailures > MAX_CONSECUTIVE_FAILURES;
 }

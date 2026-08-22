@@ -165,7 +165,7 @@ test('名前・URL・フォルダで購読を絞り込める', async ({ page }) 
   await page.getByTestId('feed-search').fill('夕刊');
   await expect(page.getByTestId('manage-feed-2')).toBeVisible();
   await expect(page.getByTestId('manage-feed-1')).toBeHidden();
-  await expect(page.getByTestId('search-count')).toContainText('1 / 7 件');
+  await expect(page.getByTestId('search-count')).toContainText('1 / 8 件');
 
   // URL でも引ける（同じ名前のブログを URL で見分けたいことがある）
   await page.getByTestId('feed-search').fill('example.com/3/feed');
@@ -237,4 +237,24 @@ test('解除の確認を断れば何も起きない', async ({ page }) => {
   // 取り消せない操作なので、確認を断ったら送らない
   await expect(page.getByTestId('feed-1')).toBeVisible();
   expect(recorder.deleted).toEqual([]);
+});
+
+/**
+ * 連続失敗で取得が止まったフィードの警告（M9）。止まったフィードは記事が増えなく
+ * なるだけなので、黙っていると「最近更新が無いな」で済んでしまう。
+ */
+test('取得が止まったフィードは左ペインで知らせ、購読管理へ入れる', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+
+  const warning = page.getByTestId('stalled-feeds');
+  await expect(warning).toContainText('1 件');
+
+  // 直すにも解除するにも購読管理でしかできないので、知らせがそのまま入口になる
+  await warning.click();
+  await expect(page.getByTestId('manage-stalled-8')).toContainText('取得を止めた');
+
+  // 失敗が続いていても、しきい値を超えていないフィードは警告の対象にしない
+  await expect(page.getByTestId('manage-stalled-5')).toHaveCount(0);
 });

@@ -81,6 +81,7 @@ function failing(
  *   5: タイムアウトが 2 回 … 一括解除の対象（続いているので放置とみなす）
  *   6: 接続断 … 一括解除の対象外（相手の一時障害で普通に起きる）
  *   7: タイムアウトが 1 回 … 一括解除の対象外（1 回では消さない）
+ *   8: 500 が続いて取得を止められた … 左ペインの警告の対象（M9）
  */
 export const FEEDS: Feed[] = [
   feed(1, '朝刊', 5, 2),
@@ -91,6 +92,11 @@ export const FEEDS: Feed[] = [
   failing(5, '重いサイト', '応答が無い（15 秒で打ち切り）', 'timeout', 2),
   failing(6, '不安定なサイト', '接続が途中で切れた', 'connection_lost'),
   failing(7, 'たまたま遅いサイト', '応答が無い（15 秒で打ち切り）', 'timeout'),
+  // 連続失敗がしきい値を超え、サーバが取得を止めたフィード
+  {
+    ...failing(8, '止まったサイト', 'HTTP 500 Internal Server Error', 'server_error', 21),
+    disabled: true,
+  },
 ];
 
 export const ENTRIES: Entry[] = [
