@@ -237,8 +237,7 @@ export async function saveFeeds(feeds: Feed[]): Promise<void> {
 
 /**
  * 記事は追加する一方で、いまは消していない。使い続けると起動時の getAll が重くなるので、
- * 既読かつ古い記事の間引きを M9（保持期間の実装）で入れる。サーバ側の削除方針と
- * 揃えたいので、ここだけ先に作らない。
+ * 既読かつ古い記事の間引きは deleteEntries（規則は lib/retention.ts）で行う。
  */
 export async function saveEntries(entries: Entry[]): Promise<void> {
   if (entries.length === 0) return;
@@ -248,6 +247,23 @@ export async function saveEntries(entries: Entry[]): Promise<void> {
 
   const tx = database.transaction('entries', 'readwrite');
   await Promise.all(rows.map((entry) => tx.store.put(entry)));
+  await tx.done;
+}
+
+/**
+ * 記事を手元から捨てる（保持期間の間引き。M9）。
+ *
+ * 何を捨てるかは lib/retention.ts が決める。ここは渡された分を消すだけ。
+ * サーバ側の削除は差分（sinceId）に載らないので、同じ規則でこちらも捨てないと、
+ * 同期した記事が端末に永久に積み上がる。
+ */
+export async function deleteEntries(ids: number[]): Promise<void> {
+  if (ids.length === 0) return;
+  const database = await db();
+  if (database === null) return;
+
+  const tx = database.transaction('entries', 'readwrite');
+  await Promise.all(ids.map((id) => tx.store.delete(id)));
   await tx.done;
 }
 

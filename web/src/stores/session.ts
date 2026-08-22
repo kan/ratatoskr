@@ -16,6 +16,7 @@ import type {
   UpdateFeedRequest,
 } from '@shared/types';
 import {
+  deleteEntries,
   deleteEntryState,
   deleteFeedData,
   loadEntryStates,
@@ -29,6 +30,7 @@ import {
   saveEntries,
   saveFeeds,
 } from '@/lib/db';
+import { isPrunable, prunedAt } from '@/lib/retention';
 import { useEntriesStore } from './entries';
 import { sortByReadingOrder, useFeedsStore } from './feeds';
 import { useOutboxStore } from './outbox';
@@ -112,6 +114,8 @@ export const useSessionStore = defineStore('session', () => {
       await fillRemaining();
       feedsStore.recountUnread();
       phase.value = 'ready';
+      // 手元の間引きは全部揃ってから。読み始めは妨げない（完了を待たない）
+      void pruneStoredEntries();
     } catch (err) {
       // 手元のデータで操作は続けられる。失敗はヘッダに出すだけに留める
       error.value = err instanceof Error ? err.message : String(err);
@@ -169,6 +173,38 @@ export const useSessionStore = defineStore('session', () => {
       savePins(pinsStore.pins),
       saveCursor(body.maxEntryId, body.serverTime),
     ]);
+  }
+
+  /**
+   * 保持期間を過ぎた記事を手元から捨てる（M9。規則は lib/retention.ts）。
+   *
+   * **サーバ側の削除は差分に載らない。** `GET /api/entries` は sinceId で前へ進むだけで、
+   * 消えた記事を教える手立てが無い。こちらで同じ規則で捨てないと、同期した記事が
+   * 端末に永久に積み上がる（スマホの長期運用で効いてくる）。
+   *
+   * 貯蔵庫（メモリ）からは落とさない。この起動の間は k で戻れば読めたままにしておき、
+   * 次の起動で消える形にする。サーバから取り直せない記事ではないので、揃えても得が無い。
+   */
+  async function pruneStoredEntries(): Promise<void> {
+    const before = prunedAt(Math.floor(Date.now() / 1000));
+    const pinnedUrls = pinsStore.urls;
+    const forcedUnread = entriesStore.forcedUnread;
+
+    const ids: number[] = [];
+    for (const feed of feedsStore.feeds) {
+      for (const entry of entriesStore.of(feed.id)) {
+        const context = { before, readSeq: feed.readSeq, pinnedUrls, forcedUnread };
+        if (isPrunable(entry, context)) ids.push(entry.id);
+      }
+    }
+    if (ids.length === 0) return;
+
+    try {
+      await deleteEntries(ids);
+    } catch (err) {
+      // 消せなくても読む分には困らない。次の起動でまた試す
+      console.error('手元の記事の間引きに失敗', err);
+    }
   }
 
   /** 残りの未読記事を sinceId ページングで全部落とす。ここが終われば以降は完全にローカル操作 */

@@ -36,6 +36,48 @@ const ENTRY_COLUMNS = `e.id, e.feed_id, e.url, e.title, e.author,
          COALESCE(NULLIF(e.full_body, ''), e.body) AS body,
          e.published_at, e.stored_at`;
 
+/**
+ * 保持期間を過ぎた記事を消す（docs/DESIGN.md §3「保持期間」）。
+ *
+ * 消すのは「既読で、ピンが付いておらず、取り込みから一定期間が過ぎたもの」だけ。
+ *
+ * - 既読の判定は未読判定の裏返しをそのまま使う（src/db/unread.ts）。手で未読に戻した
+ *   記事（entry_states）は未読なので残る。ここで独自の条件を書くと、画面には未読として
+ *   出ているのに実体が消えている状態になる
+ * - ピンは記事より長く生きる（docs/DESIGN.md §3）。ピンの付いた記事は期間に関わらず残す。
+ *   ピンそのものは title / url を持っているので、記事が消えても壊れない
+ * - entry_states は ON DELETE CASCADE、pins.entry_id は ON DELETE SET NULL で追随する
+ *
+ * **一度に消す件数を必ず区切る。** D1 には長時間トランザクションが無く、初回は数万行が
+ * 対象になり得るため（呼び出し側が刻んで回す。src/retention.ts）。
+ *
+ * @param before stored_at がこの時刻より前のものを対象にする
+ * @returns 実際に消した件数
+ */
+export async function deleteExpiredEntries(
+  db: D1Database,
+  before: number,
+  limit: number,
+): Promise<number> {
+  const { meta } = await db
+    .prepare(
+      `DELETE FROM entries
+        WHERE id IN (
+          SELECT e.id
+            FROM entries e
+            JOIN feeds f ON f.id = e.feed_id
+            ${UNREAD_JOIN}
+           WHERE e.stored_at < ?
+             AND NOT (${UNREAD_PREDICATE})
+             AND NOT EXISTS (SELECT 1 FROM pins p WHERE p.entry_id = e.id)
+           ORDER BY e.id
+           LIMIT ?)`,
+    )
+    .bind(before, limit)
+    .run();
+  return meta.changes ?? 0;
+}
+
 export interface EntryQuery {
   /** この id より大きい記事を返す。ページングは必ずこれで行う（オフセットは使わない） */
   sinceId: number;

@@ -198,12 +198,15 @@ export async function seedManyEntries(
     .run();
 }
 
-export async function seedPin(db: D1Database, url: string, title = 'ピン'): Promise<number> {
+export async function seedPin(
+  db: D1Database,
+  url: string,
+  title = 'ピン',
+  entryId: number | null = null,
+): Promise<number> {
   const row = await db
-    .prepare(
-      `INSERT INTO pins (entry_id, title, url, pinned_at) VALUES (NULL, ?, ?, ?) RETURNING id`,
-    )
-    .bind(title, url, 0)
+    .prepare(`INSERT INTO pins (entry_id, title, url, pinned_at) VALUES (?, ?, ?, ?) RETURNING id`)
+    .bind(entryId, title, url, 0)
     .first<{ id: number }>();
   if (row === null) throw new Error('pin の投入に失敗');
   return row.id;
