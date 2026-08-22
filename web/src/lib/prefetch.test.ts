@@ -151,6 +151,55 @@ describe('createImagePrefetcher', () => {
     expect(peak).toBe(2);
   });
 
+  it('同じサイトへは同時に決めた本数までしか取りに行かない', async () => {
+    // 記事画像が数 MB あるサイトでは、並列度いっぱいを 1 サイトに向けると
+    // 短時間の集中アクセスになる。窓の広さは変えず、1 サイトあたりの太さを絞る
+    const perHostRunning = new Map<string, number>();
+    const peakPerHost = new Map<string, number>();
+    const release: (() => void)[] = [];
+    const impl = ((input: RequestInfo | URL) => {
+      const host = new URL(String(input)).host;
+      const running = (perHostRunning.get(host) ?? 0) + 1;
+      perHostRunning.set(host, running);
+      peakPerHost.set(host, Math.max(peakPerHost.get(host) ?? 0, running));
+      return new Promise<Response>((resolve) => {
+        release.push(() => {
+          perHostRunning.set(host, (perHostRunning.get(host) ?? 1) - 1);
+          resolve(new Response(null, { status: 200 }));
+        });
+      });
+    }) as typeof fetch;
+
+    const { cache } = fakeCache();
+    const prefetcher = createImagePrefetcher({
+      fetchImpl: impl,
+      openCache: () => Promise.resolve(cache),
+      concurrency: 4,
+      perHost: 1,
+    });
+    // 同じサイトが窓を埋めている状態。別のサイトの分は待たされない
+    const urls = [
+      ...Array.from({ length: 5 }, (_, i) => `https://heavy.example.com/${i}.jpg`),
+      'https://other.example.com/a.jpg',
+    ];
+    prefetcher.update(urls);
+
+    const idle = prefetcher.idle();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 重いサイトは 1 本だけ、別のサイトはその裏で同時に走っている
+    expect(perHostRunning.get('heavy.example.com')).toBe(1);
+    expect(perHostRunning.get('other.example.com')).toBe(1);
+
+    for (let i = 0; i < urls.length; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      release.shift()?.();
+    }
+    await idle;
+
+    expect(peakPerHost.get('heavy.example.com')).toBe(1);
+    expect(peakPerHost.get('other.example.com')).toBe(1);
+  });
+
   it('ウィンドウから外れた画像を Cache API から捨てる', async () => {
     const { impl } = recordingFetch();
     const { cache, stored, deleted } = fakeCache();

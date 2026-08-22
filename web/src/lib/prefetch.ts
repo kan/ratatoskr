@@ -28,6 +28,16 @@ export const CACHE_NAME = PREFETCH_IMAGE_CACHE;
 /** 同時に取りに行く数。相手のサーバに配慮して広げない（docs/DESIGN.md §6） */
 const CONCURRENCY = 4;
 
+/**
+ * **同じサイトへは同時に 2 本まで。**
+ *
+ * 全体の並列度だけで絞ると、1 本のフィードの画像が窓を埋めたときに 4 本とも同じサイトに
+ * ぶら下がる。記事画像が数 MB あるサイト（デイリーポータルZ は原寸 5MB だった）では、
+ * それを 40 枚ぶん一息に取りに行くことになり、相手にとっては短時間の集中アクセスになる。
+ * 窓の広さ（枚数）は変えず、1 サイトあたりの太さだけを絞る。
+ */
+const PER_HOST = 2;
+
 export interface ImagePrefetcher {
   /** ウィンドウを入れ替える。urls は読む順に並んでいること */
   update(urls: string[]): void;
@@ -40,12 +50,15 @@ export interface PrefetcherDeps {
   /** null を返せば HTTP キャッシュを温めるだけになる */
   openCache?: () => Promise<Cache | null>;
   concurrency?: number;
+  /** 同じサイトへの同時本数。テストから絞る */
+  perHost?: number;
 }
 
 export function createImagePrefetcher(deps: PrefetcherDeps = {}): ImagePrefetcher {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const openCache = deps.openCache ?? openImageCache;
   const concurrency = deps.concurrency ?? CONCURRENCY;
+  const perHost = deps.perHost ?? PER_HOST;
 
   /** これから取りに行く URL。読む順に並べる */
   let queue: string[] = [];
@@ -57,6 +70,8 @@ export function createImagePrefetcher(deps: PrefetcherDeps = {}): ImagePrefetche
   let windowUrls = new Set<string>();
   /** 走っている破棄。同じ URL を置き直すときは、これが片付くのを待つ */
   const dropping = new Map<string, Promise<void>>();
+  /** サイトごとの、いま取りに行っている本数 */
+  const hostLoad = new Map<string, number>();
   /** caches.open は 1 回でよい。開けなかった結果も含めて使い回す */
   let cache: Promise<Cache | null> | null = null;
 
@@ -85,16 +100,29 @@ export function createImagePrefetcher(deps: PrefetcherDeps = {}): ImagePrefetche
 
   function pump(): void {
     while (inFlight.size < concurrency) {
-      const url = queue.shift();
-      if (url === undefined) return;
-      if (warmed.has(url) || inFlight.has(url)) continue;
+      // 読む順のまま、いま取りに行ける最初のものを選ぶ。同じサイトが上限に達していたら
+      // 飛ばして先へ進む（そのサイトの 1 本が終わったときに拾い直される）
+      const index = queue.findIndex((url) => canStart(url));
+      if (index === -1) return;
+
+      const [url] = queue.splice(index, 1);
+      const host = hostOf(url);
+      hostLoad.set(host, (hostLoad.get(host) ?? 0) + 1);
 
       const task = warm(url).finally(() => {
         inFlight.delete(url);
+        const left = (hostLoad.get(host) ?? 1) - 1;
+        if (left > 0) hostLoad.set(host, left);
+        else hostLoad.delete(host);
         pump();
       });
       inFlight.set(url, task);
     }
+  }
+
+  function canStart(url: string): boolean {
+    if (warmed.has(url) || inFlight.has(url)) return false;
+    return (hostLoad.get(hostOf(url)) ?? 0) < perHost;
   }
 
   async function warm(url: string): Promise<void> {
@@ -160,6 +188,15 @@ export function createImagePrefetcher(deps: PrefetcherDeps = {}): ImagePrefetche
   }
 
   return { update, idle };
+}
+
+/** 同時本数を数える単位。解釈できない URL は 1 つのまとまりとして扱う */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }
 
 async function openImageCache(): Promise<Cache | null> {
