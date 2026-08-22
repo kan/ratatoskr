@@ -1,7 +1,8 @@
 import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
-import worker, { RETENTION_CRON } from './index';
+import worker from './index';
+import { RETENTION_CRON } from './cron';
 import wranglerConfig from '../wrangler.jsonc?raw';
 import { getEntryRows, seedEntry, seedFeed, setReadSeq } from './test/seed';
 
