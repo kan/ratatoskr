@@ -22,11 +22,21 @@ const props = defineProps<{
   entriesOf: (feedId: number) => Entry[];
   /** ピンの立っている記事の url。一覧に目印を出すために引く */
   pinnedUrls: Set<string>;
+  /**
+   * 狭い画面か。この一覧が記事ビューに重ねる引き出しになる
+   * （docs/UX.md「画面構成（スマホ）」）。
+   *
+   * 変わるのは 2 つ。一覧から手ぶらで戻れるよう閉じる操作を出すことと、
+   * **触る画面には hover が無い**ので、普段は透明にしている解除を最初から出すこと
+   */
+  compact?: boolean;
 }>();
 
 defineEmits<{
   selectEntry: [feedId: number, entryId: number];
   manage: [];
+  /** 引き出しを閉じる（狭い画面のみ） */
+  close: [];
   /** 読んでいる最中に「もう要らない」と判断したフィードの解除（issue #2） */
   unsubscribe: [feedId: number];
 }>();
@@ -68,12 +78,16 @@ function toggle(feed: Feed): void {
 
 // カーソルが動いたら、その行を見える位置に保つ。
 // アニメーションは付けない（記事送りの体感遅延になる。docs/UX.md）
+//
+// **組み立てた直後にも 1 回走らせる。** 狭い画面の引き出しは開くたびに作り直されるので、
+// 変化を待っていると、いつも一覧の先頭が出て現在地が画面の外に居る
 watch(
   () => [props.currentFeedId, props.currentEntryId],
   async () => {
     await nextTick();
     nav.value?.querySelector('[data-active="true"]')?.scrollIntoView({ block: 'nearest' });
   },
+  { immediate: true },
 );
 </script>
 
@@ -85,14 +99,25 @@ watch(
     -->
     <div class="flex items-center justify-between px-3 py-1.5 text-xs text-neutral-500">
       <span>Ratatoskr</span>
-      <button
-        type="button"
-        class="hover:underline"
-        data-testid="open-manager"
-        @click="$emit('manage')"
-      >
-        購読管理
-      </button>
+      <span class="flex items-center gap-3">
+        <button
+          type="button"
+          class="hover:underline"
+          data-testid="open-manager"
+          @click="$emit('manage')"
+        >
+          購読管理
+        </button>
+        <button
+          v-if="compact"
+          type="button"
+          class="py-1.5 hover:underline"
+          data-testid="close-feed-list"
+          @click="$emit('close')"
+        >
+          閉じる
+        </button>
+      </span>
     </div>
     <ul>
       <li v-for="feed in feeds" :key="feed.id">
@@ -134,7 +159,12 @@ watch(
           -->
           <button
             type="button"
-            class="shrink-0 px-2 py-1.5 text-xs text-transparent group-hover:text-neutral-500 hover:!text-red-700 focus-visible:text-neutral-500 dark:group-hover:text-neutral-400 dark:hover:!text-red-400"
+            class="shrink-0 px-2 py-1.5 text-xs hover:!text-red-700 focus-visible:text-neutral-500 dark:hover:!text-red-400"
+            :class="
+              compact
+                ? 'text-neutral-500 dark:text-neutral-400'
+                : 'text-transparent group-hover:text-neutral-500 dark:group-hover:text-neutral-400'
+            "
             :data-testid="`feed-unsubscribe-${feed.id}`"
             :title="`「${feed.title || feed.url}」の購読を解除する`"
             @click="$emit('unsubscribe', feed.id)"

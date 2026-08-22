@@ -323,113 +323,122 @@ async function onOpmlSelected(event: Event): Promise<void> {
         </template>
       </div>
 
-      <table class="mt-2 w-full table-fixed border-collapse text-xs">
-        <thead class="text-left text-neutral-500">
-          <tr>
-            <th class="w-auto py-1">タイトル</th>
-            <th class="w-16 py-1">レート</th>
-            <th class="w-28 py-1">フォルダ</th>
-            <th class="w-16 py-1 text-right">未読</th>
-            <th class="w-40 py-1"></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="feed in rows"
-            :key="feed.id"
-            class="border-t border-neutral-200 align-top dark:border-neutral-800"
-            :data-testid="`manage-feed-${feed.id}`"
-          >
-            <td class="py-1 pr-2">
-              <input
-                :value="feed.title"
-                class="w-full bg-transparent"
-                :class="feed.disabled ? 'text-neutral-400 line-through' : ''"
-                @change="rename(feed, $event.target as HTMLInputElement)"
-              />
-              <a
-                :href="feed.siteUrl ?? feed.url"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="block truncate text-neutral-500 hover:underline"
-              >
-                {{ feed.url }}
-              </a>
-              <p
-                v-if="feed.fullTextSuggested && !feed.fullText"
-                class="text-amber-700 dark:text-amber-500"
-                :data-testid="`manage-full-text-hint-${feed.id}`"
-              >
-                要約しか配信していない。「全文」で記事ページから本文を取ってこられる
-              </p>
-              <p v-if="feed.lastError" class="text-red-700 dark:text-red-400">
-                {{ feed.lastError }}
-                <span v-if="feed.consecutiveFailures > 1">
-                  — {{ feed.consecutiveFailures }} 回連続
-                </span>
-                <span v-if="isRemovable(feed)">（{{ reasonLabel(feed.lastErrorKind) }}）</span>
-              </p>
-            </td>
-            <td class="py-1 pr-2">
-              <select
-                :value="feed.rate"
-                class="bg-transparent"
-                @change="changeRate(feed, ($event.target as HTMLSelectElement).value)"
-              >
-                <option v-for="value in RATE_OPTIONS" :key="value" :value="value">
-                  {{ value }}
-                </option>
-              </select>
-            </td>
-            <td class="py-1 pr-2">
-              <input
-                :value="feed.folder"
-                class="w-full bg-transparent"
-                @change="changeFolder(feed, ($event.target as HTMLInputElement).value)"
-              />
-            </td>
-            <td class="py-1 pr-2 text-right tabular-nums">{{ feed.unreadCount }}</td>
-            <td class="space-x-2 py-1 text-right">
-              <!--
+      <!--
+        列幅は固定してあるので、狭い画面では表だけを横に流す（本文の表と同じ考え方。
+        docs/UX.md）。入る幅が無いまま table-fixed で詰めると、タイトルが 1 文字ずつ
+        縦に折り返されて読めなくなる
+      -->
+      <div class="mt-2 overflow-x-auto">
+        <table class="w-full min-w-[36rem] table-fixed border-collapse text-xs">
+          <thead class="text-left text-neutral-500">
+            <tr>
+              <th class="w-auto py-1">タイトル</th>
+              <th class="w-16 py-1">レート</th>
+              <th class="w-28 py-1">フォルダ</th>
+              <th class="w-16 py-1 text-right">未読</th>
+              <th class="w-40 py-1"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="feed in rows"
+              :key="feed.id"
+              class="border-t border-neutral-200 align-top dark:border-neutral-800"
+              :data-testid="`manage-feed-${feed.id}`"
+            >
+              <td class="py-1 pr-2">
+                <input
+                  :value="feed.title"
+                  class="w-full bg-transparent"
+                  :class="feed.disabled ? 'text-neutral-400 line-through' : ''"
+                  @change="rename(feed, $event.target as HTMLInputElement)"
+                />
+                <a
+                  :href="feed.siteUrl ?? feed.url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="block truncate text-neutral-500 hover:underline"
+                >
+                  {{ feed.url }}
+                </a>
+                <p
+                  v-if="feed.fullTextSuggested && !feed.fullText"
+                  class="text-amber-700 dark:text-amber-500"
+                  :data-testid="`manage-full-text-hint-${feed.id}`"
+                >
+                  要約しか配信していない。「全文」で記事ページから本文を取ってこられる
+                </p>
+                <p v-if="feed.lastError" class="text-red-700 dark:text-red-400">
+                  {{ feed.lastError }}
+                  <span v-if="feed.consecutiveFailures > 1">
+                    — {{ feed.consecutiveFailures }} 回連続
+                  </span>
+                  <span v-if="isRemovable(feed)">（{{ reasonLabel(feed.lastErrorKind) }}）</span>
+                </p>
+              </td>
+              <td class="py-1 pr-2">
+                <select
+                  :value="feed.rate"
+                  class="bg-transparent"
+                  @change="changeRate(feed, ($event.target as HTMLSelectElement).value)"
+                >
+                  <option v-for="value in RATE_OPTIONS" :key="value" :value="value">
+                    {{ value }}
+                  </option>
+                </select>
+              </td>
+              <td class="py-1 pr-2">
+                <input
+                  :value="feed.folder"
+                  class="w-full bg-transparent"
+                  @change="changeFolder(feed, ($event.target as HTMLInputElement).value)"
+                />
+              </td>
+              <td class="py-1 pr-2 text-right tabular-nums">{{ feed.unreadCount }}</td>
+              <td class="space-x-2 py-1 text-right">
+                <!--
                 全文取得は入切の状態そのものを見せたいので、他と違って枠付きの
                 トグルにする。文言は入切で変えない。変えると幅が動いて、行ごとに
                 後ろのボタンの位置がずれる。枠は切のときも transparent で残す
               -->
-              <button
-                class="rounded border px-1.5"
-                :class="
-                  feed.fullText
-                    ? 'border-neutral-400 text-neutral-900 dark:border-neutral-500 dark:text-neutral-100'
-                    : 'border-transparent text-neutral-400 dark:text-neutral-600'
-                "
-                :disabled="busy"
-                :aria-pressed="feed.fullText"
-                :title="
-                  feed.fullText
-                    ? '記事ページから本文を取ってくる（入）'
-                    : '要約しか配信しないフィードで、記事ページから本文を取ってくる（切）'
-                "
-                :data-testid="`manage-full-text-${feed.id}`"
-                @click="toggleFullText(feed)"
-              >
-                全文
-              </button>
-              <button class="hover:underline" :disabled="busy" @click="refresh(feed)">更新</button>
-              <button class="hover:underline" :disabled="busy" @click="toggleDisabled(feed)">
-                {{ feed.disabled ? '再開' : '停止' }}
-              </button>
-              <button
-                class="text-red-700 hover:underline dark:text-red-400"
-                :disabled="busy"
-                :data-testid="`manage-delete-${feed.id}`"
-                @click="remove(feed)"
-              >
-                解除
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+                <button
+                  class="rounded border px-1.5"
+                  :class="
+                    feed.fullText
+                      ? 'border-neutral-400 text-neutral-900 dark:border-neutral-500 dark:text-neutral-100'
+                      : 'border-transparent text-neutral-400 dark:text-neutral-600'
+                  "
+                  :disabled="busy"
+                  :aria-pressed="feed.fullText"
+                  :title="
+                    feed.fullText
+                      ? '記事ページから本文を取ってくる（入）'
+                      : '要約しか配信しないフィードで、記事ページから本文を取ってくる（切）'
+                  "
+                  :data-testid="`manage-full-text-${feed.id}`"
+                  @click="toggleFullText(feed)"
+                >
+                  全文
+                </button>
+                <button class="hover:underline" :disabled="busy" @click="refresh(feed)">
+                  更新
+                </button>
+                <button class="hover:underline" :disabled="busy" @click="toggleDisabled(feed)">
+                  {{ feed.disabled ? '再開' : '停止' }}
+                </button>
+                <button
+                  class="text-red-700 hover:underline dark:text-red-400"
+                  :disabled="busy"
+                  :data-testid="`manage-delete-${feed.id}`"
+                  @click="remove(feed)"
+                >
+                  解除
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <p
         v-if="rows.length === 0 && search.trim() !== ''"

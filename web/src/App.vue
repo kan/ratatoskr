@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import BottomBar from '@/components/BottomBar.vue';
 import EntryReader from '@/components/EntryReader.vue';
 import FeedList from '@/components/FeedList.vue';
 import { confirmUnsubscribe } from '@/lib/subscriptions';
@@ -8,6 +9,7 @@ import PinList from '@/components/PinList.vue';
 import SubscriptionManager from '@/components/SubscriptionManager.vue';
 import { isTextInput, resolveBinding, type KeyBinding } from '@/lib/keymap';
 import { hasSeenHelp, markHelpSeen } from '@/lib/prefs';
+import { useCompact } from '@/lib/viewport';
 import type { Pin } from '@shared/types';
 import { useFeedsStore } from '@/stores/feeds';
 import { useOutboxStore } from '@/stores/outbox';
@@ -26,6 +28,30 @@ const session = useSessionStore();
 
 const reader = ref<InstanceType<typeof EntryReader> | null>(null);
 
+/**
+ * 狭い画面では記事ビューが既定で、フィード一覧はヘッダから開く引き出しになる
+ * （docs/UX.md「画面構成（スマホ）」）。左ペインを常に出しておける幅が無いため。
+ */
+const compact = useCompact();
+const drawerOpen = ref(false);
+
+// 画面が広くなったら引き出しは用済み。左ペインが常に出る側に切り替わるので、
+// 開いたままにしておくと重なりだけが残る
+watch(compact, (narrow) => {
+  if (!narrow) drawerOpen.value = false;
+});
+
+/** 一覧から記事を選んだら引き出しは閉じる。一覧は移動手段であって選択画面ではない */
+function selectEntryIn(feedId: number, entryId: number): void {
+  feeds.selectEntryIn(feedId, entryId);
+  drawerOpen.value = false;
+}
+
+function openManager(): void {
+  drawerOpen.value = false;
+  activeOverlay.value = 'subscriptions';
+}
+
 // オーバーレイは「いま何が開いているか」で持つ。ピン一覧（M6）が増えたときに
 // 表示中フラグを増やさずに済ませるため
 const activeOverlay = ref<'help' | 'subscriptions' | 'pins' | null>(null);
@@ -37,6 +63,13 @@ const currentPinned = computed(() => {
   const url = feeds.currentEntry?.url;
   return url !== null && url !== undefined && pins.has(url);
 });
+
+/**
+ * 境界にいるか（docs/UX.md「境界でのボタン変化」）。ボタンの位置は動かさず、
+ * ラベルだけがここで変わる。j / k と同じで、押す側は境界を意識しなくてよい
+ */
+const atFirstEntry = computed(() => feeds.entryIndex <= 0);
+const atLastEntry = computed(() => feeds.entryIndex >= feeds.entryCount - 1);
 
 /** 手動更新やピンのように、画面が変わらないことのある操作の結果を出す場所 */
 const notice = ref<string | null>(null);
@@ -289,18 +322,31 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
 </script>
 
 <template>
+  <!--
+    広い画面は左ペイン + 記事の 2 列（docs/UX.md「画面構成（PC）」）。
+    狭い画面は記事ビューだけを出し、フィード一覧はヘッダから開く
+    （docs/UX.md「画面構成（スマホ）」）
+  -->
   <div
-    class="grid h-dvh grid-cols-[18rem_1fr] bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100"
+    class="h-dvh bg-white text-neutral-900 md:grid md:grid-cols-[18rem_1fr] dark:bg-neutral-950 dark:text-neutral-100"
   >
+    <!--
+      狭い画面では記事ビューに重ねる引き出しにする。開いていない間は組み立てない
+      （記事送りのたびに、見えていない一覧の再描画に付き合わされないように）
+    -->
     <FeedList
+      v-if="!compact || drawerOpen"
+      :class="compact ? 'fixed inset-0 z-20 bg-white dark:bg-neutral-950' : ''"
       :feeds="feeds.feeds"
       :current-feed-id="feeds.currentFeed?.id ?? null"
       :current-entry-id="feeds.currentEntry?.id ?? null"
       :entries-of="feeds.entriesFor"
       :pinned-urls="pins.urls"
-      @select-entry="feeds.selectEntryIn"
-      @manage="activeOverlay = 'subscriptions'"
+      :compact="compact"
+      @select-entry="selectEntryIn"
+      @manage="openManager"
       @unsubscribe="unsubscribeFeed"
+      @close="drawerOpen = false"
     />
 
     <main class="flex h-dvh flex-col overflow-hidden">
@@ -347,16 +393,49 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
       <template v-else>
         <!-- 現在位置はヘッダに固定する。本文と一緒にスクロールして消えないように -->
         <header
-          class="shrink-0 border-b border-neutral-300 px-6 py-1.5 text-xs text-neutral-500 dark:border-neutral-700"
+          class="shrink-0 border-b border-neutral-300 text-xs text-neutral-500 dark:border-neutral-700"
           data-testid="position"
         >
-          ({{ feeds.entryIndex + 1 }}/{{ feeds.entryCount }}) {{ feedTitle }}
+          <!-- 狭い画面ではヘッダ全体がフィード一覧の入口になる（docs/UX.md） -->
+          <button
+            v-if="compact"
+            type="button"
+            class="flex w-full items-center gap-2 px-3 py-2 text-left"
+            data-testid="open-feed-list"
+            @click="drawerOpen = true"
+          >
+            <span aria-hidden="true">☰</span>
+            <span class="truncate">{{ feedTitle }}</span>
+            <span class="ml-auto shrink-0 tabular-nums"
+              >({{ feeds.entryIndex + 1 }}/{{ feeds.entryCount }})</span
+            >
+          </button>
+          <span v-else class="block px-6 py-1.5">
+            ({{ feeds.entryIndex + 1 }}/{{ feeds.entryCount }}) {{ feedTitle }}
+          </span>
         </header>
         <EntryReader
           ref="reader"
           class="min-h-0 flex-1"
           :entry="feeds.currentEntry"
           :pinned="currentPinned"
+          @next="feeds.nextEntry()"
+          @prev="feeds.prevEntry()"
+        />
+        <!--
+          スマホのボトムバー。境界でラベルだけが変わる（docs/UX.md）。
+          押す操作は j / k と同じ経路を通るので、キーとの食い違いが生まれない
+        -->
+        <BottomBar
+          v-if="compact"
+          :at-first-entry="atFirstEntry"
+          :at-last-entry="atLastEntry"
+          :pinned="currentPinned"
+          :can-open="Boolean(feeds.currentEntry?.url)"
+          @prev="feeds.prevEntry()"
+          @next="feeds.nextEntry()"
+          @open="openOriginal()"
+          @pin="togglePin()"
         />
       </template>
     </main>

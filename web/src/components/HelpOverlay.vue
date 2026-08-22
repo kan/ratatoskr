@@ -62,7 +62,22 @@ defineEmits<{ close: [] }>();
     <div
       class="max-h-full w-full max-w-lg overflow-y-auto rounded bg-white p-5 text-sm shadow-lg dark:bg-neutral-900"
     >
-      <h2 class="text-base font-bold">キーバインド</h2>
+      <div class="flex items-start justify-between gap-3">
+        <h2 class="text-base font-bold">キーバインド</h2>
+        <!--
+          **触る画面にはキーが無い。** 初回起動では自動で開くので（docs/UX.md）、
+          閉じる手立てが Esc と背景のわずかな余白しかないと、スマホの初回起動が
+          そこで詰まる
+        -->
+        <button
+          type="button"
+          class="shrink-0 text-xs text-neutral-500 hover:underline"
+          data-testid="close-help"
+          @click="$emit('close')"
+        >
+          閉じる（Esc）
+        </button>
+      </div>
       <template v-for="group in groups" :key="group.label">
         <h3 class="mt-4 text-xs font-bold text-neutral-500">{{ group.label }}</h3>
         <dl class="mt-1">
@@ -78,7 +93,7 @@ defineEmits<{ close: [] }>();
           </div>
         </dl>
       </template>
-      <p class="mt-5 text-xs text-neutral-500">Esc または ? で閉じる</p>
+      <p class="mt-5 text-xs text-neutral-500">Esc または ? でも閉じる</p>
     </div>
   </div>
 </template>
