@@ -1,0 +1,11 @@
+{
+  // Service Worker は DOM ではなく WebWorker の型で見る（window も document も無い）。
+  // 本体の tsconfig.json は src/sw.ts を除外してあるので、こちらが唯一の検査になる
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "WebWorker"]
+  },
+  // 継承した exclude（src/sw.ts）を打ち消す。残すと検査対象が空になる
+  "exclude": [],
+  "include": ["src/sw.ts"]
+}

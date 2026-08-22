@@ -1,4 +1,5 @@
 import type { Entry } from '@shared/types';
+import { PREFETCH_IMAGE_CACHE } from '@/lib/sw-policy';
 
 /**
  * 画像の先読み（docs/DESIGN.md §6「画像の先読みは別扱い」）。
@@ -13,13 +14,16 @@ import type { Entry } from '@shared/types';
  *
  * **温まるのは 2 箇所ある。** `<img>` が読むのはブラウザの HTTP キャッシュで、
  * Cache API ではない（Cache API は Service Worker がリクエストを横取りして初めて
- * 効く）。M7 の時点で記事送りを速くしているのは前者で、Cache API への書き込みは
- * M8 で Service Worker を入れたときにオフラインでも画像が出るようにするための布石。
- * fetch 1 回で両方温まるので、分けて取りに行く必要はない。
+ * 効く）。記事送りを速くしているのは前者で、Cache API に書いた分は Service Worker
+ * （src/sw.ts）がオフラインで画像を出すために読む。fetch 1 回で両方温まるので、
+ * 分けて取りに行く必要はない。
  */
 
-/** Cache API の名前。E2E からも参照する（名前がずれると検証が空振りする） */
-export const CACHE_NAME = 'ratatoskr-images-v1';
+/**
+ * Cache API の名前。**Service Worker（src/sw.ts）と共有している**ので、
+ * 定義は lib/sw-policy.ts に置いてある。E2E からも同じものを参照する
+ */
+export const CACHE_NAME = PREFETCH_IMAGE_CACHE;
 
 /** 同時に取りに行く数。相手のサーバに配慮して広げない（docs/DESIGN.md §6） */
 const CONCURRENCY = 4;

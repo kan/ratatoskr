@@ -14,15 +14,40 @@ export default defineConfig({
   workers: 4,
   reporter: 'list',
   use: {
-    baseURL: 'http://localhost:5173',
     // retries が 0 なので on-first-retry では何も残らない。落ちた回のトレースを残す
     trace: 'retain-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-  webServer: {
-    command: 'pnpm -C web dev',
-    url: 'http://localhost:5173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 60_000,
-  },
+  projects: [
+    {
+      name: 'chromium',
+      testIgnore: /pwa\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], baseURL: 'http://localhost:5173' },
+    },
+    {
+      /**
+       * Service Worker は本番ビルドにだけ登録される（web/src/main.ts）。開発サーバでは
+       * 動かないので、組み上げた dist を preview で配って当てる。
+       * オフライン起動と画像の控えは、ここでしか壊れに気付けない
+       */
+      name: 'pwa',
+      testMatch: /pwa\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], baseURL: 'http://localhost:4173' },
+    },
+  ],
+  webServer: [
+    {
+      command: 'pnpm -C web dev',
+      url: 'http://localhost:5173',
+      reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+    },
+    {
+      // 組み直してから配る。古い dist に当てると、直したはずの Service Worker が
+      // 試されないまま緑になる
+      command: 'pnpm build && pnpm -C web preview --port 4173 --strictPort',
+      url: 'http://localhost:4173',
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+  ],
 });

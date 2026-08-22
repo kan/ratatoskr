@@ -20,5 +20,14 @@
       "@shared/*": ["../shared/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.vue", "vite.config.ts", "../shared/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.vue",
+    "vite.config.ts",
+    "vite.sw.config.ts",
+    "../shared/**/*.ts"
+  ],
+  // Service Worker は WebWorker の型で見る（tsconfig.sw.json）。ここに混ぜると
+  // window がある前提で通ってしまう
+  "exclude": ["src/sw.ts"]
 }
