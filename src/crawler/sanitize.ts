@@ -121,6 +121,25 @@ function embedLink(src: string | null, baseUrl: string | null): string | null {
   return `<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`;
 }
 
+/**
+ * 遅延読み込みが本物の URL を隠している属性。よく使われる順に見る。
+ *
+ * 多くのサイトは `src` にプレースホルダ（読み込み中の画像）を置き、実体を data 属性に
+ * 持たせてスクリプトで差し替える。**こちらはスクリプトを動かさないので、そのまま取ると
+ * 記事中の画像が全てプレースホルダになる**（デイリーポータルZ のスマホ版で実際に踏んだ）。
+ * data 属性側は幅の抑えられた版を指していることも多く、拾う方が転送量の面でも良い。
+ */
+const LAZY_SRC_ATTRS = ['data-src', 'data-original', 'data-lazy-src'];
+
+/** 遅延読み込みで隠された本物の URL。無ければ null */
+function lazySrcOf(element: Element): string | null {
+  for (const name of LAZY_SRC_ATTRS) {
+    const value = element.getAttribute(name)?.trim();
+    if (value !== undefined && value !== '') return value;
+  }
+  return null;
+}
+
 /** ホワイトリストを 1 要素に当てる。sanitizeHtml と sanitizeWithin で共有する */
 function applyPolicy(element: Element, baseUrl: string | null): void {
   const tag = element.tagName.toLowerCase();
@@ -141,6 +160,13 @@ function applyPolicy(element: Element, baseUrl: string | null): void {
     // 未知のタグは中身だけ残す。span/font のような装飾は消えて本文は残る
     element.removeAndKeepContent();
     return;
+  }
+
+  // 属性を絞る前に差し替える。この後の走査で src として絶対 URL に直り、
+  // data 属性自体はホワイトリストに無いので落ちる
+  if (tag === 'img') {
+    const lazy = lazySrcOf(element);
+    if (lazy !== null) element.setAttribute('src', lazy);
   }
 
   const allowed = ALLOWED_ATTRS[tag] ?? [];

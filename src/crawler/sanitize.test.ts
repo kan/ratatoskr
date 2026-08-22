@@ -71,6 +71,29 @@ describe('sanitizeHtml', () => {
     expect(out).not.toContain('href');
   });
 
+  it('遅延読み込みの img は data-src の実体を採る', async () => {
+    // スクリプトを動かさないので、src のプレースホルダをそのまま採ると
+    // 記事中の画像が全て「読み込み中」の絵になる（デイリーポータルZ で踏んだ）
+    const out = await sanitizeHtml(
+      '<img src="/img/loading.png" data-src="/files/real.jpg" class="lazy-image">',
+      BASE,
+    );
+    expect(out).toBe('<img src="https://example.com/files/real.jpg">');
+  });
+
+  it('data-original / data-lazy-src も見る', async () => {
+    const original = await sanitizeHtml('<img src="/loading.gif" data-original="/a.jpg">', BASE);
+    expect(original).toBe('<img src="https://example.com/a.jpg">');
+
+    const lazySrc = await sanitizeHtml('<img src="/loading.gif" data-lazy-src="/b.jpg">', BASE);
+    expect(lazySrc).toBe('<img src="https://example.com/b.jpg">');
+  });
+
+  it('遅延読み込みでない img の src は触らない', async () => {
+    const out = await sanitizeHtml('<img src="/files/real.jpg" data-foo="/other.jpg">', BASE);
+    expect(out).toBe('<img src="https://example.com/files/real.jpg">');
+  });
+
   it('img の width / height を落とす', async () => {
     const out = await sanitizeHtml('<img src="/a.png" width="800" height="600" alt="図">', BASE);
     expect(out).not.toContain('width');
