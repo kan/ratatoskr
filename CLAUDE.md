@@ -111,6 +111,9 @@ Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCE
 - `pnpm db:console` は SQL を引数で渡す: `pnpm db:console "SELECT * FROM feeds"`
 - cron のローカル発火: `curl "http://localhost:8787/cdn-cgi/local/scheduled"`
 - `pnpm test:e2e` は Playwright を入れる M3 まで存在しない
+- **Service Worker は本番ビルドにだけ登録する。** `pnpm dev` では登録されない（Vite が
+  モジュールを都度配るので、間にキャッシュを挟むと何が古いのか分からなくなる）。
+  オフライン動作を手元で見るときは `pnpm build && pnpm -C web preview`
 - **Workers AI（`env.AI`）は必ずリモートに繋ぎに行く。** `wrangler dev` でもローカル実行はされず、
   Cloudflare のアカウントに接続する（`wrangler login` 済みであること）。テストでは
   `vitest.config.ts` の `remoteBindings: false` で無効にしてあるので、テストから実際に
@@ -176,7 +179,10 @@ Claude Code が間違えやすい点です。
 - **画像は遅延読み込みしない。** 先読みウィンドウで事前に温めておくのが方針（`docs/DESIGN.md` の先読み節）。
   ただし **`<img>` が読むのは HTTP キャッシュで、Cache API ではない**（Cache API は Service Worker が
   リクエストを横取りして初めて効く）。`fetch` 1 回で両方温まるので、記事送りを速くしているのは前者、
-  Cache API への書き込みは M8 のオフライン用という関係になっている
+  Cache API に書いた分は Service Worker（`web/src/sw.ts`）がオフラインで画像を出すために読む
+- **Service Worker とページで共有する取り決めは `web/src/lib/sw-policy.ts` に置く。** キャッシュ名と
+  要求の振り分けが両側に散ると、先読みの温め先と読み出し先がずれても誰も気付けない。
+  `sw.ts` は別ビルド（`web/vite.sw.config.ts`）で `dist/sw.js` に固定名で出す
 
 ## コーディング規約
 
