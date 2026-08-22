@@ -1,9 +1,10 @@
 # ローカル開発用の設定の雛形。`cp .dev.vars.example .dev.vars` して使う
 # （.dev.vars は git 管理外。個人の値はそちらに置く）
 
-# localhost 宛の要求だけ Cloudflare Access の検証を飛ばす。
-# 本番に紛れ込んでも効かない（src/lib/auth.ts）
-ACCESS_DEV_BYPASS=true
+# ここに書けるのは wrangler.jsonc の secrets.required に宣言した名前だけ。
+# **宣言の無い名前は .dev.vars に書いても Worker に注入されない。**
+# localhost の検証を飛ばす ACCESS_DEV_BYPASS が secrets.required に無いのは、
+# 本番に渡したくないため。あれは pnpm dev が --var で渡す（package.json）
 
 # バイパスするので中身は使われない。型の生成と、起動時の
 # 「required secrets が無い」警告を黙らせるために置く。

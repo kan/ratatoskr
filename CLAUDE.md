@@ -83,13 +83,20 @@ M0 の実装で判明した、環境まわりの制約と手順。
 ```bash
 pnpm install       # esbuild / workerd の postinstall 許可は pnpm-workspace.yaml にコミット済み
 pnpm db:migrate    # .wrangler/ は未コミット。クローン直後のローカル D1 は空
-cp .dev.vars.example .dev.vars   # Access の JWT 検証を飛ばす（後述）
+cp .dev.vars.example .dev.vars   # Access の secret を埋める（後述）
+cp .env.example .env             # デプロイ後は Workers AI の接続にも要る（後述）
 pnpm dev
 ```
 
-`.dev.vars` は git 管理外なので、クローン直後は雛形から作る。これが無いと
-`/api/*` が全て 401 になる。バイパスは **localhost 宛の要求にしか効かない**ので、
-デプロイ先に紛れ込んでも認証が素通りすることはない（`src/lib/auth.ts`）。
+`.dev.vars` は git 管理外なので、クローン直後は雛形から作る。**ここに書けるのは
+`wrangler.jsonc` の `secrets.required` に宣言した名前だけで、宣言の無い名前は
+書いても Worker に注入されない**（黙って `undefined` になる）。
+
+Access の検証を飛ばす `ACCESS_DEV_BYPASS` を `secrets.required` に載せていないのは、
+デプロイに含めたくないため。**あれは `pnpm dev` が `--var` で渡している**
+（`package.json`）。渡らないと `/api/*` が全て 401 になる。バイパスは
+**localhost 宛の要求にしか効かない**ので、デプロイ先に紛れ込んでも認証が
+素通りすることはない（`src/lib/auth.ts`）。
 
 **アカウント固有の値は追跡させない**（このリポジトリは公開）。`wrangler.jsonc` には
 D1 の `database_id` も Access の値も書かない。全て `.prod.vars`（git 管理外）に置き、
@@ -122,7 +129,10 @@ Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCE
   モジュールを都度配るので、間にキャッシュを挟むと何が古いのか分からなくなる）。
   オフライン動作を手元で見るときは `pnpm build && pnpm -C web preview`
 - **Workers AI（`env.AI`）は必ずリモートに繋ぎに行く。** `wrangler dev` でもローカル実行はされず、
-  Cloudflare のアカウントに接続する（`wrangler login` 済みであること）。テストでは
+  Cloudflare のアカウントに接続する（`wrangler login` 済みであること）。
+  **接続先はデプロイ済みの workers.dev ホスト名なので、そこに Access を掛けた後は
+  ローカル開発にも Access の Service Token が要る**（`.env` に置く。README「開発」）。
+  無いと `pnpm dev` が「Failed to start the remote proxy session」で止まる。テストでは
   `vitest.config.ts` の `remoteBindings: false` で無効にしてあるので、テストから実際に
   呼ぶことはできない（`src/crawler/choose.test.ts` のように差し替えて呼ぶ）
 - **`wrangler.jsonc` にアカウント固有の値を書かない。** デプロイ時に

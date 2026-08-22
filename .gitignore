@@ -2,6 +2,8 @@ node_modules/
 web/dist/
 .wrangler/
 .dev.vars
+# wrangler CLI 自身に渡す環境変数（Access の Service Token）。Worker の変数ではない
+.env
 # 本番の設定に差し込むアカウント固有の値（D1_DATABASE_ID）と、それを差し込んだ生成物
 .prod.vars
 wrangler.deploy.json

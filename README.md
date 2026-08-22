@@ -27,12 +27,43 @@ Cloudflare Workers (Static Assets) / D1 / Cron Triggers / Vue 3 + TypeScript / V
 
 ```bash
 pnpm install
-cp .dev.vars.example .dev.vars   # ローカルは Access の検証を飛ばす
+cp .dev.vars.example .dev.vars   # Access の secret を埋める（検証を飛ばすのは pnpm dev の --var）
+cp .env.example .env             # Workers AI の接続に要る（下記。デプロイ後だけ）
 pnpm db:migrate                  # ローカル D1 にスキーマを適用
 pnpm dev                         # vite(5173) と wrangler dev(8787) を同時起動
 ```
 
 画面は http://localhost:5173 を開く。`/api` は 8787 の Worker にプロキシされる（本番は同一オリジン）。
+
+### ローカル開発にも Access の資格情報が要る
+
+**一度デプロイして Access を掛けた後は、`pnpm dev` にも Service Token が要る。**
+
+```
+✘ [ERROR] Failed to start the remote proxy session. Error reloading remote server:
+  The domain "ratatoskr.<subdomain>.workers.dev" is behind Cloudflare Access, but no
+  Access Service Token credentials were found and the current environment is non-interactive.
+```
+
+Workers AI（`env.AI`）はローカル実行されず必ずリモートに繋ぐが、その接続先が
+**デプロイ済みの workers.dev ホスト名**で、そこに Access を掛けてあるため、
+ローカルの wrangler が自分の Worker の入口で止められる。`wrangler login` は
+関係ない（あれは Cloudflare API の認可。Access は HTTP の関門なので別経路）。
+
+1. Zero Trust → **Access → Service Auth → Service Tokens → Create Service Token**。
+   名前は `wrangler-dev` など。**Client Secret はこの一度しか表示されない**
+2. `cp .env.example .env` して、出た値を `CLOUDFLARE_ACCESS_CLIENT_ID` と
+   `CLOUDFLARE_ACCESS_CLIENT_SECRET` に入れる（`.env` は git 管理外。
+   Worker に渡る変数ではないので `.dev.vars` とは別のファイル）
+3. `ratatoskr` の Access アプリに、**Action = Service Auth**、
+   Include = Service Token → `wrangler-dev` のポリシーを足す
+
+**このトークンは本番の `/api/*` にも到達できる**（Worker 側は JWT の `aud` しか見ないので、
+人間のログインと区別しない）。手元から出さないこと。
+
+`cloudflared access login` でも通せるが、`pnpm dev` は concurrently 経由で
+子プロセスの stdio が pipe になり、wrangler が「非対話」と判断してその経路に入らない。
+Service Token なら対話・非対話を問わない。
 
 | コマンド                | 内容                               |
 | ----------------------- | ---------------------------------- |

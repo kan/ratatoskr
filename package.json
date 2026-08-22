@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -n vite,worker -c cyan,magenta \"pnpm -C web dev\" \"wrangler dev\"",
+    "dev": "concurrently -k -n vite,worker -c cyan,magenta \"pnpm -C web dev\" \"wrangler dev --var ACCESS_DEV_BYPASS:true\"",
     "build": "pnpm -C web build",
     "deploy": "pnpm build && node scripts/deploy-config.mjs && wrangler deploy -c wrangler.deploy.json --secrets-file .wrangler/deploy-secrets.env",
     "db:migrate": "wrangler d1 migrations apply ratatoskr --local",
