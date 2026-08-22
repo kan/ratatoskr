@@ -78,17 +78,32 @@ export async function scanCandidates(html: string): Promise<Candidate[]> {
 
   let opaqueDepth = 0;
   let linkDepth = 0;
-  let paragraphDepth = 0;
+  let inParagraph = false;
   /** いま開いている段落の文字数 */
   let paragraphText = 0;
 
+  /**
+   * 開いている段落を締めて加点する。
+   *
+   * **`</p>` を当てにしない。** HTML5 では p の終了タグを省いてよく（次のブロックが
+   * 始まった時点で閉じる）、実際に省くサイトがある。HTMLRewriter は木を組み立てない
+   * ので暗黙の終了タグはほとんど飛んで来ず、`</p>` だけを頼りにすると加点が丸ごと
+   * 落ちる。blog.jxck.io の記事ページで候補が 1 つも出ない形で踏んだ。
+   *
+   * 代わりに「次の段落が始まったとき」「入れ物が開いた / 閉じたとき」に締める。
+   * どの時点でも、加点先は**そのとき開いている入れ物**なので取り違えない。
+   */
   function creditParagraph(): void {
-    if (paragraphText < MIN_PARAGRAPH) return;
+    const text = paragraphText;
+    paragraphText = 0;
+    inParagraph = false;
+    if (text < MIN_PARAGRAPH) return;
+
     // 直接の入れ物に満額、その 1 つ上に半額。3 つ上には配らない
     const parent = open[open.length - 1];
     const grandparent = open[open.length - 2];
-    if (parent !== undefined) parent.paragraph += paragraphText;
-    if (grandparent !== undefined) grandparent.paragraph += paragraphText / 2;
+    if (parent !== undefined) parent.paragraph += text;
+    if (grandparent !== undefined) grandparent.paragraph += text / 2;
   }
 
   await new HTMLRewriter()
@@ -102,6 +117,9 @@ export async function scanCandidates(html: string): Promise<Candidate[]> {
     })
     .on(CANDIDATE_TAGS, {
       element(element) {
+        // 入れ物の切れ目は段落の切れ目でもある。開く前に締めておかないと、
+        // ここまでの文字が中の入れ物に加点されてしまう
+        creditParagraph();
         const node: OpenNode = {
           tag: element.tagName.toLowerCase(),
           classes: classList(element.getAttribute('class')),
@@ -114,6 +132,8 @@ export async function scanCandidates(html: string): Promise<Candidate[]> {
         countSelector(selectorCount, node);
         open.push(node);
         element.onEndTag(() => {
+          // 閉じる前に締める。順序を逆にすると、最後の段落が 1 つ外側に加点される
+          creditParagraph();
           const index = open.lastIndexOf(node);
           if (index === -1) return;
           open.splice(index, 1);
@@ -131,13 +151,11 @@ export async function scanCandidates(html: string): Promise<Candidate[]> {
     })
     .on('p', {
       element(element) {
-        // 閉じられていない p は加点されないまま終わる。数え違えるより落とす方が安全
-        paragraphDepth += 1;
-        paragraphText = 0;
+        // 前の段落が閉じられていなければ、ここで閉じたものとして締める
+        creditParagraph();
+        inParagraph = true;
         element.onEndTag(() => {
           creditParagraph();
-          paragraphDepth = Math.max(0, paragraphDepth - 1);
-          paragraphText = 0;
         });
       },
     })
@@ -154,11 +172,14 @@ export async function scanCandidates(html: string): Promise<Candidate[]> {
             node.preview = (node.preview + chunk.text.trim()).slice(0, PREVIEW_LENGTH);
           }
         }
-        if (paragraphDepth > 0) paragraphText += length;
+        if (inParagraph) paragraphText += length;
       },
     })
     .transform(htmlResponse(html))
     .arrayBuffer();
+
+  // 文書の終わりで開いたままの段落も締める（入れ物ごと閉じられていないページ）
+  creditParagraph();
 
   // 閉じられなかった要素（不正な HTML）も候補には入れる
   const nodes = [...closed, ...open];
@@ -203,8 +224,13 @@ function selectorOf(node: OpenNode): string | null {
   // <h1 id="content"> のように候補でない要素が同じ id を持つと、一意と誤って
   // 数えたうえで先に出てくる方（見出し）を掴んでしまう
   if (node.id !== null && /^[A-Za-z_-][\w-]*$/.test(node.id)) return `${node.tag}#${node.id}`;
-  if (node.classes.length === 0) return null;
-  return node.tag + node.classes.map((name) => `.${name}`).join('');
+  if (node.classes.length > 0) return node.tag + node.classes.map((name) => `.${name}`).join('');
+
+  // **class も id も持たない素の HTML はタグ名で名指しする。** class を全く使わない
+  // サイトがある（blog.jxck.io は article / section だけで組まれていて、名前が付けられず
+  // 候補が 1 つも出なかった）。文書内に 1 つしか無いことは呼び出し側が確かめるので、
+  // 残るのは article や main のように 1 つしかない入れ物だけになる
+  return node.tag;
 }
 
 function countSelector(counts: Map<string, number>, node: OpenNode): void {

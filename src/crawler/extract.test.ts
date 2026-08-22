@@ -44,6 +44,42 @@ describe('scanCandidates', () => {
     expect(body.link / body.text).toBeLessThan(0.5);
   });
 
+  /**
+   * class も id も使わず、p の閉じタグも省く書き方（blog.jxck.io がこれ）。
+   * HTML5 として妥当で、実際にこのせいで候補が 1 つも出なかった
+   */
+  const plain = (closeParagraphs: boolean): string => {
+    const end = closeParagraphs ? '</p>' : '';
+    const section = (n: number): string => `<section><h2>節 ${n}</h2>
+        <p>ここは十分な長さのある段落で、本文として数えられるべき文章が続いている。${end}
+        <p>もう一段落。こちらも本文として数えられるだけの長さを持っている文章である。${end}
+      </section>`;
+    // 節が複数あるのは実物と同じ形にするため。section は名指しできず、
+    // 1 つしか無い article が残る
+    return `<html><body><main><article>
+      <h1>題</h1>
+      ${section(1)}
+      ${section(2)}
+    </article></main></body></html>`;
+  };
+
+  it('class も id も無い入れ物は、タグ名で名指しする', async () => {
+    const candidates = await scanCandidates(plain(false));
+
+    // article は文書内に 1 つしか無いので名指しできる
+    expect(candidates[0].selector).toBe('article');
+  });
+
+  it('p の閉じタグが省かれていても段落を数える', async () => {
+    // HTMLRewriter は木を組み立てないので暗黙の終了タグはほとんど来ない。
+    // </p> だけを頼りにすると加点が丸ごと落ちる
+    const closed = await scanCandidates(plain(true));
+    const open = await scanCandidates(plain(false));
+
+    expect(open[0].score).toBe(closed[0].score);
+    expect(open[0].score).toBeGreaterThan(0);
+  });
+
   it('段落の無い文書では候補が出ない', async () => {
     const candidates = await scanCandidates(
       '<html><body><div class="nav"><a href="/a">A</a><a href="/b">B</a></div></body></html>',
