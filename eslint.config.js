@@ -11,6 +11,11 @@ export default defineConfig([
   tseslint.configs.recommended,
   pluginVue.configs['flat/recommended'],
   {
+    // 開発用のスクリプトは Node で動かす。ブラウザや Worker のグローバルとは別
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { globals: globals.node },
+  },
+  {
     // .vue は TS のプロジェクト解決に載らないため、ブラウザのグローバルを明示する
     files: ['web/**/*.vue'],
     languageOptions: {

@@ -2,6 +2,9 @@ node_modules/
 web/dist/
 .wrangler/
 .dev.vars
+# 本番の設定に差し込むアカウント固有の値（D1_DATABASE_ID）と、それを差し込んだ生成物
+.prod.vars
+wrangler.deploy.json
 *.log
 .DS_Store
 

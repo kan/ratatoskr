@@ -83,13 +83,18 @@ M0 の実装で判明した、環境まわりの制約と手順。
 ```bash
 pnpm install       # esbuild / workerd の postinstall 許可は pnpm-workspace.yaml にコミット済み
 pnpm db:migrate    # .wrangler/ は未コミット。クローン直後のローカル D1 は空
-echo 'ACCESS_DEV_BYPASS=true' > .dev.vars   # Access の JWT 検証を飛ばす（後述）
+cp .dev.vars.example .dev.vars   # Access の JWT 検証を飛ばす（後述）
 pnpm dev
 ```
 
-`.dev.vars` は git 管理外なので、クローン直後は自分で作る。これが無いと
+`.dev.vars` は git 管理外なので、クローン直後は雛形から作る。これが無いと
 `/api/*` が全て 401 になる。バイパスは **localhost 宛の要求にしか効かない**ので、
 デプロイ先に紛れ込んでも認証が素通りすることはない（`src/lib/auth.ts`）。
+
+**アカウント固有の値は追跡させない**（このリポジトリは公開）。`wrangler.jsonc` には
+D1 の `database_id` も Access の値も書かず、前者は `.prod.vars` の `D1_DATABASE_ID` を
+`scripts/deploy-config.mjs` が差し込み、後者は secret として入れる。手順は README の
+「デプロイ」を参照。
 
 Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCES で失敗する場合は
 `npm i -g pnpm` で入れてよい。
@@ -119,8 +124,10 @@ Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCE
   Cloudflare のアカウントに接続する（`wrangler login` 済みであること）。テストでは
   `vitest.config.ts` の `remoteBindings: false` で無効にしてあるので、テストから実際に
   呼ぶことはできない（`src/crawler/choose.test.ts` のように差し替えて呼ぶ）
-- `wrangler.jsonc` の `database_id` と `ACCESS_*` は `REPLACE_ME` のまま。ローカル開発には
-  影響しないが、デプロイ前に設定する
+- **`wrangler.jsonc` にアカウント固有の値を書かない。** D1 の `database_id` はデプロイ時に
+  `scripts/deploy-config.mjs` が `.prod.vars` から差し込み（生成物は `wrangler.deploy.json`）、
+  Access の 2 つは secret として入れる（名前だけ `secrets.required` に宣言してあるので、
+  `Env` の型はそこから生成される）
 
 ## 絶対に守るアーキテクチャ上の不変条件
 

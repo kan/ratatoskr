@@ -1,0 +1,12 @@
+# ローカル開発用の設定の雛形。`cp .dev.vars.example .dev.vars` して使う
+# （.dev.vars は git 管理外。個人の値はそちらに置く）
+
+# localhost 宛の要求だけ Cloudflare Access の検証を飛ばす。
+# 本番に紛れ込んでも効かない（src/lib/auth.ts）
+ACCESS_DEV_BYPASS=true
+
+# バイパスするので中身は使われない。型の生成と、起動時の
+# 「required secrets が無い」警告を黙らせるために置く。
+# 本番の値は secret として入れる（README「デプロイ」）
+ACCESS_TEAM_DOMAIN=example.cloudflareaccess.com
+ACCESS_AUD=local-dev

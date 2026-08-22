@@ -17,12 +17,14 @@
     "run_worker_first": ["/api/*"]
   },
 
+  // database_id はここに書かない。**このリポジトリは公開なので、アカウント固有の値を
+  // 追跡させない。** デプロイ時に scripts/deploy-config.mjs が .prod.vars（git 管理外）の
+  // D1_DATABASE_ID を差し込んだ設定を .wrangler/ に書き出し、そちらを使う。
+  // ローカル開発とテストは id を要らないので、この設定のままで動く
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "ratatoskr",
-      // `wrangler d1 create ratatoskr` の出力で置き換える
-      "database_id": "REPLACE_ME",
       "migrations_dir": "migrations"
     }
   ],
@@ -47,10 +49,16 @@
     "enabled": true
   },
 
-  "vars": {
-    // Cloudflare Access の検証に使う。値は本番の設定に合わせる
-    "ACCESS_TEAM_DOMAIN": "REPLACE_ME.cloudflareaccess.com",
-    "ACCESS_AUD": "REPLACE_ME"
+  // Cloudflare Access の検証に使う 2 つは vars に置かない。どちらもアカウント固有の値なので
+  // **secret として入れる**（`wrangler secret put ACCESS_AUD`）。
+  //   - vars に書くと、公開リポジトリに自分のチーム名とアプリ ID が残る
+  //   - vars はデプロイのたびに設定ファイルで上書きされるが、secret は消えない
+  //
+  // ここに名前だけ挙げておくと、Env の型がこの宣言から作られ（.dev.vars の中身に
+  // 依存しなくなる）、ローカルで足りないときは wrangler が警告する。
+  // ローカルの値は .dev.vars（git 管理外）に置く。README「デプロイ」を参照
+  "secrets": {
+    "required": ["ACCESS_TEAM_DOMAIN", "ACCESS_AUD"]
   },
 
   "dev": {

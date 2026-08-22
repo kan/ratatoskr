@@ -27,8 +27,9 @@ Cloudflare Workers (Static Assets) / D1 / Cron Triggers / Vue 3 + TypeScript / V
 
 ```bash
 pnpm install
-pnpm db:migrate   # ローカル D1 にスキーマを適用
-pnpm dev          # vite(5173) と wrangler dev(8787) を同時起動
+cp .dev.vars.example .dev.vars   # ローカルは Access の検証を飛ばす
+pnpm db:migrate                  # ローカル D1 にスキーマを適用
+pnpm dev                         # vite(5173) と wrangler dev(8787) を同時起動
 ```
 
 画面は http://localhost:5173 を開く。`/api` は 8787 の Worker にプロキシされる（本番は同一オリジン）。
