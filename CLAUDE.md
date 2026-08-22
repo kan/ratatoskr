@@ -37,6 +37,7 @@
 ├── migrations/         # D1 マイグレーション。連番 + 説明的な名前
 ├── src/                # Worker 側
 │   ├── index.ts        # エントリポイント。fetch と scheduled の両ハンドラ
+│   ├── retention.ts    # 保持期間による記事削除（1 日 1 回の cron）
 │   ├── api/            # API ハンドラ。1 エンドポイント 1 ファイル
 │   ├── crawler/        # フィード取得・パース・サニタイズ・保存
 │   ├── db/             # D1 クエリ。SQL はここに閉じ込める
