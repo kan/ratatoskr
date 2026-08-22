@@ -79,6 +79,9 @@ export interface RequestFacts {
  */
 const CACHEABLE_API: ReadonlySet<string> = new Set(['/api/bootstrap']);
 
+/** 拡張子で終わるパス。/manifest.json や /favicon.svg を指す */
+const FILE_PATH = /\.[a-z0-9]+$/i;
+
 export function routeFor(facts: RequestFacts): SwRoute {
   // **書き込みは絶対に握らない。** 既読とピンの送信は keepalive / sendBeacon で
   // 離脱後も届くことを当てにしている（CLAUDE.md の不変条件 3）。間に入ると
@@ -101,9 +104,14 @@ export function routeFor(facts: RequestFacts): SwRoute {
   if (url.pathname.startsWith('/api/')) {
     return CACHEABLE_API.has(url.pathname) ? 'api' : 'bypass';
   }
-  if (facts.mode === 'navigate') return 'shell';
   // Vite が出す /assets/index-<hash>.js は中身が変わらない。取りに行く必要が無い
   if (url.pathname.startsWith('/assets/')) return 'asset';
+
+  // ナビゲーションはアプリシェルから出す。ただし**拡張子の付いたパスは除く**。
+  // /manifest.json や /icon-192.png をアドレス欄から直接開くのもナビゲーション要求で、
+  // シェル扱いにするとその中身が index.html の代わりに控えられる（/api/opml と同じ罠）。
+  // この画面はパスを持たない（どのパスで開いても同じ HTML）ので、除いて困るものは無い
+  if (facts.mode === 'navigate') return FILE_PATH.test(url.pathname) ? 'static' : 'shell';
   return 'static';
 }
 

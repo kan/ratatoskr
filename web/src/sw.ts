@@ -30,6 +30,12 @@ import {
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
 
+/**
+ * 容量が尽きて画像を置けなかったときに、古い方から捨てる枚数。
+ * 上限（IMAGE_LIMIT）の 1 割ほど。次の 1 枚が入る場所が空けばよい
+ */
+const EVICT_ON_FULL = 15;
+
 sw.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
@@ -132,7 +138,7 @@ sw.addEventListener('fetch', (event) => {
       event.respondWith(cacheFirst(request, ASSET_CACHE));
       return;
     case 'image':
-      event.respondWith(image(request));
+      event.respondWith(image(request, event));
       return;
   }
 });
@@ -176,15 +182,22 @@ async function cacheFirst(request: Request, cacheName: string): Promise<Response
  * あちらが持っていて、こちらが書くと二重に抱えることになるので読むだけにする。
  * ウィンドウから外れて捨てられた分は、こちら側の控えが受け持つ。
  */
-async function image(request: Request): Promise<Response> {
+async function image(request: Request, event: FetchEvent): Promise<Response> {
   const cache = await caches.open(IMAGE_CACHE);
+
+  // **控える仕事は waitUntil に預ける。** 応答を返した時点で Service Worker は
+  // 止められうるので、投げっぱなしにすると書き込みごと落とされる。
+  // 落ちても画像は出るぶん、気付けない形で控えだけが虫食いになる
+  const keep = (response: Response): void => {
+    event.waitUntil(store(cache, request, response));
+  };
 
   const warmed = await caches.match(request, { cacheName: PREFETCH_IMAGE_CACHE });
   if (warmed !== undefined) {
     // **こちらにも写しておく。** 先読みはウィンドウから外れた画像を消すので、
     // 写さないとオフラインで k を押して戻った先の画像が出ない（読み終えた記事の
     // 画像は必ずウィンドウの外にある）
-    void store(cache, request, warmed.clone());
+    keep(warmed.clone());
     return warmed;
   }
 
@@ -193,24 +206,33 @@ async function image(request: Request): Promise<Response> {
     // 参照したものを入れ直して最後尾へ送る。keys() の順序がそのまま
     // 「最後に使った順」になり、先頭から捨てるだけで LRU になる
     // （put は同じ key の記録を置き換えたうえで末尾に積み直す。実測で確認した）
-    void store(cache, request, cached.clone());
+    keep(cached.clone());
     return cached;
   }
 
   const response = await fetch(request);
   // 記事の画像は別のオリジンから no-cors で来るので opaque（status 0）になる。
   // ok を見るだけだと 1 枚も残らない
-  if (response.ok || response.type === 'opaque') void store(cache, request, response.clone());
+  if (response.ok || response.type === 'opaque') keep(response.clone());
   return response;
 }
 
 /** 画像を控えて、上限を超えた分を古い順に捨てる */
 async function store(cache: Cache, request: Request, response: Response): Promise<void> {
   // 先に消してから置かない。置く方が失敗したときに、既に持っていた控えまで失う
-  if (!(await put(cache, request, response))) return;
+  if (await put(cache, request, response)) {
+    await drop(cache, overflowing(await cache.keys(), IMAGE_LIMIT));
+    return;
+  }
 
-  const keys = await cache.keys();
-  await Promise.all(overflowing(keys, IMAGE_LIMIT).map((key) => cache.delete(key)));
+  // **置けなかったときこそ削る。** 失敗の主因は容量超過で、そこで戻ると次の put も
+  // 同じ理由で失敗し、キャッシュは満杯のまま二度と入れ替わらなくなる。
+  // 枚数は上限内なので上限までの削りでは場所が空かない。古い方から少しだけ捨てる
+  await drop(cache, (await cache.keys()).slice(0, EVICT_ON_FULL));
+}
+
+function drop(cache: Cache, keys: readonly Request[]): Promise<unknown> {
+  return Promise.all(keys.map((key) => cache.delete(key)));
 }
 
 /**

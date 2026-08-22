@@ -46,6 +46,20 @@ describe('routeFor', () => {
     ).toBe('bypass');
   });
 
+  it('アドレス欄から直接開いた静的ファイルをアプリシェルと取り違えない', () => {
+    // ナビゲーション要求で届くのはリンクを踏んだときだけではない。ブックマークや
+    // アドレス欄から /manifest.json を開くのも同じ形で来る
+    for (const path of ['/manifest.json', '/icon-192.png', '/favicon.svg']) {
+      expect(
+        routeFor(facts({ url: `${ORIGIN}${path}`, mode: 'navigate', destination: 'document' })),
+      ).toBe('static');
+    }
+    // パスを持たない画面なので、拡張子の無いものは全てシェルでよい
+    expect(
+      routeFor(facts({ url: `${ORIGIN}/whatever`, mode: 'navigate', destination: 'document' })),
+    ).toBe('shell');
+  });
+
   it('ハッシュ付きの資産は手元優先、それ以外の静的ファイルはネットワーク優先', () => {
     expect(routeFor(facts({ url: `${ORIGIN}/assets/index-abc123.js` }))).toBe('asset');
     expect(routeFor(facts({ url: `${ORIGIN}/manifest.json` }))).toBe('static');
