@@ -121,7 +121,23 @@ Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCE
 
 - `pnpm dev` は **vite(5173) と wrangler dev(8787) の 2 プロセス構成**。画面は 5173 を開き、
   `/api` は vite の proxy で 8787 に渡る。本番は同一オリジンなので、クライアントは常に
-  相対パスで `/api` を叩けばよい
+  相対パスで `/api` を叩けばよい。`strictPort` は指定していないので、5173 が埋まっていれば
+  vite は 5174 に逃げる（proxy 先の 8787 は固定なのでそのまま動く）
+- **ローカル D1 のファイル名は `database_id` から決まる。** `.wrangler/state/v3/d1/` に
+  `<hash>.sqlite` として置かれ、この hash が id ごとに違う。つまり **`wrangler.jsonc` の
+  `database_id` を変えたり外したりすると、その瞬間から空の別 DB を見に行く。**
+  手元のデータは消えていないが、古い方のファイルに置き去りになる（`database_id` を
+  元の値に戻した設定で `--local` を引けば読み出せる）。実際、アカウント固有の値を
+  git 管理外にした際に `database_id` ごと外したので、全ての開発機で一度これが起きた
+- **`--local` に `wrangler.deploy.json` を使わない。** あちらには本番の `database_id` が
+  入っているので、また別の空 DB が開く。ローカル作業は常に既定の `wrangler.jsonc`。
+  `wrangler.deploy.json` は `--remote` 用（`pnpm db:migrate:remote` と `pnpm deploy`）
+- **本番のデータを手元に持ってくる**なら
+  `wrangler d1 export ratatoskr --remote -c wrangler.deploy.json --no-schema` で抜き、
+  `INSERT INTO "feeds"` / `"entries"` の行だけを流し込む（`d1_migrations` と
+  `sqlite_sequence` はローカルの方が正しい）。`wrangler d1 execute --file` は本文の長い
+  記事で `SQLITE_TOOBIG` になるので、`.wrangler/state/v3/d1/<hash>.sqlite` へ
+  sqlite3 で直接書く方が速い。書き込み中の競合を避けるため `pnpm dev` は止めておく
 - `pnpm db:console` は SQL を引数で渡す: `pnpm db:console "SELECT * FROM feeds"`
 - cron のローカル発火: `curl "http://localhost:8787/cdn-cgi/local/scheduled"`
 - `pnpm test:e2e` は Playwright を入れる M3 まで存在しない
