@@ -574,6 +574,46 @@ describe('先読みウィンドウ', () => {
   });
 });
 
+describe('記事ビューが覆われている間の既読', () => {
+  // 引き出しやオーバーレイの下でカーソルが動くことがある（フォルダの切り替え・
+  // 購読の解除）。そのまま進めると一度も表示していない記事が既読になる
+  function twoFeeds() {
+    const feeds = useFeedsStore();
+    useEntriesStore().ingest([...entries(1, [1, 2]), ...entries(2, [3])]);
+    feeds.setFeeds([
+      feed(1, { rate: 5, folder: '開発', unreadCount: 2 }),
+      feed(2, { rate: 3, folder: 'News', unreadCount: 1 }),
+    ]);
+    feeds.enterFirstUnread();
+    return feeds;
+  }
+
+  it('覆われている間はカーソルが動いても既読にしない', () => {
+    const feeds = twoFeeds();
+    feeds.setCovered(true);
+    const before = feeds.feeds[1].unreadCount;
+
+    feeds.setFolder('News');
+    expect(feeds.currentFeed?.id).toBe(2);
+    expect(feeds.feeds[1].unreadCount).toBe(before);
+  });
+
+  it('覆いが外れた時点で既読にする', () => {
+    const feeds = twoFeeds();
+    feeds.setCovered(true);
+    feeds.setFolder('News');
+
+    feeds.setCovered(false);
+    expect(feeds.feeds[1].unreadCount).toBe(0);
+  });
+
+  it('覆われていなければ従来どおり表示した時点で既読にする', () => {
+    const feeds = twoFeeds();
+    feeds.setFolder('News');
+    expect(feeds.feeds[1].unreadCount).toBe(0);
+  });
+});
+
 describe('フォルダでの絞り込み（issue #3）', () => {
   function mixedFolders() {
     const feeds = useFeedsStore();

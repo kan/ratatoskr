@@ -27,10 +27,41 @@
     <meta name="apple-mobile-web-app-title" content="Ratatoskr" />
     <!--
       アドレスバーとステータスバーの色。画面の地色（bg-white / dark:bg-neutral-950）に
-      合わせて、明暗それぞれに出し分ける。manifest の theme_color は 1 色しか持てない
+      合わせる。manifest の theme_color は 1 色しか持てない。
+
+      **media 付きで出し分けない。** テーマは手動でも選べるので（lib/theme.ts）、
+      システム設定を見る指定のままだと、選択と食い違ったときにここだけずれる。
+      値は下のスクリプトと lib/theme.ts が書き換える
     -->
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0a0a" />
+    <meta name="theme-color" content="#ffffff" />
+    <!--
+      **保存済みのテーマを、最初の描画より前に当てる。**
+      アプリの読み込みを待つと、システムと違う設定にしている人は起動のたびに
+      一瞬だけ逆のテーマを見ることになる。
+
+      キー名と地色は web/src/lib/prefs.ts / lib/theme.ts が正。ここは同じ値を
+      持たざるを得ない（import できない位置なので）ので、食い違っていないことを
+      web/src/lib/theme.test.ts で突き合わせている。
+    -->
+    <script>
+      (() => {
+        let saved = null;
+        try {
+          saved = localStorage.getItem('ratatoskr.theme');
+        } catch {
+          // プライベートウィンドウ等で読めないことがある。その場合はシステムに従う
+        }
+        const dark =
+          saved === 'dark' ||
+          (saved !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        const root = document.documentElement;
+        root.dataset.theme = dark ? 'dark' : 'light';
+        root.style.colorScheme = dark ? 'dark' : 'light';
+        document
+          .querySelector('meta[name="theme-color"]')
+          .setAttribute('content', dark ? '#0a0a0a' : '#ffffff');
+      })();
+    </script>
     <title>Ratatoskr</title>
   </head>
   <body>

@@ -1,6 +1,16 @@
 @import 'tailwindcss';
 
 /*
+ * dark バリアントを html の data-theme に付け替える（既定は prefers-color-scheme）。
+ *
+ * **システム設定と手動の選択を 1 本の経路に揃えるため。** 解決した結果は
+ * lib/theme.ts が data-theme に置くので、CSS 側はシステムを直接見ない。
+ * media クエリのままだと、手動でライトを選んでもシステムが暗い間は
+ * dark: の指定が当たり続ける。
+ */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/*
  * 記事本文は v-html で描くのでスコープ付きスタイルが当たらない。
  * ここでグローバルに体裁を与える（docs/UX.md「記事本文のレンダリング」）。
  *

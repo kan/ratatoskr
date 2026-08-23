@@ -145,6 +145,20 @@ export const useFeedsStore = defineStore('feeds', () => {
     if (folder.value !== null && !names.includes(folder.value)) setFolder(null);
   });
 
+  /**
+   * 記事ビューが何かの下に隠れているか（狭い画面の引き出し、オーバーレイ）。
+   *
+   * **既読はここを見る。** 隠れている間にカーソルが動くことがあり
+   * （フォルダの切り替え・購読の解除は、どちらも次の未読へカーソルを移す）、
+   * そのまま進めると**一度も表示していない記事が既読になる**。取り消す手段は
+   * u しか無く、それも現在の記事にしか効かないので気付いたときには戻せない。
+   */
+  const covered = ref(false);
+
+  function setCovered(value: boolean): void {
+    covered.value = value;
+  }
+
   /** 手元に記事を持っているか。既読でも読み返せるので前方向の判定とは別に要る */
   function hasEntries(feed: Feed): boolean {
     return entriesStore.of(feed.id).length > 0;
@@ -617,10 +631,14 @@ export const useFeedsStore = defineStore('feeds', () => {
    * それに反応すると、いま座っている記事に押した u が背景取得のたびに消える。
    */
   watch(
-    currentEntry,
-    (entry) => {
+    [currentEntry, covered],
+    ([entry, isCovered]) => {
       const feed = currentFeed.value;
       if (feed === null || entry === null) return;
+      // **覆われている間は進めない。** 規則は「表示した時点で進める」なので、
+      // 記事ビューが引き出しやオーバーレイの下にある間は表示していない。
+      // 覆いが外れた時点でこの監視がもう一度走り、そこで進む
+      if (isCovered) return;
       if (entry.id === displayed) return;
       displayed = entry.id;
 
@@ -637,6 +655,7 @@ export const useFeedsStore = defineStore('feeds', () => {
     folder,
     unreadOutsideScope,
     setFolder,
+    setCovered,
     feedIndex,
     entryIndex,
     currentEntries,

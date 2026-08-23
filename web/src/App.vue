@@ -8,8 +8,9 @@ import HelpOverlay from '@/components/HelpOverlay.vue';
 import PinList from '@/components/PinList.vue';
 import SubscriptionManager from '@/components/SubscriptionManager.vue';
 import { pendingSubscription } from '@/lib/bookmarklet';
-import { isTextInput, resolveBinding, type KeyBinding } from '@/lib/keymap';
+import { isTextInput, releaseKeyFocus, resolveBinding, type KeyBinding } from '@/lib/keymap';
 import { hasSeenHelp, markHelpSeen } from '@/lib/prefs';
+import { toggleTheme, useTheme } from '@/lib/theme';
 import { useCompact } from '@/lib/viewport';
 import type { Pin } from '@shared/types';
 import { useFeedsStore } from '@/stores/feeds';
@@ -35,6 +36,23 @@ const reader = ref<InstanceType<typeof EntryReader> | null>(null);
  */
 const compact = useCompact();
 const drawerOpen = ref(false);
+
+/**
+ * 画面のテーマ。初期値だけシステム設定に従い、一度切り替えたら覚える（lib/theme.ts）。
+ * キーは割り当てない（docs/UX.md のキー表に無いものを増やさない）
+ */
+const theme = useTheme();
+
+/** 押すと何が起きるか。アイコンだけでは向きが伝わらないので文字でも持つ */
+const themeAction = computed(() =>
+  theme.value === 'dark' ? 'ライトテーマに切り替える' : 'ダークテーマに切り替える',
+);
+
+function switchTheme(event: Event): void {
+  toggleTheme();
+  // 押した後もフォーカスが残ると、Space が本文送りではなくこのボタンに効く
+  releaseKeyFocus(event);
+}
 
 // 画面が広くなったら引き出しは用済み。左ペインが常に出る側に切り替わるので、
 // 開いたままにしておくと重なりだけが残る
@@ -74,7 +92,25 @@ function takePendingSubscription(): void {
 // 表示中フラグを増やさずに済ませるため
 const activeOverlay = ref<'help' | 'subscriptions' | 'pins' | null>(null);
 
+/**
+ * 記事ビューが何かの下に隠れているか。**覆う UI を増やしたらここに足す。**
+ * 漏れると、その裏でカーソルが動いたときに表示していない記事が既読になる
+ * （stores/feeds.ts の covered）。
+ */
+const readerCovered = computed(
+  () => (compact.value && drawerOpen.value) || activeOverlay.value !== null,
+);
+
+// sync で流すのは、既読を進める側（stores/feeds.ts）が sync だから。
+// 既定の flush だと「引き出しを閉じた直後」の既読だけ 1 tick 遅れる
+watch(readerCovered, (hidden) => feeds.setCovered(hidden), { immediate: true, flush: 'sync' });
+
 const feedTitle = computed(() => feeds.currentFeed?.title ?? '');
+
+/** ヘッダに出す現在位置。読み始める前は出すものが無い */
+const position = computed(() =>
+  feeds.started ? `(${feeds.entryIndex + 1}/${feeds.entryCount})` : '',
+);
 
 /** いま読んでいる記事にピンが立っているか。本文の見出しの目印に使う */
 const currentPinned = computed(() => {
@@ -405,6 +441,59 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
       </p>
 
       <!--
+      現在位置はヘッダに固定する。本文と一緒にスクロールして消えないように。
+
+      **どの状態でも出す。** 読み終えた画面や購読ゼロの画面で消すと、狭い画面では
+      一覧を開く ☰ が、どの画面でもテーマの選択が、画面上から無くなる
+      -->
+      <header
+        class="flex shrink-0 items-center border-b border-neutral-300 text-xs text-neutral-500 dark:border-neutral-700"
+        data-testid="position"
+      >
+        <!--
+          狭い画面ではヘッダ全体がフィード一覧の入口になる（docs/UX.md）。
+          **指で押す前提の大きさにする。** 文字は本文と同じ列に並ぶ情報なので
+          小さくしてあったが、それだと実機で狙いづらい
+        -->
+        <button
+          v-if="compact"
+          type="button"
+          class="flex min-w-0 flex-1 items-center gap-2.5 px-3 py-3 text-left text-sm"
+          data-testid="open-feed-list"
+          @click="drawerOpen = true"
+        >
+          <span aria-hidden="true" class="text-lg leading-none">☰</span>
+          <span
+            v-if="stalledCount > 0"
+            class="text-amber-700 dark:text-amber-500"
+            data-testid="stalled-mark"
+            title="取得が止まっているフィードがある"
+            >!</span
+          >
+          <span class="truncate">{{ feedTitle }}</span>
+          <span class="ml-auto shrink-0 tabular-nums">{{ position }}</span>
+        </button>
+        <span v-else class="min-w-0 flex-1 truncate px-6 py-1.5">
+          {{ position }} {{ feedTitle }}
+        </span>
+        <!--
+          テーマの切り替え。**画面の右上に置く。** 読む操作ではないので目立たせず、
+          しかし探すときに迷わない場所に固定する（購読管理と同じ考え方）。
+          出すのは**切り替えた先**の印で、いまの状態ではない（押して何になるかが要る）
+        -->
+        <button
+          type="button"
+          class="shrink-0 self-stretch px-3 text-base leading-none text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100"
+          data-testid="theme-toggle"
+          :title="themeAction"
+          :aria-label="themeAction"
+          @click="switchTheme"
+        >
+          {{ theme === 'dark' ? '☀' : '☾' }}
+        </button>
+      </header>
+
+      <!--
         **読み終えたときは範囲も明かす。** フォルダで絞っていると、範囲の外に未読が
         残っていても「全て読み終えた」としか読めない。狭い画面では絞り込みの表示が
         引き出しの中なので、なぜ止まったのかが画面上のどこにも無くなる
@@ -438,40 +527,6 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
         </p>
       </div>
       <template v-else>
-        <!-- 現在位置はヘッダに固定する。本文と一緒にスクロールして消えないように -->
-        <header
-          class="shrink-0 border-b border-neutral-300 text-xs text-neutral-500 dark:border-neutral-700"
-          data-testid="position"
-        >
-          <!--
-            狭い画面ではヘッダ全体がフィード一覧の入口になる（docs/UX.md）。
-            **指で押す前提の大きさにする。** 文字は本文と同じ列に並ぶ情報なので
-            小さくしてあったが、それだと実機で狙いづらい
-          -->
-          <button
-            v-if="compact"
-            type="button"
-            class="flex w-full items-center gap-2.5 px-3 py-3 text-left text-sm"
-            data-testid="open-feed-list"
-            @click="drawerOpen = true"
-          >
-            <span aria-hidden="true" class="text-lg leading-none">☰</span>
-            <span
-              v-if="stalledCount > 0"
-              class="text-amber-700 dark:text-amber-500"
-              data-testid="stalled-mark"
-              title="取得が止まっているフィードがある"
-              >!</span
-            >
-            <span class="truncate">{{ feedTitle }}</span>
-            <span class="ml-auto shrink-0 tabular-nums"
-              >({{ feeds.entryIndex + 1 }}/{{ feeds.entryCount }})</span
-            >
-          </button>
-          <span v-else class="block px-6 py-1.5">
-            ({{ feeds.entryIndex + 1 }}/{{ feeds.entryCount }}) {{ feedTitle }}
-          </span>
-        </header>
         <EntryReader
           ref="reader"
           class="min-h-0 flex-1"
