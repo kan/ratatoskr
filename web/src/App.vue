@@ -425,15 +425,19 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
           class="shrink-0 border-b border-neutral-300 text-xs text-neutral-500 dark:border-neutral-700"
           data-testid="position"
         >
-          <!-- 狭い画面ではヘッダ全体がフィード一覧の入口になる（docs/UX.md） -->
+          <!--
+            狭い画面ではヘッダ全体がフィード一覧の入口になる（docs/UX.md）。
+            **指で押す前提の大きさにする。** 文字は本文と同じ列に並ぶ情報なので
+            小さくしてあったが、それだと実機で狙いづらい
+          -->
           <button
             v-if="compact"
             type="button"
-            class="flex w-full items-center gap-2 px-3 py-2 text-left"
+            class="flex w-full items-center gap-2.5 px-3 py-3 text-left text-sm"
             data-testid="open-feed-list"
             @click="drawerOpen = true"
           >
-            <span aria-hidden="true">☰</span>
+            <span aria-hidden="true" class="text-lg leading-none">☰</span>
             <span
               v-if="hasStalledFeeds"
               class="text-amber-700 dark:text-amber-500"

@@ -50,7 +50,7 @@ function entryClass(entry: Entry): string {
     <li v-for="(entry, index) in entries" :key="entry.id">
       <button
         type="button"
-        class="block w-full truncate border-l-2 py-1 pr-3 pl-8 text-left text-xs hover:bg-neutral-200 dark:hover:bg-neutral-800"
+        class="block w-full truncate border-l-2 py-2.5 pr-3 pl-8 text-left text-base hover:bg-neutral-200 md:py-1.5 md:text-sm dark:hover:bg-neutral-800"
         :class="entryClass(entry)"
         :data-testid="`entry-${entry.id}`"
         :data-active="entry.id === currentEntryId ? 'true' : undefined"

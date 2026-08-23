@@ -218,3 +218,37 @@
 .article-body blockquote a[href*='/status/']:empty::after {
   content: 'X のポストを開く';
 }
+
+/*
+ * 左ペインのスクロールバーを目立たなくする。
+ *
+ * 一覧は購読の数だけ縦に伸びるので、既定の太いバーが常に視界の左に居座ると、
+ * 読む場所より先にそちらへ目が行く。位置が分かれば足りるので、細く・薄くする。
+ * 色は currentColor から混ぜて、明暗どちらのテーマでも文字色に対する濃さを保つ
+ * （.article-body と同じ考え方）。
+ *
+ * 2 通り書いているのは、`scrollbar-color` を解さない WebKit 系のため。
+ * 片方しか解さないブラウザでも、どちらか一方が効く。
+ */
+.subtle-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, currentColor 25%, transparent) transparent;
+}
+
+.subtle-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.subtle-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.subtle-scrollbar::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background-color: color-mix(in srgb, currentColor 22%, transparent);
+}
+
+/* 触っている間だけ少し濃く。掴む先が分かればよいので、普段は薄いままにする */
+.subtle-scrollbar:hover::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, currentColor 38%, transparent);
+}

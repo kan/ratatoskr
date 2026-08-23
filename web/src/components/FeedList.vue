@@ -101,12 +101,23 @@ watch(
 </script>
 
 <template>
-  <nav ref="nav" class="h-full overflow-y-auto border-r border-neutral-300 dark:border-neutral-700">
+  <!--
+    overflow-hidden は見た目のためではなく、高さを決めるために要る。**スクロール
+    コンテナの自動最小高さは 0 になる**ので、これが無いとグリッドの行が中身の高さ
+    （購読の数だけ伸びる）まで広がり、h-full が画面の高さに収まらなくなる
+  -->
+  <nav
+    ref="nav"
+    class="flex h-full flex-col overflow-hidden border-r border-neutral-300 dark:border-neutral-700"
+  >
     <!--
       購読管理への入口。キーは割り当てない（docs/UX.md のキー表に無いものを増やさない）。
-      読んでいる最中に使う機能ではないので、ここに置いておけば足りる
+      **スクロールの外に置く。** 一覧は購読の数だけ伸びるので、中に入れると
+      下まで読み進めたときに入口が画面の外へ消える
     -->
-    <div class="flex items-center justify-between px-3 py-1.5 text-xs text-neutral-500">
+    <div
+      class="flex shrink-0 items-center justify-between border-b border-neutral-200 px-3 py-3 text-base text-neutral-500 md:py-2 md:text-sm dark:border-neutral-800"
+    >
       <span>Ratatoskr</span>
       <span class="flex items-center gap-3">
         <button
@@ -120,7 +131,7 @@ watch(
         <button
           v-if="compact"
           type="button"
-          class="py-1.5 hover:underline"
+          class="py-1 hover:underline"
           data-testid="close-feed-list"
           @click="$emit('close')"
         >
@@ -128,88 +139,94 @@ watch(
         </button>
       </span>
     </div>
-    <!--
-      押すと購読管理へ。直すにも解除するにもそこでしかできないので、
-      知らせと入口を分けない
-    -->
-    <button
-      v-if="stalled > 0"
-      type="button"
-      class="block w-full bg-amber-100 px-3 py-1.5 text-left text-xs text-amber-900 hover:underline dark:bg-amber-950 dark:text-amber-100"
-      data-testid="stalled-feeds"
-      @click="$emit('manage')"
-    >
-      取得が止まっているフィードが {{ stalled }} 件ある
-    </button>
 
-    <ul>
-      <li v-for="feed in feeds" :key="feed.id">
-        <div
-          class="group flex items-center hover:bg-neutral-200 dark:hover:bg-neutral-800"
-          :class="{
-            // 記事一覧が長くなるので、読んでいるフィード名は上に貼り付けておく
-            'sticky top-0 z-1 bg-neutral-200 dark:bg-neutral-800': feed.id === currentFeedId,
-          }"
-        >
-          <button
-            type="button"
-            class="flex min-w-0 flex-1 items-baseline gap-2 py-1.5 pl-3 text-left text-sm"
+    <!-- スクロールするのはここから下だけ。読んでいるフィード名の sticky もこの中で効く -->
+    <div class="subtle-scrollbar min-h-0 flex-1 overflow-y-auto">
+      <!--
+        押すと購読管理へ。直すにも解除するにもそこでしかできないので、
+        知らせと入口を分けない
+      -->
+      <button
+        v-if="stalled > 0"
+        type="button"
+        class="block w-full bg-amber-100 px-3 py-2 text-left text-sm text-amber-900 hover:underline md:py-1.5 md:text-xs dark:bg-amber-950 dark:text-amber-100"
+        data-testid="stalled-feeds"
+        @click="$emit('manage')"
+      >
+        取得が止まっているフィードが {{ stalled }} 件ある
+      </button>
+
+      <ul>
+        <li v-for="feed in feeds" :key="feed.id">
+          <div
+            class="group flex items-center hover:bg-neutral-200 dark:hover:bg-neutral-800"
             :class="{
-              'font-bold': feed.id === currentFeedId,
-              'text-neutral-500 dark:text-neutral-500': feed.unreadCount === 0,
+              // 記事一覧が長くなるので、読んでいるフィード名は上に貼り付けておく
+              'sticky top-0 z-1 bg-neutral-200 dark:bg-neutral-800': feed.id === currentFeedId,
             }"
-            :data-testid="`feed-${feed.id}`"
-            :data-active="feed.id === currentFeedId && currentEntryId === null ? 'true' : undefined"
-            :data-expanded="isExpanded(feed) ? 'true' : undefined"
-            :aria-current="feed.id === currentFeedId ? 'true' : undefined"
-            :aria-expanded="isExpanded(feed)"
-            @click="toggle(feed)"
           >
-            <span class="w-3 shrink-0 text-xs text-neutral-400 dark:text-neutral-600">
-              {{ isExpanded(feed) ? '▾' : '▸' }}
-            </span>
-            <!-- 未読 0 のフィードは (0) を出さない（docs/UX.md） -->
-            <span class="w-10 shrink-0 text-right tabular-nums">
-              {{ feed.unreadCount > 0 ? `(${feed.unreadCount})` : '' }}
-            </span>
-            <span class="truncate">{{ feed.title || feed.url }}</span>
-          </button>
-          <!--
-            読んでいる最中の解除（issue #2）。キーは割り当てない（docs/UX.md の
-            キー表に無いものを増やさない）。普段は文字色を透明にして場所だけ取り、
-            行に触れたときに出す。出したり消したりで幅が動くと、フィード名の
-            折り返し位置が変わって読みにくい
-          -->
-          <button
-            type="button"
-            class="shrink-0 px-2 py-1.5 text-xs hover:!text-red-700 focus-visible:text-neutral-500 dark:hover:!text-red-400"
-            :class="
-              compact
-                ? 'text-neutral-500 dark:text-neutral-400'
-                : 'text-transparent group-hover:text-neutral-500 dark:group-hover:text-neutral-400'
-            "
-            :data-testid="`feed-unsubscribe-${feed.id}`"
-            :title="`「${feed.title || feed.url}」の購読を解除する`"
-            @click="$emit('unsubscribe', feed.id)"
-          >
-            解除
-          </button>
-        </div>
+            <button
+              type="button"
+              class="flex min-w-0 flex-1 items-baseline gap-2 py-2.5 pl-3 text-left text-lg md:py-1.5 md:text-base"
+              :class="{
+                'font-bold': feed.id === currentFeedId,
+                'text-neutral-500 dark:text-neutral-500': feed.unreadCount === 0,
+              }"
+              :data-testid="`feed-${feed.id}`"
+              :data-active="
+                feed.id === currentFeedId && currentEntryId === null ? 'true' : undefined
+              "
+              :data-expanded="isExpanded(feed) ? 'true' : undefined"
+              :aria-current="feed.id === currentFeedId ? 'true' : undefined"
+              :aria-expanded="isExpanded(feed)"
+              @click="toggle(feed)"
+            >
+              <span class="w-3 shrink-0 text-sm text-neutral-400 md:text-xs dark:text-neutral-600">
+                {{ isExpanded(feed) ? '▾' : '▸' }}
+              </span>
+              <!-- 未読 0 のフィードは (0) を出さない（docs/UX.md） -->
+              <span class="w-14 shrink-0 text-right tabular-nums md:w-12">
+                {{ feed.unreadCount > 0 ? `(${feed.unreadCount})` : '' }}
+              </span>
+              <span class="truncate">{{ feed.title || feed.url }}</span>
+            </button>
+            <!--
+              読んでいる最中の解除（issue #2）。キーは割り当てない（docs/UX.md の
+              キー表に無いものを増やさない）。普段は文字色を透明にして場所だけ取り、
+              行に触れたときに出す。出したり消したりで幅が動くと、フィード名の
+              折り返し位置が変わって読みにくい
+            -->
+            <button
+              type="button"
+              class="shrink-0 px-3 py-2.5 text-sm hover:!text-red-700 focus-visible:text-neutral-500 md:px-2 md:py-1.5 md:text-xs dark:hover:!text-red-400"
+              :class="
+                compact
+                  ? 'text-neutral-500 dark:text-neutral-400'
+                  : 'text-transparent group-hover:text-neutral-500 dark:group-hover:text-neutral-400'
+              "
+              :data-testid="`feed-unsubscribe-${feed.id}`"
+              :title="`「${feed.title || feed.url}」の購読を解除する`"
+              @click="$emit('unsubscribe', feed.id)"
+            >
+              解除
+            </button>
+          </div>
 
-        <!--
-          読んでいる最中でないフィードには currentEntryId を渡さない。
-          そのフィードの記事が現在の記事であることは無く、渡すと記事送りのたびに
-          開いている一覧が全て再描画される
-        -->
-        <FeedEntries
-          v-if="isExpanded(feed)"
-          :feed="feed"
-          :current-entry-id="feed.id === currentFeedId ? currentEntryId : null"
-          :entries-of="entriesOf"
-          :pinned-urls="pinnedUrls"
-          @select="(entryId) => $emit('selectEntry', feed.id, entryId)"
-        />
-      </li>
-    </ul>
+          <!--
+            読んでいる最中でないフィードには currentEntryId を渡さない。
+            そのフィードの記事が現在の記事であることは無く、渡すと記事送りのたびに
+            開いている一覧が全て再描画される
+          -->
+          <FeedEntries
+            v-if="isExpanded(feed)"
+            :feed="feed"
+            :current-entry-id="feed.id === currentFeedId ? currentEntryId : null"
+            :entries-of="entriesOf"
+            :pinned-urls="pinnedUrls"
+            @select="(entryId) => $emit('selectEntry', feed.id, entryId)"
+          />
+        </li>
+      </ul>
+    </div>
   </nav>
 </template>
