@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import type { Feed, FeedErrorKind } from '@shared/types';
 import { bookmarkletFor } from '@/lib/bookmarklet';
-import { confirmUnsubscribe, isStalled } from '@/lib/subscriptions';
+import { confirmUnsubscribe, isStalled, UNCATEGORIZED } from '@/lib/subscriptions';
 import { sortByReadingOrder, useFeedsStore } from '@/stores/feeds';
 import { useSessionStore } from '@/stores/session';
 
@@ -77,17 +77,15 @@ const candidates = ref<{ url: string; title: string | null }[]>([]);
 const sorted = computed(() => sortByReadingOrder(feeds.feeds));
 
 /**
- * 既に使われているフォルダ名（issue #3）。入力欄の候補に出す。
+ * 入力欄に出すフォルダ名の候補（issue #3）。左ペインの絞り込みと同じ一覧を引く。
  *
  * **選択肢ではなく候補に留める。** 新しいフォルダはその場で作れなければならないので、
  * 自由入力は残す。datalist なら、打ち始めれば絞り込まれ、空欄で開けば一覧が出る。
- * 手で全部打つのに比べて、表記ゆれ（「開発・WEB」と「開発・web」）が生まれにくい
+ * 手で全部打つのに比べて、表記ゆれ（「開発・WEB」と「開発・web」）が生まれにくい。
+ *
+ * 未分類（空文字）は落とす。空の候補を出しても選びようがない
  */
-const folders = computed(() =>
-  [...new Set(feeds.feeds.map((feed) => feed.folder).filter((name) => name !== ''))].sort((a, b) =>
-    a.localeCompare(b, 'ja'),
-  ),
-);
+const folders = computed(() => feeds.folders.filter((name) => name !== ''));
 
 /** 取りに行っても直らない失敗をしているフィード。一括解除の対象そのもの */
 const removable = computed(() => sorted.value.filter(isRemovable));
@@ -324,7 +322,7 @@ async function onOpmlSelected(event: Event): Promise<void> {
             v-model="folder"
             type="text"
             list="folder-options"
-            placeholder="未分類"
+            :placeholder="UNCATEGORIZED"
             class="w-32 rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-800"
           />
         </label>

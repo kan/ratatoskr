@@ -1,4 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia';
+import { nextTick } from 'vue';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Entry, Feed } from '@shared/types';
 import { useEntriesStore } from './entries';
@@ -570,5 +571,142 @@ describe('先読みウィンドウ', () => {
     feeds.setFeeds([feed(1, { unreadCount: 2 })]);
 
     expect(feeds.prefetchUrls).toEqual([]);
+  });
+});
+
+describe('フォルダでの絞り込み（issue #3）', () => {
+  function mixedFolders() {
+    const feeds = useFeedsStore();
+    useEntriesStore().ingest([...entries(1, [1, 2]), ...entries(2, [3]), ...entries(3, [4])]);
+    feeds.setFeeds([
+      feed(1, { rate: 5, folder: '開発', unreadCount: 2 }),
+      feed(2, { rate: 3, folder: 'News', unreadCount: 1 }),
+      feed(3, { rate: 1, folder: '開発', unreadCount: 1 }),
+    ]);
+    feeds.enterFirstUnread();
+    return feeds;
+  }
+
+  it('絞り込むと、その外のフィードは一覧に出ない', () => {
+    const feeds = mixedFolders();
+    expect(feeds.visibleFeeds.map((f) => f.id)).toEqual([1, 2, 3]);
+
+    feeds.setFolder('開発');
+    expect(feeds.visibleFeeds.map((f) => f.id)).toEqual([1, 3]);
+  });
+
+  it('s は絞り込みの外を飛ばす（並び順は変えない）', () => {
+    const feeds = mixedFolders();
+    feeds.setFolder('開発');
+    expect(feeds.currentFeed?.id).toBe(1);
+
+    // レート順では 1 → 2 → 3 だが、2 は News なので飛ぶ
+    feeds.nextFeed();
+    expect(feeds.currentFeed?.id).toBe(3);
+  });
+
+  it('絞り込みの外にカーソルが居たら、その範囲の先頭へ連れ戻す', () => {
+    // 置き去りにすると、s / a も先読みも見えていないフィードを起点に回る
+    const feeds = mixedFolders();
+    expect(feeds.currentFeed?.folder).toBe('開発');
+
+    feeds.setFolder('News');
+    expect(feeds.currentFeed?.id).toBe(2);
+  });
+
+  it('絞り込みの中に居るカーソルは動かさない', () => {
+    const feeds = mixedFolders();
+    feeds.nextEntry();
+    const entryId = feeds.currentEntry?.id;
+
+    feeds.setFolder('開発');
+    expect(feeds.currentFeed?.id).toBe(1);
+    expect(feeds.currentEntry?.id).toBe(entryId);
+  });
+
+  it('絞り込みを外すと全部に戻る', () => {
+    const feeds = mixedFolders();
+    feeds.setFolder('News');
+    feeds.setFolder(null);
+
+    expect(feeds.visibleFeeds.map((f) => f.id)).toEqual([1, 2, 3]);
+    // 戻したときにカーソルは動かさない（外に出ていないので連れ戻す理由が無い）
+    expect(feeds.currentFeed?.id).toBe(2);
+  });
+
+  it('先読みも絞り込みの中だけを見る', () => {
+    const feeds = mixedFolders();
+    feeds.setFolder('News');
+    // News はフィード 2 だけ。その先に進んでも開発のフィードは温めない
+    expect(feeds.prefetchUrls).toEqual([]);
+  });
+
+  it('絞った範囲を読み切った後で広げると、読み終えた表示が残らない', () => {
+    // 新しい範囲に未読があるのに「全て読み終えた」が出たままになると、
+    // そこから未読に辿り着けなくなる
+    const feeds = useFeedsStore();
+    useEntriesStore().ingest([...entries(1, [1]), ...entries(2, [2])]);
+    feeds.setFeeds([
+      feed(1, { rate: 5, folder: '開発', unreadCount: 1 }),
+      feed(2, { rate: 3, folder: 'News', unreadCount: 1 }),
+    ]);
+    feeds.enterFirstUnread();
+
+    feeds.setFolder('開発');
+    feeds.nextFeed(); // 開発に残りは無い
+    expect(feeds.finished).toBe(true);
+
+    feeds.setFolder(null);
+    expect(feeds.finished).toBe(false);
+    expect(feeds.currentFeed?.folder).toBe('News');
+  });
+
+  it('絞っていたフォルダが消えたら絞り込みも外す', async () => {
+    // 一覧が空になり、選択肢が 1 つになった時点で解除する導線ごと消えて詰む
+    const feeds = mixedFolders();
+    feeds.setFolder('News');
+    feeds.dropFeed(2);
+    await nextTick(); // 後始末は描画前に走る（同期では走らない）
+
+    expect(feeds.folder).toBe(null);
+    expect(feeds.visibleFeeds.map((f) => f.id)).toEqual([1, 3]);
+    expect(feeds.currentFeed?.id).toBe(1);
+  });
+
+  it('全て既読のフォルダを選んでも a で読み返せる', () => {
+    const feeds = useFeedsStore();
+    useEntriesStore().ingest([...entries(1, [1]), ...entries(2, [2])]);
+    feeds.setFeeds([
+      feed(1, { rate: 5, folder: '開発', readSeq: 1, unreadCount: 0 }),
+      feed(2, { rate: 3, folder: 'News', unreadCount: 1 }),
+    ]);
+    feeds.enterFirstUnread();
+
+    feeds.setFolder('開発');
+    expect(feeds.feedIndex).toBe(-1);
+
+    feeds.prevFeed();
+    expect(feeds.currentFeed?.id).toBe(1);
+    expect(feeds.finished).toBe(false);
+  });
+
+  it('絞り込みの外に残っている未読を数える（読み終えた画面で範囲を明かすため）', () => {
+    const feeds = mixedFolders();
+    expect(feeds.unreadOutsideScope).toBe(0); // 絞っていなければ「外」は無い
+
+    feeds.setFolder('News');
+    // 開発の 2 本が範囲の外。フィード 1 は先頭記事を表示した時点で 1 件既読なので 1 + 1
+    expect(feeds.unreadOutsideScope).toBe(2);
+  });
+
+  it('フォルダ名の一覧は重複を畳み、未分類は最後に置く', () => {
+    const feeds = useFeedsStore();
+    feeds.setFeeds([
+      feed(1, { folder: '開発' }),
+      feed(2, { folder: '' }),
+      feed(3, { folder: 'News' }),
+      feed(4, { folder: '開発' }),
+    ]);
+    expect(feeds.folders).toEqual(['News', '開発', '']);
   });
 });

@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import BottomBar from '@/components/BottomBar.vue';
 import EntryReader from '@/components/EntryReader.vue';
 import FeedList from '@/components/FeedList.vue';
-import { confirmUnsubscribe, isStalled } from '@/lib/subscriptions';
+import { confirmUnsubscribe, folderLabel, isStalled } from '@/lib/subscriptions';
 import HelpOverlay from '@/components/HelpOverlay.vue';
 import PinList from '@/components/PinList.vue';
 import SubscriptionManager from '@/components/SubscriptionManager.vue';
@@ -89,7 +89,7 @@ const currentPinned = computed(() => {
  * 引き出しの中なので、開くまで気付けない。**入口に印だけ出す。**
  * 読む場所は邪魔せず、しかし放っておくと記事が増えないままになるのを防ぐ
  */
-const hasStalledFeeds = computed(() => feeds.feeds.some(isStalled));
+const stalledCount = computed(() => feeds.feeds.filter(isStalled).length);
 
 /**
  * 境界にいるか（docs/UX.md「境界でのボタン変化」）。ボタンの位置は動かさず、
@@ -366,16 +366,20 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
     <FeedList
       v-if="!compact || drawerOpen"
       :class="compact ? 'fixed inset-0 z-20 bg-white dark:bg-neutral-950' : ''"
-      :feeds="feeds.feeds"
+      :feeds="feeds.visibleFeeds"
       :current-feed-id="feeds.currentFeed?.id ?? null"
       :current-entry-id="feeds.currentEntry?.id ?? null"
       :entries-of="feeds.entriesFor"
       :pinned-urls="pins.urls"
       :compact="compact"
+      :stalled-count="stalledCount"
+      :folders="feeds.folders"
+      :folder="feeds.folder"
       @select-entry="selectEntryIn"
       @manage="openManager"
       @unsubscribe="unsubscribeFeed"
       @close="drawerOpen = false"
+      @select-folder="feeds.setFolder"
     />
 
     <main class="flex h-dvh flex-col overflow-hidden">
@@ -400,12 +404,26 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
         {{ notice }}
       </p>
 
+      <!--
+        **読み終えたときは範囲も明かす。** フォルダで絞っていると、範囲の外に未読が
+        残っていても「全て読み終えた」としか読めない。狭い画面では絞り込みの表示が
+        引き出しの中なので、なぜ止まったのかが画面上のどこにも無くなる
+      -->
       <div
         v-if="feeds.finished"
-        class="flex h-full items-center justify-center"
+        class="flex h-full flex-col items-center justify-center gap-1 px-6 text-center"
         data-testid="finished"
       >
-        <p class="text-sm text-neutral-500">全て読み終えた</p>
+        <p class="text-sm text-neutral-500">
+          {{
+            feeds.folder === null
+              ? '全て読み終えた'
+              : `「${folderLabel(feeds.folder)}」は全て読み終えた`
+          }}
+        </p>
+        <p v-if="feeds.unreadOutsideScope > 0" class="text-xs text-neutral-500">
+          他のフォルダに未読が {{ feeds.unreadOutsideScope }} 件ある
+        </p>
       </div>
       <div
         v-else-if="!feeds.started"
@@ -439,7 +457,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
           >
             <span aria-hidden="true" class="text-lg leading-none">☰</span>
             <span
-              v-if="hasStalledFeeds"
+              v-if="stalledCount > 0"
               class="text-amber-700 dark:text-amber-500"
               data-testid="stalled-mark"
               title="取得が止まっているフィードがある"

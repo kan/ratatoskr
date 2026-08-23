@@ -26,3 +26,17 @@ export function confirmUnsubscribe(feed: Feed): boolean {
 export function isStalled(feed: Feed): boolean {
   return feed.disabled && feed.consecutiveFailures > MAX_CONSECUTIVE_FAILURES;
 }
+
+/**
+ * フォルダ名を持たない購読の呼び名（issue #3）。
+ *
+ * 空文字のままでは選択肢にも入力欄にも出しようがないので名前を与える。
+ * 絞り込みの選択肢（FeedList）と購読管理の入力欄で同じ文言を使うため、
+ * リテラルを 2 箇所に置かない。
+ */
+export const UNCATEGORIZED = '未分類';
+
+/** 一覧や選択肢に出すフォルダ名 */
+export function folderLabel(name: string): string {
+  return name === '' ? UNCATEGORIZED : name;
+}

@@ -76,6 +76,75 @@ export const useFeedsStore = defineStore('feeds', () => {
     return feed.unreadCount > 0;
   }
 
+  /**
+   * 読む対象を絞っているフォルダ（issue #3。方針は docs/UX.md の「フォルダ」）。
+   * null は絞り込み無し。**覚えておかない**（再読み込みで解除する）
+   */
+  const folder = ref<string | null>(null);
+
+  function inFolder(feed: Feed): boolean {
+    return folder.value === null || feed.folder === folder.value;
+  }
+
+  /**
+   * 左ペインに並べるフィード。絞り込みの外は出さない。
+   *
+   * 絞っていないときに `feeds.value` をそのまま返すのは、**同じ配列を返して
+   * 左ペインの再描画を誘発しないため**（filter は毎回新しい配列になる）。
+   * 絞っていない状態が常態なので、そこだけ写しを作らない
+   */
+  const visibleFeeds = computed(() =>
+    folder.value === null ? feeds.value : feeds.value.filter(inFolder),
+  );
+
+  /**
+   * 使われているフォルダ名。絞り込みの選択肢と、購読管理の入力候補で同じものを引く。
+   * 未分類（空文字）は最後に置く。名前として並べる先が無いため
+   */
+  const folders = computed(() => {
+    const names = [...new Set(feeds.value.map((feed) => feed.folder))];
+    return names.sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b, 'ja')));
+  });
+
+  /**
+   * 絞り込みを切り替える。**外に出たカーソルは連れ戻す。**
+   * 置き去りにすると、s / a も先読みも「見えていないフィード」を起点に回る
+   */
+  function setFolder(next: string | null): void {
+    if (folder.value === next) return;
+    folder.value = next;
+
+    // 新しい範囲でカーソルがまだ有効かを見る。**読み終えた状態も無効に含める。**
+    // 絞った範囲を読み切ってから広げると、新しい範囲に未読があっても
+    // 「全て読み終えた」が出たままになる
+    if (finished.value || currentFeed.value === null || !inFolder(currentFeed.value)) {
+      enterFirstUnread();
+    }
+  }
+
+  /**
+   * 絞り込みの外に残っている未読の数。絞っていなければ 0。
+   *
+   * **読み終えた画面で範囲を明かすために要る。** 絞ったまま「全て読み終えた」とだけ
+   * 出すと、未読があるのに無いように見える（docs/UX.md の「フォルダ」）。狭い画面では
+   * 絞り込みの表示そのものが引き出しの中なので、開くまで理由に辿り着けない
+   */
+  const unreadOutsideScope = computed(() =>
+    folder.value === null
+      ? 0
+      : feeds.value.reduce((sum, feed) => (inFolder(feed) ? sum : sum + feed.unreadCount), 0),
+  );
+
+  /**
+   * 絞っていたフォルダが消えたら（購読解除・改名）絞り込みも外す。
+   *
+   * **外さないと詰む。** 一覧は空になり、選択肢が 1 つになった時点で絞り込みを
+   * 解除する導線ごと消えるので、再読み込みするまで残りの未読に辿り着けない
+   */
+  watch(folders, (names) => {
+    if (folder.value !== null && !names.includes(folder.value)) setFolder(null);
+  });
+
   /** 手元に記事を持っているか。既読でも読み返せるので前方向の判定とは別に要る */
   function hasEntries(feed: Feed): boolean {
     return entriesStore.of(feed.id).length > 0;
@@ -233,13 +302,16 @@ export const useFeedsStore = defineStore('feeds', () => {
     if (index === feedIndex.value) absorbNewEntries();
   }
 
-  /** 起動時に 1 回。未読の先頭フィードにカーソルを置く */
+  /**
+   * いまの範囲の先頭の未読にカーソルを座らせ直す。起動時のほか、購読が消えたとき
+   * （setFeeds / dropFeed）と絞り込みを変えたとき（setFolder）にも通る
+   */
   function enterFirstUnread(): void {
-    const index = feeds.value.findIndex(isReadable);
+    const index = findFeed(0, 1, isReadable);
     if (index === -1) {
       feedIndex.value = -1;
       currentEntries.value = [];
-      finished.value = feeds.value.length > 0;
+      finished.value = feeds.value.some(inFolder);
       return;
     }
     enterFeed(index, 'first');
@@ -332,8 +404,17 @@ export const useFeedsStore = defineStore('feeds', () => {
   }
 
   function findFeed(from: number, step: 1 | -1, accept: (feed: Feed) => boolean): number {
-    for (let i = from; i >= 0 && i < feeds.value.length; i += step) {
-      if (accept(feeds.value[i])) return i;
+    // **絞り込みはここだけで効かせる。** s / a も先読みもこの関数を通るので、
+    // 添字を振り直さずに対象を狭められる（feedIndex は全体配列の添字のまま）。
+    //
+    // 一覧と絞り込みをループの外で読むのは、記事送り 1 回でここを何周もするため。
+    // reactive proxy の添字アクセスと ref 読みは毎周ぶんが積み上がる
+    // （素直に書いた版は 100 フィードで実測 1.5 倍かかった）
+    const list = feeds.value;
+    const only = folder.value;
+    for (let i = from; i >= 0 && i < list.length; i += step) {
+      const feed = list[i];
+      if ((only === null || feed.folder === only) && accept(feed)) return i;
     }
     return -1;
   }
@@ -359,7 +440,10 @@ export const useFeedsStore = defineStore('feeds', () => {
    * 絞ると「いま読み終えたばかりのフィードに戻れない」ことになる。
    */
   function prevFeed(position: 'first' | 'last' = 'first'): void {
-    const index = findFeed(feedIndex.value - 1, -1, hasEntries);
+    // カーソルがどこにも無いとき（未読を全て読み終えた・絞った先が全て既読）は
+    // 末尾から探す。**そうしないと読み返す手段が無くなる**（a はそのためのキー）
+    const from = feedIndex.value === -1 ? feeds.value.length - 1 : feedIndex.value - 1;
+    const index = findFeed(from, -1, hasEntries);
     if (index === -1) return;
 
     // 未読が残っているフィード（s で飛ばしたもの）に末尾から入ると、
@@ -548,6 +632,11 @@ export const useFeedsStore = defineStore('feeds', () => {
 
   return {
     feeds,
+    visibleFeeds,
+    folders,
+    folder,
+    unreadOutsideScope,
+    setFolder,
     feedIndex,
     entryIndex,
     currentEntries,
