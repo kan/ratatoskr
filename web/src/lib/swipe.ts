@@ -29,8 +29,11 @@ export function classifySwipe(dx: number, dy: number): SwipeDirection {
  *
  * 左右スワイプより深くしてある。読み終わりの数行を送るだけの指と地続きの動きなので、
  * 同じ深さにすると「最後の 1 画面を送ったつもりで次の記事に飛ぶ」ことになる。
+ *
+ * **90 では実機で重かった**ので浅くした。深さの差（左右は 60）は残してあるので、
+ * 読み送りの指との区別は付く。
  */
-const PULL_DISTANCE = 90;
+const PULL_DISTANCE = 70;
 
 /**
  * 下端でさらに上へ引く指を、次の記事への要求とみなすか。
