@@ -1,0 +1,36 @@
+<!--
+  Android のアダプティブアイコン用（manifest の purpose: maskable）。
+
+  **図柄を 80% に縮めて中央に置く。** OS は円・スクイークル・角丸などの好きな形で
+  切り抜くので、外側 10% は切り落とされる前提で置く。逆に縁まで地色で埋めておかないと、
+  切り抜きの形によっては透明な角が出る。
+
+  icon-brand.svg と同じ図柄。あちらは切り抜かれない場所（favicon / apple-touch-icon）
+  向けにフルブリードで、こちらは安全域に収めた版。
+
+  PNG は scripts/build-icons.mjs で書き出す（pnpm icons）。
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 120 120"
+  width="120"
+  height="120"
+  role="img"
+  aria-label="Ratatoskr"
+>
+  <title>Ratatoskr</title>
+  <rect width="120" height="120" fill="#FF6600" />
+  <clipPath id="frame"><rect x="12" y="12" width="96" height="96" /></clipPath>
+  <g clip-path="url(#frame)" transform="translate(12 12)">
+    <rect x="-12" y="-16" width="34" height="128" fill="#14532D" />
+    <g fill="none" stroke="#14532D" stroke-width="9" stroke-linecap="round">
+      <path d="M22 30 L34 19" />
+      <path d="M22 66 L33 76" />
+    </g>
+    <g fill="none" stroke="#FFFFFF" stroke-width="7.5" stroke-linecap="round">
+      <path d="M52 53 A19 19 0 0 1 71 72" />
+      <path d="M52 39 A33 33 0 0 1 85 72" />
+    </g>
+    <circle cx="52" cy="72" r="7.5" fill="#FFFFFF" />
+  </g>
+</svg>
