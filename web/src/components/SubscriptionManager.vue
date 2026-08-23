@@ -322,7 +322,7 @@ async function onOpmlSelected(event: Event): Promise<void> {
             v-model="folder"
             type="text"
             list="folder-options"
-            :placeholder="UNCATEGORIZED"
+            :placeholder="`空欄なら${UNCATEGORIZED}`"
             class="w-32 rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-800"
           />
         </label>
