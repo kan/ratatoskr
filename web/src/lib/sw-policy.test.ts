@@ -85,6 +85,12 @@ describe('routeFor', () => {
     expect(routeFor(facts({ url: 'https://example.net/app.js', destination: 'script' }))).toBe(
       'bypass',
     );
+    // **素の fetch（destination は空文字）も素通し。** 壊れた画像の取り直し
+    // （lib/image-repair.ts）はこれに掛かっている。ここが image に落ちると、
+    // 取り直しに cache-first の同じ壊れた応答が返り、修復が黙って効かなくなる
+    expect(routeFor(facts({ url: 'https://img.example.net/1.jpg', destination: '' }))).toBe(
+      'bypass',
+    );
   });
 });
 

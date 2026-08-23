@@ -56,7 +56,7 @@ export interface PrefetcherDeps {
 
 export function createImagePrefetcher(deps: PrefetcherDeps = {}): ImagePrefetcher {
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const openCache = deps.openCache ?? openImageCache;
+  const openCache = deps.openCache ?? (() => openImageCache(CACHE_NAME));
   const concurrency = deps.concurrency ?? CONCURRENCY;
   const perHost = deps.perHost ?? PER_HOST;
 
@@ -199,10 +199,17 @@ function hostOf(url: string): string {
   }
 }
 
-async function openImageCache(): Promise<Cache | null> {
+/**
+ * 画像の控えを開く。**先読みと修復（lib/image-repair.ts）で共有する。**
+ *
+ * `caches` が消える条件（secure context にしか無く、スマホから
+ * `http://<LAN の IP>:5173` で触ると無い）の知識を 1 箇所に閉じ込めるため、
+ * キャッシュ名を引数で取る形にしてある。
+ */
+export async function openImageCache(name: string): Promise<Cache | null> {
   if (typeof caches === 'undefined') return null;
   try {
-    return await caches.open(CACHE_NAME);
+    return await caches.open(name);
   } catch {
     return null;
   }
@@ -240,11 +247,20 @@ const IMG_SRC = /<img\b[^>]*?\ssrc="([^"]*)"/gi;
 export function extractImageUrls(html: string): string[] {
   const urls: string[] = [];
   for (const match of html.matchAll(IMG_SRC)) {
-    const url = match[1];
-    // data: や相対 URL は温める意味が無い（前者は本文と一緒に手元にある）
-    if (url.startsWith('https://') || url.startsWith('http://')) urls.push(url);
+    if (isCacheableImageUrl(match[1])) urls.push(match[1]);
   }
   return urls;
+}
+
+/**
+ * 控えに入れる画像か。**先読みと修復（lib/image-repair.ts）で同じ条件を使う。**
+ * 片方だけ広げると、控えにあるのに直せない／無いのに取り直す、というずれになる。
+ *
+ * data: や相対 URL は温める意味が無い（前者は本文と一緒に手元にある。後者は
+ * サニタイズ済みの本文には残らない）。
+ */
+export function isCacheableImageUrl(url: string): boolean {
+  return url.startsWith('https://') || url.startsWith('http://');
 }
 
 /**

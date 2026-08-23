@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
 import type { Entry } from '@shared/types';
+import { repairBrokenImage } from '@/lib/image-repair';
 import { classifySwipe, pullsPastBottom } from '@/lib/swipe';
 
 /**
@@ -20,6 +21,14 @@ const props = defineProps<{
  * 境界でフィードを跨ぐかどうかも含めて、判断はカーソルの所有者が持つ
  */
 const emit = defineEmits<{ next: []; prev: [] }>();
+
+/**
+ * 画像が読めなかったときだけ動く。壊れた控えを捨てて 1 回だけ取り直す
+ * （lib/image-repair.ts）。**`error` は bubble しない**ので、キャプチャで拾う
+ */
+function onLoadError(event: Event): void {
+  if (event.target instanceof HTMLImageElement) repairBrokenImage(event.target);
+}
 
 const scroller = ref<HTMLElement | null>(null);
 
@@ -201,7 +210,7 @@ defineExpose({ pageDown, pageUp, scrollToBottom });
           <hr class="my-4 border-neutral-300 dark:border-neutral-700" />
           <!-- body は取り込み時にサーバ側でサニタイズ済み（CLAUDE.md の不変条件 4） -->
           <!-- eslint-disable-next-line vue/no-v-html -->
-          <div class="article-body" v-html="entry.body"></div>
+          <div class="article-body" @error.capture="onLoadError" v-html="entry.body"></div>
         </template>
         <p v-else class="text-sm text-neutral-500">記事がありません</p>
       </div>
