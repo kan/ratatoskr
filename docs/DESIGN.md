@@ -331,8 +331,18 @@ no-cors の応答は opaque（`body` が `null`）なので、本体を読み捨
 - **書き込みには触らない。** 既読・ピンの送信は keepalive / sendBeacon で離脱後も届くことを
   当てにしている経路なので、間に入らない
 - outbox が永続化されているので、オフラインで読んでオンライン復帰時に同期できる
-- `manifest.json` で standalone 表示。テーマ色は `index.html` の meta で
-  `prefers-color-scheme` ごとに出し分ける（manifest の `theme_color` は 1 色しか持てない）
+- `manifest.json` で standalone 表示。テーマ色は `index.html` の meta 1 つで持ち、
+  選ばれているテーマに合わせて書き換える（manifest の `theme_color` は 1 色しか
+  持てない）。**`prefers-color-scheme` 付きで出し分けない**。テーマは手動でも選べるので、
+  システム設定を見る指定のままだと選択と食い違ったときにここだけずれる
+- **テーマは `html` の `data-theme` 1 本で決まる。** Tailwind の `dark` バリアントを
+  この属性に付け替えてあるので（`web/src/style.css`）、初期値をシステム設定から取るときも
+  手で切り替えたときも同じ経路を通る。解決するのは `web/src/lib/theme.ts`
+- **保存済みのテーマは最初の描画より前に当てる。** `index.html` のインラインスクリプトが
+  `localStorage` を読んで `data-theme` を置く。アプリの読み込みを待つと、システムと
+  違う設定にしている人は起動のたびに一瞬だけ逆のテーマを見る。import できない位置なので
+  キー名と地色を `lib/` と二重に持つことになるが、食い違いは
+  `web/src/lib/theme.test.ts` が突き合わせて検出する
 
 ## 9. 参考にした実装
 
