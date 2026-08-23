@@ -76,6 +76,19 @@ const candidates = ref<{ url: string; title: string | null }[]>([]);
 // 「上にあるものから読まれる」という前提が画面ごとに食い違う
 const sorted = computed(() => sortByReadingOrder(feeds.feeds));
 
+/**
+ * 既に使われているフォルダ名（issue #3）。入力欄の候補に出す。
+ *
+ * **選択肢ではなく候補に留める。** 新しいフォルダはその場で作れなければならないので、
+ * 自由入力は残す。datalist なら、打ち始めれば絞り込まれ、空欄で開けば一覧が出る。
+ * 手で全部打つのに比べて、表記ゆれ（「開発・WEB」と「開発・web」）が生まれにくい
+ */
+const folders = computed(() =>
+  [...new Set(feeds.feeds.map((feed) => feed.folder).filter((name) => name !== ''))].sort((a, b) =>
+    a.localeCompare(b, 'ja'),
+  ),
+);
+
 /** 取りに行っても直らない失敗をしているフィード。一括解除の対象そのもの */
 const removable = computed(() => sorted.value.filter(isRemovable));
 
@@ -310,6 +323,7 @@ async function onOpmlSelected(event: Event): Promise<void> {
           <input
             v-model="folder"
             type="text"
+            list="folder-options"
             placeholder="未分類"
             class="w-32 rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-800"
           />
@@ -432,7 +446,9 @@ async function onOpmlSelected(event: Event): Promise<void> {
               <td class="py-1 pr-2">
                 <input
                   :value="feed.folder"
+                  list="folder-options"
                   class="w-full bg-transparent"
+                  :data-testid="`feed-folder-${feed.id}`"
                   @change="changeFolder(feed, ($event.target as HTMLInputElement).value)"
                 />
               </td>
@@ -550,5 +566,13 @@ async function onOpmlSelected(event: Event): Promise<void> {
         </span>
       </div>
     </div>
+
+    <!--
+      フォルダ名の候補（issue #3）。追加フォームと一覧の各行で同じものを引く。
+      datalist は 1 つを共有できるので、行の数だけ複製しない
+    -->
+    <datalist id="folder-options">
+      <option v-for="name in folders" :key="name" :value="name" />
+    </datalist>
   </div>
 </template>
