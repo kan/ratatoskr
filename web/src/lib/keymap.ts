@@ -146,6 +146,17 @@ export function isTextInput(target: EventTarget | null): boolean {
 }
 
 /**
+ * 読む画面に置いた select が選び終わったときに呼ぶ。
+ *
+ * **select は選択後もフォーカスを保つ。** 上のとおり入力欄の間はキーバインドを
+ * 無効にしているので、返さないと「選んでそのまま j で読み始める」が黙って効かなくなる。
+ * オーバーレイ（購読管理）の中は元からキーを分けているので、対象は読む画面だけ。
+ */
+export function releaseKeyFocus(event: Event): void {
+  if (event.target instanceof HTMLElement) event.target.blur();
+}
+
+/**
  * KeyboardEvent を Action に落とす。KEYMAP だけを見る。
  *
  * Ctrl / Alt / Meta が付いていたらブラウザ側のショートカットとみなして手を出さない。

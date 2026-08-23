@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import type { Entry, Feed } from '@shared/types';
 import FeedEntries from '@/components/FeedEntries.vue';
+import { releaseKeyFocus } from '@/lib/keymap';
 import { folderLabel } from '@/lib/subscriptions';
 
 /**
@@ -173,6 +174,7 @@ watch(
         class="w-full rounded border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-900 md:text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
         data-testid="folder-filter"
         aria-label="読む対象のフォルダ"
+        @change="releaseKeyFocus"
       >
         <!-- 見出しを別に置くと、その分だけ一覧が狭くなる。文言だけで何の選択かを伝える -->
         <option :value="null">すべてのフォルダ</option>
