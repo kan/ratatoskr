@@ -247,9 +247,35 @@ const IMG_SRC = /<img\b[^>]*?\ssrc="([^"]*)"/gi;
 export function extractImageUrls(html: string): string[] {
   const urls: string[] = [];
   for (const match of html.matchAll(IMG_SRC)) {
-    if (isCacheableImageUrl(match[1])) urls.push(match[1]);
+    const url = decodeCharRefs(match[1]);
+    if (isCacheableImageUrl(url)) urls.push(url);
   }
   return urls;
+}
+
+/** 属性値に現れうる文字参照。数値参照と、HTML の定義済み実体 5 つ */
+const CHAR_REF = /&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|(amp|lt|gt|quot|apos));/g;
+const NAMED_REF: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+
+/**
+ * 属性値の文字参照を解く。
+ *
+ * **解かないと別の URL を温めることになる。** 本文は HTML なので、`src` の中の `&` は
+ * `&amp;` や `&#x26;` の形で保存されうる。ブラウザは `<img>` を組み立てるときにこれを
+ * 解いてから要求するので、生の文字列のまま取りに行くと、存在しない URL を叩いたうえで
+ * 本物の方はどこにも温まらない（クエリ付きの画像 URL は珍しくない）。
+ *
+ * DOM は作らない（`extractImageUrls` と同じ理由）。属性値に現れるのは数値参照と
+ * 定義済み実体だけなので、それだけを解けば足りる。
+ */
+function decodeCharRefs(value: string): string {
+  if (!value.includes('&')) return value;
+  return value.replace(CHAR_REF, (match, dec?: string, hex?: string, name?: string) => {
+    if (name !== undefined) return NAMED_REF[name];
+    const code = Number.parseInt(dec ?? hex ?? '', dec === undefined ? 16 : 10);
+    // 範囲外は解かずに残す。URL として壊れているだけなので、こちらで直さない
+    return code <= 0x10ffff ? String.fromCodePoint(code) : match;
+  });
 }
 
 /**

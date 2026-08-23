@@ -63,6 +63,28 @@ describe('extractImageUrls', () => {
   it('画像が無ければ空', () => {
     expect(extractImageUrls('<p>テクノエッジは要約しか配信しない</p>')).toEqual([]);
   });
+
+  it('文字参照を解く（解かないとブラウザが要求する URL とずれる）', () => {
+    // クエリ付きの画像 URL は珍しくなく、フィードは & を実体で書いてよい。
+    // 生のまま温めると、存在しない URL を叩いたうえで本物はどこにも温まらない
+    expect(extractImageUrls('<img src="https://img.example.com/a.jpg?w=800&amp;h=600">')).toEqual([
+      'https://img.example.com/a.jpg?w=800&h=600',
+    ]);
+    // 数値参照。本番のフィードに &#x26; を使うものが実際にあった
+    expect(
+      extractImageUrls(
+        '<img src="https://img.example.com/a.jpg?w=256&#x26;q=75">' +
+          '<img src="https://img.example.com/b.jpg?w=1&#38;h=2">',
+      ),
+    ).toEqual([
+      'https://img.example.com/a.jpg?w=256&q=75',
+      'https://img.example.com/b.jpg?w=1&h=2',
+    ]);
+    // 生の & はそのまま（実体になっていないものを勝手に解釈しない）
+    expect(extractImageUrls('<img src="https://img.example.com/a.jpg?w=1&h=2">')).toEqual([
+      'https://img.example.com/a.jpg?w=1&h=2',
+    ]);
+  });
 });
 
 describe('imageUrlsOf', () => {
