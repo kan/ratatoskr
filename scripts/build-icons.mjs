@@ -13,8 +13,30 @@ import { chromium } from '@playwright/test';
  * 使い方: pnpm icons
  */
 
+/**
+ * 未読が無いときの色。RSS マークだけを薄いグレーに落とす。
+ * 明るいテーマでも暗いテーマでも沈んで見える中間の明度を選んである
+ */
+const MUTED = { '#FF6600': '#A1A1AA' };
+
 /** 何をどの大きさで書き出すか。maskable と monochrome は安全域の取り方が違う */
 const TARGETS = [
+  // タブのアイコン。SVG を当てにできないブラウザ（Safari）向けの控え。
+  // 未読の有無で差し替えるので 2 枚要る（web/src/lib/favicon.ts）
+  // 透明を残す。図柄は透過背景で、明暗どちらのタブでも沈まないようにしてある
+  // （web/index.html）。白で焼き込むと暗いテーマで白い四角になる
+  { source: 'favicon.svg', out: 'favicon.png', size: 32, transparent: true },
+  // 未読が無いときのタブのアイコン（issue #7）。**同じ図柄の色違いなので起こす。**
+  // 手で複製すると、マークを直したときに片方だけ古いまま残る（未読が無いときにしか
+  // 出ないので、手元で気付く機会がほぼ無い）
+  {
+    source: 'favicon.svg',
+    out: 'favicon-muted.png',
+    size: 32,
+    transparent: true,
+    recolor: MUTED,
+    svgOut: 'favicon-muted.svg',
+  },
   { source: 'icon-brand.svg', out: 'icon-192.png', size: 192 },
   { source: 'icon-brand.svg', out: 'icon-512.png', size: 512 },
   { source: 'icon-brand.svg', out: 'apple-touch-icon.png', size: 180 },
@@ -29,7 +51,10 @@ const publicDir = new URL('../web/public/', import.meta.url);
 const browser = await chromium.launch();
 try {
   for (const target of TARGETS) {
-    const svg = readFileSync(new URL(target.source, publicDir), 'utf-8');
+    let svg = readFileSync(new URL(target.source, publicDir), 'utf-8');
+    for (const [from, to] of Object.entries(target.recolor ?? {})) svg = svg.replaceAll(from, to);
+    // 色違いは SVG も書き出す。タブが読むのはこちらで、PNG は控え
+    if (target.svgOut !== undefined) writeFileSync(new URL(target.svgOut, publicDir), svg);
     const page = await browser.newPage({
       viewport: { width: target.size, height: target.size },
       // 端末の画素密度は関係ない。指定した大きさちょうどで書き出す

@@ -136,6 +136,15 @@ export const useFeedsStore = defineStore('feeds', () => {
   );
 
   /**
+   * 全フィードの未読数の合計。タブのアイコンに使う（issue #7）。
+   *
+   * **フォルダの絞り込みは見ない。** 絞り込みは「いま何を読むか」の選択であって、
+   * 「読むものが残っているか」とは別の話。絞った途端にアイコンが変わると、
+   * 他のフォルダに未読があることを見落とす
+   */
+  const totalUnread = computed(() => feeds.value.reduce((sum, feed) => sum + feed.unreadCount, 0));
+
+  /**
    * 絞っていたフォルダが消えたら（購読解除・改名）絞り込みも外す。
    *
    * **外さないと詰む。** 一覧は空になり、選択肢が 1 つになった時点で絞り込みを
@@ -181,18 +190,33 @@ export const useFeedsStore = defineStore('feeds', () => {
   }
 
   /**
+   * いまの並びを保ったまま差し替える。知らないフィードは末尾に足す
+   * （安定ソートなので、足される分はサーバの並びのまま並ぶ）。
+   */
+  function keepOrderOf(next: Feed[]): Feed[] {
+    const order = new Map(feeds.value.map((feed, index) => [feed.id, index]));
+    const rank = (feed: Feed): number => order.get(feed.id) ?? order.size;
+    return [...next].sort((a, b) => rank(a) - rank(b));
+  }
+
+  /**
    * フィード一覧を差し替える。読んでいる最中なら現在位置を id で引き継ぐ
    * （bootstrap と背景取得で何度も呼ばれる）。
+   *
+   * `keepOrder` は**読んでいる最中の差し替え**（背景同期）で使う。サーバの並びは
+   * 未読数を含むので読み進めるそばから変わり、そのまま当てると前方向にしか進まない
+   * `s`（docs/UX.md）がカーソルより前へ移った未読フィードを飛ばす。起動時は
+   * サーバの並びをそのまま採る（他の端末で変えたレートが効くのはこの機会だけ）。
    *
    * read_seq は単調増加でなければならない（不変条件 1）。既読の送信は outbox 経由で
    * 遅れて届くので、サーバの read_seq は手元より古いことがある。そのまま受けると
    * 読んだ記事が未読に戻るため、必ず MAX を取る（docs/API.md の sync 節）。
    */
-  function setFeeds(next: Feed[]): void {
+  function setFeeds(next: Feed[], { keepOrder = false } = {}): void {
     const localReadSeq = new Map(feeds.value.map((feed) => [feed.id, feed.readSeq]));
     const currentId = currentFeed.value?.id ?? null;
 
-    feeds.value = next.map((feed) => {
+    feeds.value = (keepOrder ? keepOrderOf(next) : next).map((feed) => {
       const local = localReadSeq.get(feed.id) ?? 0;
       if (local <= feed.readSeq) return feed;
       // 手元の方が進んでいる。未読数もその位置で数え直す
@@ -653,6 +677,7 @@ export const useFeedsStore = defineStore('feeds', () => {
     visibleFeeds,
     folders,
     folder,
+    totalUnread,
     unreadOutsideScope,
     setFolder,
     setCovered,

@@ -10,8 +10,11 @@ export default defineConfig({
   forbidOnly: Boolean(process.env.CI),
   retries: 0,
   // 1 つの dev サーバを全ワーカーで共有しているので、並列度を上げても速くならず、
-  // 起動待ち（IndexedDB の読み出し + bootstrap）が詰まって落ちる。CPU 数任せにしない
-  workers: 4,
+  // 起動待ち（IndexedDB の読み出し + bootstrap）が詰まって落ちる。CPU 数任せにしない。
+  //
+  // **本数が増えたら下げる。** issue #7 で 5 本足したところ 4 では 3 回に 1 回ほど
+  // 起動待ちで落ちるようになった（落ちる先は毎回違う）。3 なら安定する
+  workers: 3,
   reporter: 'list',
   use: {
     // retries が 0 なので on-first-retry では何も残らない。落ちた回のトレースを残す

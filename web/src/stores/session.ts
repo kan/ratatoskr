@@ -5,6 +5,7 @@ import {
   deleteFeed,
   getBootstrap,
   getEntries,
+  getSync,
   importOpml,
   refetchFeed,
   updateFeed,
@@ -12,7 +13,11 @@ import {
 import type {
   BootstrapResponse,
   CreateFeedRequest,
+  Entry,
+  Feed,
+  Pin,
   OpmlImportResponse,
+  SyncResponse,
   UpdateFeedRequest,
 } from '@shared/types';
 import {
@@ -120,6 +125,10 @@ export const useSessionStore = defineStore('session', () => {
       // 手元のデータで操作は続けられる。失敗はヘッダに出すだけに留める
       error.value = err instanceof Error ? err.message : String(err);
     }
+
+    // **起動の取得が失敗しても張る。** オフラインで開いた場合こそ、繋がった後に
+    // 自力で追いつけないと再読み込みするまで何も届かない
+    startSync();
   }
 
   async function hydrate(): Promise<void> {
@@ -147,15 +156,28 @@ export const useSessionStore = defineStore('session', () => {
     phase.value = 'hydrated';
   }
 
-  async function applyBootstrap(body: BootstrapResponse): Promise<void> {
+  /**
+   * サーバの状態を手元に当てる。**bootstrap と差分同期で共通の手順。**
+   *
+   * 順序に意味がある（出し切ってから当てる、当てた直後に起点を取り直す）ので、
+   * 2 本に分けない。片方だけ直すと不変条件 1・3 が静かに崩れる。
+   *
+   * @param entries この応答で届いた記事（bootstrap は全件、同期は新着だけ）
+   * @param background 読んでいる最中に走る差し替えか（定期同期）
+   */
+  async function applyServerState(
+    body: { serverTime: number; feeds: Feed[]; pins: Pin[]; maxEntryId: number },
+    entries: Entry[],
+    { background }: { background: boolean },
+  ): Promise<void> {
     // サーバの値を当てる前に、手元の未送信分をキューへ出し切る。
     // 出し切ってあれば、当てた後の値をそのまま次の差分の起点にできる
     flushLocalState();
 
-    entriesStore.ingest(body.entries);
+    entriesStore.ingest(entries);
     // まだ送信が通っていないピンは残す（setPins の中で url を突き合わせる）
     pinsStore.setPins(body.pins);
-    feedsStore.setFeeds(body.feeds);
+    feedsStore.setFeeds(body.feeds, { keepOrder: background });
     // レートはサーバの値をそのまま受けるので、まだ届いていない変更を当て直す
     feedsStore.applyPendingRates(outbox.pendingRates());
     rebasePersisted();
@@ -163,16 +185,86 @@ export const useSessionStore = defineStore('session', () => {
     if (!feedsStore.started) feedsStore.enterFirstUnread();
     else feedsStore.absorbNewEntries();
 
+    // **サーバの未読数をそのまま信じない。** u で未読に戻した記事はサーバが知らず、
+    // 保持期間で手元から消した記事はサーバにまだある。どちらも手元で数え直す。
+    //
+    // 起動時は記事の取り直し（fillRemaining）が終わってから boot が呼ぶので、ここでは触らない。
+    // 全記事の走査で 5 分に 1 度 1.5ms 前後。記事送りの経路には乗らない
+    if (background) feedsStore.recountUnread();
+
     entryCursor.value = body.maxEntryId;
     syncedAt.value = body.serverTime;
     error.value = null;
 
     await Promise.all([
       saveFeeds(feedsStore.feeds),
-      saveEntries(body.entries),
+      saveEntries(entries),
       savePins(pinsStore.pins),
       saveCursor(body.maxEntryId, body.serverTime),
     ]);
+  }
+
+  function applyBootstrap(body: BootstrapResponse): Promise<void> {
+    return applyServerState(body, body.entries, { background: false });
+  }
+
+  /**
+   * 差分同期の間隔（docs/API.md「起動後の定期ポーリング（既定 5 分間隔）」）。
+   * サーバの取得も 5 分ごとなので、これより短くしても空振りが増えるだけ
+   */
+  const SYNC_INTERVAL_MS = 5 * 60 * 1000;
+
+  /**
+   * タブに戻ったときの同期を、これより短い間隔では繰り返さない。
+   * 行き来のたびに叩くと、隣のタブを覗いただけで往復が積み上がる
+   */
+  const SYNC_MIN_GAP_MS = 30 * 1000;
+
+  /** 同期が走っている間は次を始めない。遅い回線で要求が積み上がらないように */
+  let syncing = false;
+  let lastSyncAt = 0;
+
+  /**
+   * サーバとの差分同期。**バックグラウンドでも回す**ので、失敗しても画面には出さない。
+   *
+   * 読んでいる最中に走るので、カーソルは動かさない。新着はいま見ているフィードの
+   * 末尾に足されるだけで（absorbNewEntries）、読んでいる位置は変わらない。
+   */
+  async function sync(): Promise<void> {
+    if (syncing || phase.value === 'booting') return;
+    syncing = true;
+    try {
+      const body = await getSync({ entryCursor: entryCursor.value, since: syncedAt.value });
+      await applySync(body);
+    } catch (err) {
+      // 次の回で取り直せる。読んでいる最中に知らせても手立てが無い
+      console.warn('差分同期に失敗', err);
+    } finally {
+      syncing = false;
+      // **失敗しても記録する。** 成功時だけにすると、繋がらない間はタブを行き来する
+      // たびに毎回叩きに行くことになる（下の間引きが効かない）
+      lastSyncAt = Date.now();
+    }
+  }
+
+  function applySync(body: SyncResponse): Promise<void> {
+    return applyServerState(body, body.newEntries, { background: true });
+  }
+
+  /**
+   * 定期同期を張る（docs/API.md）。
+   *
+   * **タブが隠れていても止めない。** 新着に気付けるようにするのが目的なので
+   * （issue #7）、ブラウザがバックグラウンドのタイマを間引くのは構わない。
+   * 戻ってきたときにも 1 回叩いて、隠れている間に間引かれた分を取り戻す。
+   */
+  function startSync(): void {
+    setInterval(() => void sync(), SYNC_INTERVAL_MS);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastSyncAt < SYNC_MIN_GAP_MS) return;
+      void sync();
+    });
   }
 
   /**

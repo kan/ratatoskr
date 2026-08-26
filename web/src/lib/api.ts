@@ -13,6 +13,7 @@ import type {
   ReadMark,
   ReadRequest,
   ReadResponse,
+  SyncResponse,
   UpdateFeedRequest,
 } from '@shared/types';
 
@@ -72,6 +73,21 @@ export type BootstrapParams = {
 
 export function getBootstrap(params: BootstrapParams = {}): Promise<BootstrapResponse> {
   return get<BootstrapResponse>('/bootstrap', params);
+}
+
+export type SyncParams = {
+  /** 手元が持つ最大 entry id。これより新しい記事だけが返る */
+  entryCursor: number;
+  /** 前回同期した時刻（Unix 秒） */
+  since: number;
+};
+
+/**
+ * 複数端末間の差分同期（docs/API.md）。起動後の定期ポーリングと、
+ * タブがフォアグラウンドに戻ったときに叩く
+ */
+export function getSync(params: SyncParams): Promise<SyncResponse> {
+  return get<SyncResponse>('/sync', params);
 }
 
 export type EntriesParams = {

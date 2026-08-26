@@ -10,6 +10,7 @@ import type {
   FetchFeedResponse,
   ReadMark,
   ReadRequest,
+  SyncResponse,
   PinResponse,
   ReadResponse,
   UpdateFeedRequest,
@@ -43,7 +44,7 @@ function feed(id: number, title: string, rate: number, unreadCount: number): Fee
   };
 }
 
-function entry(id: number, feedId: number, title: string, body: string): Entry {
+export function entry(id: number, feedId: number, title: string, body: string): Entry {
   return {
     id,
     feedId,
@@ -108,6 +109,22 @@ export const ENTRIES: Entry[] = [
 /** 画像の先読みが使う Cache API の名前。名前がずれると検証が空振りするので import する */
 export const IMAGE_CACHE = CACHE_NAME;
 
+/**
+ * 差分同期の応答。**変えたいところだけ渡す。** 既定は「何も起きていない」状態で、
+ * テストが積むのは新着や並び替えといった差分の部分だけになる
+ */
+export function syncResponse(over: Partial<SyncResponse> = {}): SyncResponse {
+  return {
+    serverTime: 1786000200,
+    feeds: FEEDS,
+    newEntries: [],
+    pins: [],
+    deletedPinIds: [],
+    maxEntryId: 21,
+    ...over,
+  };
+}
+
 export interface MockOptions {
   /** 初回起動時のヘルプを出したままにするか */
   showHelp?: boolean;
@@ -135,6 +152,10 @@ export interface ApiRecorder {
   refetched: number[];
   /** 先読み（M7）が取りに行った画像。届いた順に入る */
   images: string[];
+  /** GET /api/sync が叩かれた URL。定期ポーリングの検証に使う */
+  syncCalls: string[];
+  /** 次の同期で返す応答。積んだ分から順に使い、空なら「変化なし」を返す */
+  nextSync: SyncResponse[];
 }
 
 export async function mockApi(page: Page, options: MockOptions = {}): Promise<ApiRecorder> {
@@ -168,6 +189,8 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
     deleted: [],
     refetched: [],
     images: [],
+    syncCalls: [],
+    nextSync: [],
   };
 
   if (options.showHelp !== true) {
@@ -203,6 +226,18 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
   await page.route('**/api/entries*', async (route) => {
     const body: EntriesResponse = { entries, nextSinceId: null, hasMore: false };
     await route.fulfill({ json: body });
+  });
+
+  /**
+   * 差分同期（issue #7 の定期ポーリング）。**既定では何も返さない。**
+   * テスト側が recorder.nextSync に応答を積むと、その 1 回だけそれを返す
+   */
+  await page.route('**/api/sync*', async (route) => {
+    recorder.syncCalls.push(route.request().url());
+    const queued = recorder.nextSync.shift();
+    await route.fulfill({
+      json: queued ?? syncResponse({ feeds: FEEDS.map((feed) => current(feed.id)) }),
+    });
   });
 
   await page.route('**/api/read', async (route) => {

@@ -8,6 +8,7 @@ import HelpOverlay from '@/components/HelpOverlay.vue';
 import PinList from '@/components/PinList.vue';
 import SubscriptionManager from '@/components/SubscriptionManager.vue';
 import { pendingSubscription } from '@/lib/bookmarklet';
+import { showUnread } from '@/lib/favicon';
 import { isTextInput, releaseKeyFocus, resolveBinding, type KeyBinding } from '@/lib/keymap';
 import { hasSeenHelp, markHelpSeen } from '@/lib/prefs';
 import { toggleTheme, useTheme } from '@/lib/theme';
@@ -104,6 +105,19 @@ const readerCovered = computed(
 // sync で流すのは、既読を進める側（stores/feeds.ts）が sync だから。
 // 既定の flush だと「引き出しを閉じた直後」の既読だけ 1 tick 遅れる
 watch(readerCovered, (hidden) => feeds.setCovered(hidden), { immediate: true, flush: 'sync' });
+
+// 未読の有無をタブのアイコンに出す（issue #7）。バックグラウンドに回っていても
+// 定期同期で未読が増えるので、そこで気付けるようにするのが目的。
+//
+// **起動が済むまでは触らない。** 手元を読み出す前は未読 0 なので、そのまま当てると
+// 起動のたびにアイコンが一度沈み、ホーム画面に追加した場合はバッジも消えて付き直す
+watch(
+  [() => session.phase, () => feeds.totalUnread],
+  ([phase, unread]) => {
+    if (phase !== 'booting') showUnread(unread);
+  },
+  { immediate: true },
+);
 
 const feedTitle = computed(() => feeds.currentFeed?.title ?? '');
 
