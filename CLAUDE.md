@@ -85,6 +85,7 @@ pnpm install       # esbuild / workerd の postinstall 許可は pnpm-workspace.
 pnpm db:migrate    # .wrangler/ は未コミット。クローン直後のローカル D1 は空
 cp .dev.vars.example .dev.vars   # Access の secret を埋める（後述）
 cp .env.example .env             # デプロイ後は Workers AI の接続にも要る（後述）
+pnpm build                       # web/dist が無いと wrangler dev が起動しない（後述）
 pnpm dev
 ```
 
@@ -119,6 +120,10 @@ Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCE
 
 ### ローカル実行の細かい点
 
+- **クローン直後は `pnpm build` を一度回さないと `wrangler dev` が起動しない。**
+  `wrangler.jsonc` が Static Assets の置き場に `web/dist` を指しているので、
+  無いと「The directory specified by the "assets.directory" field ... does not exist」で落ちる。
+  開発中の画面は vite が配るため、ここで作った `dist` の中身は古くても構わない
 - `pnpm dev` は **vite(5173) と wrangler dev(8787) の 2 プロセス構成**。画面は 5173 を開き、
   `/api` は vite の proxy で 8787 に渡る。本番は同一オリジンなので、クライアントは常に
   相対パスで `/api` を叩けばよい。`strictPort` は指定していないので、5173 が埋まっていれば

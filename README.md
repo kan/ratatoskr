@@ -30,10 +30,16 @@ pnpm install
 cp .dev.vars.example .dev.vars   # Access の secret を埋める（検証を飛ばすのは pnpm dev の --var）
 cp .env.example .env             # Workers AI の接続に要る（下記。デプロイ後だけ）
 pnpm db:migrate                  # ローカル D1 にスキーマを適用
+pnpm build                       # web/dist を作る（下記。初回だけ）
 pnpm dev                         # vite(5173) と wrangler dev(8787) を同時起動
 ```
 
 画面は http://localhost:5173 を開く。`/api` は 8787 の Worker にプロキシされる（本番は同一オリジン）。
+
+初回に `pnpm build` を挟むのは、`wrangler.jsonc` が Static Assets の置き場として `web/dist` を
+指しているため。**クローン直後は `web/dist` が無く、`wrangler dev` が
+「The directory specified by the "assets.directory" field ... does not exist」で起動しない。**
+開発中の画面は vite が配るので、ここで作った `dist` は中身が古くても構わない。
 
 ### ローカル開発にも Access の資格情報が要る
 
