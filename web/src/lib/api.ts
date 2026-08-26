@@ -151,7 +151,12 @@ export function beaconRead(marks: ReadMark[]): boolean {
  */
 export type CreateFeedResult =
   | { kind: 'created'; body: CreateFeedResponse }
-  | { kind: 'candidates'; candidates: FeedCandidatesResponse['candidates'] };
+  | {
+      kind: 'candidates';
+      candidates: FeedCandidatesResponse['candidates'];
+      /** 候補を見つけたページ。貼った URL と違うことがある（上の階層まで遡るため） */
+      foundAt: string;
+    };
 
 export async function createFeed(params: CreateFeedRequest): Promise<CreateFeedResult> {
   const response = await fetch('/api/feeds', {
@@ -163,7 +168,7 @@ export async function createFeed(params: CreateFeedRequest): Promise<CreateFeedR
 
   if (response.status === 300) {
     const body = (await response.json()) as FeedCandidatesResponse;
-    return { kind: 'candidates', candidates: body.candidates };
+    return { kind: 'candidates', candidates: body.candidates, foundAt: body.foundAt };
   }
   if (!response.ok) throw await toApiError(response);
   return { kind: 'created', body: (await response.json()) as CreateFeedResponse };

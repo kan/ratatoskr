@@ -238,11 +238,13 @@ export const useSessionStore = defineStore('session', () => {
    */
 
   /** 追加。フィードが複数見つかった場合は候補を返し、登録はしない */
-  async function subscribe(
-    params: CreateFeedRequest,
-  ): Promise<
+  async function subscribe(params: CreateFeedRequest): Promise<
     | { kind: 'created' }
-    | { kind: 'candidates'; candidates: { url: string; title: string | null }[] }
+    | {
+        kind: 'candidates';
+        candidates: { url: string; title: string | null }[];
+        foundAt: string;
+      }
   > {
     const result = await createFeed(params);
     if (result.kind === 'candidates') return result;

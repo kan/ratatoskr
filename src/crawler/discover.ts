@@ -1,4 +1,10 @@
-import { describeNetworkError, readBoundedText, TIMEOUT_MS, USER_AGENT } from './fetch';
+import {
+  DISCOVER_ANCESTOR_BUDGET_MS,
+  describeNetworkError,
+  readBoundedText,
+  TIMEOUT_MS,
+  USER_AGENT,
+} from './fetch';
 import { parseFeed } from './parse';
 
 /**
@@ -7,6 +13,11 @@ import { parseFeed } from './parse';
  * ユーザが渡すのはサイトの URL であることの方が多い。まず渡された URL 自体を
  * 取りに行き、フィードとして読めればそれを使う。読めなければ HTML とみなして
  * <link rel="alternate"> を拾う。
+ *
+ * **見つからなければ、パスを 1 段ずつ遡って同じことを試す。** 記事詳細ページに
+ * フィードの在処を書いていないサイトがある（note は記事ページに
+ * `<link rel="alternate">` を置かない）。上の階層まで推測するだけで、
+ * `/feed` `/rss.xml` のようなファイル名は推測しない（docs/ROADMAP.md）。
  *
  * HTML の解析は HTMLRewriter で行う。Workers に DOMParser は無く、
  * HTMLRewriter は HTML 専用（RSS のパースには使わない。CLAUDE.md）。
@@ -51,40 +62,138 @@ export type DiscoverResult =
   | { kind: 'candidates'; candidates: FeedCandidate[] }
   | { kind: 'error'; message: string };
 
+/** 1 回ぶんの検出。遡りの起点にするため、リダイレクトの後の URL も持つ */
+interface Attempt {
+  result: DiscoverResult;
+  /** 実際に見に行ったページ。相対 href の解決先でもある */
+  pageUrl: string;
+}
+
+/** 検出の結果と、それをどこで見つけたか */
+export interface Discovery extends Attempt {
+  /**
+   * 貼られたページではなく、**上の階層で見つけた**か。
+   *
+   * 呼び出し側は、これが立っていたら候補が 1 件でも、フィードそのものでも
+   * 確認を挟む（api/feeds.ts）。貼られた URL と違う場所のフィードなので、
+   * 黙って登録すると「頼んでいないものが増えた」形になる
+   */
+  viaAncestor: boolean;
+}
+
+/**
+ * 遡るパスの段数。購読の追加は対話的な操作なので数回の取得は許容範囲だが、
+ * 深い URL で無制限に叩かない。note（`/user/n/id` → `/user`）は 2 段で届く
+ */
+const MAX_ANCESTORS = 3;
+
 export async function discoverFeed(
   url: string,
   fetchImpl: typeof fetch = fetch,
-): Promise<DiscoverResult> {
+): Promise<Discovery> {
+  const first = await discoverAt(url, fetchImpl, AbortSignal.timeout(TIMEOUT_MS));
+  // **遡るのは「取れたが候補が 0 件」のときだけ。** 404 や接続の失敗は、
+  // 何が起きたかをそのまま返す方が直しようがある
+  if (first.result.kind !== 'candidates' || first.result.candidates.length > 0) {
+    return { ...first, viaAncestor: false };
+  }
+
+  // **締め切りは遡り全体で 1 つ。** 段ごとに持たせると、全滅したときに段数ぶん
+  // 積み上がる。過ぎた後の段は投げた時点で落ちるので、待ちはここで頭打ちになる
+  const deadline = AbortSignal.timeout(DISCOVER_ANCESTOR_BUDGET_MS);
+  // 見に行った先を覚えておく。「未知のパスは全部トップへ転送」の作りだと、
+  // 段が違っても同じページに落ち着くので、二度引いても答えは変わらない
+  const seen = new Set([url, first.pageUrl]);
+
+  // **遡る起点はリダイレクトの後。** 短縮 URL を貼られたとき、元の URL から
+  // 遡ると短縮サービスのトップページを叩きに行くことになる
+  for (const parent of ancestors(first.pageUrl)) {
+    if (seen.has(parent)) continue;
+    const found = await discoverAt(parent, fetchImpl, deadline);
+    if (seen.has(found.pageUrl)) continue;
+    seen.add(found.pageUrl);
+
+    const { result } = found;
+    const hit =
+      result.kind === 'feed' || (result.kind === 'candidates' && result.candidates.length > 0);
+    if (hit) return { ...found, viaAncestor: true };
+  }
+  return { ...first, viaAncestor: false };
+}
+
+/**
+ * 貼られた URL から見た上の階層。近い順に最大 MAX_ANCESTORS 件。
+ *
+ * クエリとフラグメントは落とす。記事を指す目印なので、上の階層には持ち上がらない。
+ * 末尾がディレクトリの形（`/a/b/`）なら、まず `/a/` を見る
+ */
+function ancestors(url: string): string[] {
+  // ここに来る URL は api/feeds.ts で正規化済みか、fetch が返した response.url。
+  // どちらも組み立て済みなので、壊れた形は来ない
+  const base = new URL(url);
+  base.search = '';
+  base.hash = '';
+
+  const found: string[] = [];
+  // 空要素は末尾スラッシュのぶん。落として数え直す
+  const parts = base.pathname.split('/').filter((part) => part !== '');
+  for (let depth = parts.length - 1; depth >= 0 && found.length < MAX_ANCESTORS; depth -= 1) {
+    base.pathname = `${parts
+      .slice(0, depth)
+      .map((part) => `/${part}`)
+      .join('')}/`;
+    found.push(base.href);
+  }
+  return found;
+}
+
+async function discoverAt(
+  url: string,
+  fetchImpl: typeof fetch,
+  signal: AbortSignal,
+): Promise<Attempt> {
+  const fail = (message: string): Attempt => ({ result: { kind: 'error', message }, pageUrl: url });
+
   let response: Response;
   try {
     response = await fetchImpl(url, {
       headers: { 'user-agent': USER_AGENT, accept: ACCEPT },
       redirect: 'follow',
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal,
     });
   } catch (err) {
-    return { kind: 'error', message: describeNetworkError(err).message };
+    return fail(describeNetworkError(err).message);
   }
 
-  if (!response.ok) {
-    return { kind: 'error', message: `HTTP ${response.status} ${response.statusText}`.trim() };
-  }
+  if (!response.ok) return fail(`HTTP ${response.status} ${response.statusText}`.trim());
 
   const read = await readBoundedText(response);
-  if (read.kind === 'error') return { kind: 'error', message: read.message };
+  if (read.kind === 'error') return fail(read.message);
   const body = read.body;
 
   // リダイレクトの後の URL を基準にする。相対 href の解決先がずれないように
-  const baseUrl = response.url === '' ? url : response.url;
+  const pageUrl = response.url === '' ? url : response.url;
 
-  try {
-    const parsed = parseFeed(body);
-    return { kind: 'feed', url: baseUrl, title: parsed.title, siteUrl: parsed.siteUrl };
-  } catch {
-    // フィードとして読めなかった。HTML とみなして候補を探す
+  // **HTML と名乗っているものを XML として読もうとしない。** 遡り先は索引ページ
+  // なのでまず外れるうえ、readBoundedText は 4MB まで読むので、その全文を
+  // fast-xml-parser に通す時間が段の数だけ積み上がる（CPU 時間は計上される）
+  const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+  if (!contentType.includes('text/html') && !contentType.includes('xhtml')) {
+    try {
+      const parsed = parseFeed(body);
+      return {
+        result: { kind: 'feed', url: pageUrl, title: parsed.title, siteUrl: parsed.siteUrl },
+        pageUrl,
+      };
+    } catch {
+      // フィードとして読めなかった。HTML とみなして候補を探す
+    }
   }
 
-  return { kind: 'candidates', candidates: await extractCandidates(body, baseUrl) };
+  return {
+    result: { kind: 'candidates', candidates: await extractCandidates(body, pageUrl) },
+    pageUrl,
+  };
 }
 
 /**

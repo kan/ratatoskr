@@ -7,7 +7,7 @@ import type {
   UpdateFeedRequest,
 } from '../../shared/types';
 import { crawl } from '../crawler';
-import { discoverFeed } from '../crawler/discover';
+import { discoverFeed, type FeedCandidate } from '../crawler/discover';
 import { selectEntries, selectEntriesByIds, selectMaxEntryId } from '../db/entries';
 import { deleteFeed, insertFeed, selectFeedById, updateFeedSettings } from '../db/feeds';
 import { badRequest, readJsonBody } from '../lib/body';
@@ -67,23 +67,32 @@ export async function createFeed(request: Request, env: Env): Promise<Response> 
   const folder = input.folder === undefined ? '' : parseFolder(input.folder);
 
   const found = await discoverFeed(url);
-  if (found.kind === 'error') {
-    throw new ApiError('fetch_failed', found.message, 502);
+  const { result } = found;
+  if (result.kind === 'error') {
+    throw new ApiError('fetch_failed', result.message, 502);
   }
-  if (found.kind === 'candidates') {
-    if (found.candidates.length === 0) {
-      throw new ApiError('feed_not_found', 'このページからフィードを見つけられない', 404);
-    }
-    if (found.candidates.length > 1) {
-      // どれを購読するかは決められない。候補を返してユーザに選ばせる
-      const body: FeedCandidatesResponse = { candidates: found.candidates };
-      return json(body, 300);
-    }
-    // 候補の title は <link title="..."> で、「Atom」「RSS」のような総称のことが多い。
-    // 名前はフィード自身の名乗りに任せる（空で入れると初回クロールが埋める）
-    return register(env, found.candidates[0].url, '', rate, folder);
+  // 上の階層で見つけたものは、フィードそのものでも 1 件でも選ばせる
+  // （理由は crawler/discover.ts の Discovery.viaAncestor）
+  const choose = (candidates: FeedCandidate[]): Response => {
+    const body: FeedCandidatesResponse = { candidates, foundAt: found.pageUrl };
+    return json(body, 300);
+  };
+
+  if (result.kind === 'feed') {
+    if (found.viaAncestor) return choose([{ url: result.url, title: result.title }]);
+    return register(env, result.url, result.title, rate, folder);
   }
-  return register(env, found.url, found.title, rate, folder);
+
+  if (result.candidates.length === 0) {
+    throw new ApiError('feed_not_found', 'このページからフィードを見つけられない', 404);
+  }
+  // 候補が複数あるときも、どれを購読するかは決められないので選ばせる
+  if (result.candidates.length > 1 || found.viaAncestor) {
+    return choose(result.candidates);
+  }
+  // 候補の title は <link title="..."> で、「Atom」「RSS」のような総称のことが多い。
+  // 名前はフィード自身の名乗りに任せる（空で入れると初回クロールが埋める）
+  return register(env, result.candidates[0].url, '', rate, folder);
 }
 
 async function register(

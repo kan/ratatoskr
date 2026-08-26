@@ -189,7 +189,13 @@ function add(feedUrl: string): Promise<void> {
     });
     if (result.kind === 'candidates') {
       candidates.value = result.candidates;
-      message.value = 'フィードが複数見つかった。どれを購読するか選ぶ';
+      // **どこで見つけたかを言う。** 貼った URL にフィードが無いときは上の階層まで
+      // 遡るので（note の記事ページなど）、黙って 1 件だけ並べると
+      // 「頼んでいないものを勧められている」ようにしか見えない
+      message.value =
+        result.foundAt === feedUrl
+          ? 'フィードが複数見つかった。どれを購読するか選ぶ'
+          : `貼った URL にフィードが無かった。${result.foundAt} で見つけたものから選ぶ`;
       return;
     }
     candidates.value = [];

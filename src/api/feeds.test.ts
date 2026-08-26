@@ -123,6 +123,27 @@ describe('POST /api/feeds', () => {
     ]);
   });
 
+  it('上の階層で見つけた候補は、1 件でも登録せず選ばせる', async () => {
+    // 貼られた URL とは違う場所のフィードなので、黙って登録すると
+    // 「頼んでいないものが増えた」形になる
+    stubFetch({
+      'https://blog.example.com/entry/1': { body: html(''), type: HTML },
+      'https://blog.example.com/entry/': { body: html(''), type: HTML },
+      'https://blog.example.com/': {
+        body: html('<link rel="alternate" type="application/rss+xml" href="/feed.xml">'),
+        type: HTML,
+      },
+    });
+
+    const response = await apiSend('POST', '/api/feeds', {
+      url: 'https://blog.example.com/entry/1',
+    });
+
+    expect(response.status).toBe(300);
+    const body = (await response.json()) as FeedCandidatesResponse;
+    expect(body.candidates).toEqual([{ url: 'https://blog.example.com/feed.xml', title: null }]);
+  });
+
   it('フィードが見つからないページは 404', async () => {
     stubFetch({ 'https://blog.example.com/': { body: html(''), type: HTML } });
     const response = await apiSend('POST', '/api/feeds', { url: 'https://blog.example.com/' });

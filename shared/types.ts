@@ -151,6 +151,14 @@ export interface CreateFeedResponse {
 /** フィードが複数見つかった場合（HTTP 300）。どれを購読するかはユーザが選ぶ */
 export interface FeedCandidatesResponse {
   candidates: { url: string; title: string | null }[];
+  /**
+   * 候補を見つけたページ。**貼られた URL と違うことがある。**
+   *
+   * 上の階層を遡って見つけた場合（note の記事ページなど）に、候補が 1 件でも
+   * 選ばせる形になる。どこで見つけたものかが分からないと、利用者から見て
+   * 「頼んでいないものを勧められている」ようにしか見えない
+   */
+  foundAt: string;
 }
 
 /** PATCH /api/feeds/:id。指定した項目だけを更新する */

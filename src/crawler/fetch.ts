@@ -61,11 +61,23 @@ export interface FetchTarget {
 /**
  * 取得の共通設定。フィード本体の取得（ここ）と、購読追加時の検出（discover.ts）で
  * 同じ名乗り・同じ上限を使う。片方だけ緩めることに意味は無い。
+ *
+ * 例外は下の DISCOVER_ANCESTOR_BUDGET_MS だけで、あれは当てが外れたときの
+ * 保険に付ける締め切りなので、本命と同じだけ待たせない。
  */
 export const USER_AGENT = 'Ratatoskr/0.1 (+https://github.com/kan/ratatoskr)';
 // 遅いサーバに cron 全体を引きずられないための打ち切り。
 // fetch の待ち時間は CPU 時間に計上されないが、実行時間の上限には効く
 export const TIMEOUT_MS = 15_000;
+
+/**
+ * 上の階層を遡って探すとき（discover.ts）に、**遡り全体で**使える時間。
+ *
+ * 段ごとに TIMEOUT_MS を持たせると、全滅したときに段数ぶん積み上がる。遡りは
+ * 本命が外れたときの保険なので、購読の追加が返らなくなる方が損が大きい。
+ * 締め切りを 1 つ共有すれば、何段あっても待ちはここで頭打ちになる
+ */
+export const DISCOVER_ANCESTOR_BUDGET_MS = 5_000;
 // 想定外に巨大なフィードで DB とメモリを埋めないための上限
 export const MAX_BYTES = 4 * 1024 * 1024;
 
