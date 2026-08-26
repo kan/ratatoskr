@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import type { Feed, FeedErrorKind } from '@shared/types';
+import { REPOSITORY_URL } from '@shared/types';
 import { bookmarkletFor } from '@/lib/bookmarklet';
 import { confirmUnsubscribe, isStalled, UNCATEGORIZED } from '@/lib/subscriptions';
 import { sortByReadingOrder, useFeedsStore } from '@/stores/feeds';
@@ -286,12 +287,23 @@ async function onOpmlSelected(event: Event): Promise<void> {
 </script>
 
 <template>
+  <!--
+    **パネルは画面に収める（issue #8）。** 伸びるのは購読の一覧だけなので、そこだけを
+    スクロールさせ、追加フォームと下段の導線は常に見える位置に留める。全体を流すと、
+    購読が増えるほど「追加」も「OPML」も画面外へ出ていく
+
+    **パネル自体にも overflow-y-auto を残す。** 一覧は 0 まで縮むが、追加フォームと
+    下段の導線はそれ以上縮まない（flex 子の min-height は auto）。横向きのスマホのように
+    縦が 330px を切ると合計が入り切らず、逃げ場が無いと下段の導線がパネルの外へ落ちる
+  -->
   <div
-    class="fixed inset-0 z-10 flex items-start justify-center overflow-y-auto bg-black/50 p-4"
+    class="fixed inset-0 z-10 flex items-start justify-center bg-black/50 p-4 md:p-8"
     data-testid="subscription-manager"
     @click.self="emit('close')"
   >
-    <div class="w-full max-w-3xl rounded bg-white p-5 text-sm shadow-lg dark:bg-neutral-900">
+    <div
+      class="subtle-scrollbar flex max-h-full w-full max-w-3xl flex-col overflow-y-auto rounded bg-white p-5 text-sm shadow-lg dark:bg-neutral-900"
+    >
       <div class="flex items-center justify-between">
         <h2 class="text-base font-bold">購読管理</h2>
         <button class="text-xs text-neutral-500 hover:underline" @click="emit('close')">
@@ -381,9 +393,10 @@ async function onOpmlSelected(event: Event): Promise<void> {
         docs/UX.md）。入る幅が無いまま table-fixed で詰めると、タイトルが 1 文字ずつ
         縦に折り返されて読めなくなる
       -->
-      <div class="mt-2 overflow-x-auto">
+      <div class="subtle-scrollbar mt-2 min-h-0 flex-1 overflow-auto">
         <table class="w-full min-w-[36rem] table-fixed border-collapse text-xs">
-          <thead class="text-left text-neutral-500">
+          <!-- 一覧だけが流れるので、列の見出しは上端に貼り付けて残す -->
+          <thead class="sticky top-0 bg-white text-left text-neutral-500 dark:bg-neutral-900">
             <tr>
               <th class="w-auto py-1">タイトル</th>
               <th class="w-16 py-1">レート</th>
@@ -533,11 +546,16 @@ async function onOpmlSelected(event: Event): Promise<void> {
         </button>
       </div>
 
+      <!--
+        下段の導線。**1 行にまとめる（issue #8）。** 説明文は title に寄せて、
+        一覧に使える高さを削らない。ブックマークレット（issue #4）はブックマーク
+        バーへドラッグして使い、押すとこの画面が開いて登録まで済む
+      -->
       <div
-        class="mt-5 flex items-center gap-4 border-t border-neutral-200 pt-3 dark:border-neutral-800"
+        class="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-neutral-200 pt-3 text-xs dark:border-neutral-800"
       >
-        <a href="/api/opml" download class="text-xs hover:underline">OPML を書き出す</a>
-        <label class="text-xs hover:underline">
+        <a href="/api/opml" download class="hover:underline">OPML を書き出す</a>
+        <label class="hover:underline" title="取り込んだ購読は次回の定期取得で記事が入る">
           OPML を取り込む
           <input
             type="file"
@@ -546,28 +564,24 @@ async function onOpmlSelected(event: Event): Promise<void> {
             @change="onOpmlSelected"
           />
         </label>
-        <span class="text-xs text-neutral-500">取り込んだ購読は次回の定期取得で記事が入る</span>
-      </div>
-
-      <!--
-        見ているサイトをその場で購読する導線（issue #4）。
-        ブックマークバーへドラッグして使う。押すとこの画面が開いて登録まで済む
-      -->
-      <div
-        class="mt-3 flex flex-wrap items-center gap-3 border-t border-neutral-200 pt-3 text-xs dark:border-neutral-800"
-      >
         <a
           :href="bookmarklet"
           class="rounded border border-neutral-400 px-2 py-1 dark:border-neutral-600"
           data-testid="bookmarklet"
-          title="ブックマークバーにドラッグする"
+          title="ブックマークバーにドラッグしておくと、見ているサイトのフィードをその場で購読できる"
           @click.prevent
         >
           Ratatoskr に追加
         </a>
-        <span class="text-neutral-500">
-          ブックマークバーにドラッグしておくと、見ているサイトのフィードをその場で購読できる
-        </span>
+        <a
+          :href="REPOSITORY_URL"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="ml-auto text-neutral-500 hover:underline"
+          data-testid="manager-repository-link"
+        >
+          GitHub
+        </a>
       </div>
     </div>
 

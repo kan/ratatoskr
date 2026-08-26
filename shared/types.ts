@@ -230,6 +230,14 @@ export interface HealthResponse {
 export const RETENTION_DAYS = 30;
 
 /**
+ * このアプリ自身の在り処。
+ *
+ * 画面のリンク（ヘルプと購読管理）と、クローラが名乗る User-Agent の両方が同じ値を見る。
+ * 書き写すと、移転したときに画面のリンクだけ直り、名乗りが死んだ URL を指したまま残る。
+ */
+export const REPOSITORY_URL = 'https://github.com/kan/ratatoskr';
+
+/**
  * 連続失敗がこの回数を超えたら、そのフィードの取得を止める（feeds.disabled = 1）。
  *
  * サーバ（取得を止める側）と画面（止まったことを知らせる側）の両方が同じ値を見る。

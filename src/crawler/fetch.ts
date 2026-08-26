@@ -1,4 +1,4 @@
-import type { FeedErrorKind } from '../../shared/types';
+import { REPOSITORY_URL, type FeedErrorKind } from '../../shared/types';
 import { errorMessage } from '../lib/errors';
 import { sha256Hex } from '../lib/hash';
 
@@ -65,7 +65,7 @@ export interface FetchTarget {
  * 例外は下の DISCOVER_ANCESTOR_BUDGET_MS だけで、あれは当てが外れたときの
  * 保険に付ける締め切りなので、本命と同じだけ待たせない。
  */
-export const USER_AGENT = 'Ratatoskr/0.1 (+https://github.com/kan/ratatoskr)';
+export const USER_AGENT = `Ratatoskr/0.1 (+${REPOSITORY_URL})`;
 // 遅いサーバに cron 全体を引きずられないための打ち切り。
 // fetch の待ち時間は CPU 時間に計上されないが、実行時間の上限には効く
 export const TIMEOUT_MS = 15_000;

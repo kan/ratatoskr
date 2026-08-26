@@ -11,6 +11,8 @@ import { ApiError, json } from '../lib/errors';
  * 意味が通るようにし、レートは独自の名前空間に逃がす（他のリーダーは無視する）。
  */
 
+// **shared の REPOSITORY_URL とは別物。** これは XML 名前空間の識別子で、
+// 書き出し済みの OPML を読み戻すための固定値。リポジトリを移しても変えない
 const NAMESPACE = 'https://github.com/kan/ratatoskr';
 /** 1 回のインポートで受ける上限。巨大な OPML でサブリクエスト上限に当たらないため */
 const MAX_IMPORT = 500;

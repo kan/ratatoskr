@@ -247,6 +247,8 @@
 
 .subtle-scrollbar::-webkit-scrollbar {
   width: 8px;
+  /* 横に流れる入れ物（購読管理の一覧）でも同じ細さにする */
+  height: 8px;
 }
 
 .subtle-scrollbar::-webkit-scrollbar-track {

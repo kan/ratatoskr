@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { REPOSITORY_URL } from '@shared/types';
 import { GROUP_LABELS, KEYMAP, type KeyBinding } from '@/lib/keymap';
 
 /**
@@ -93,7 +94,19 @@ defineEmits<{ close: [] }>();
           </div>
         </dl>
       </template>
-      <p class="mt-5 text-xs text-neutral-500">Esc または ? でも閉じる</p>
+      <div class="mt-5 flex items-center justify-between text-xs text-neutral-500">
+        <span>Esc または ? でも閉じる</span>
+        <!-- このアプリについて知りたくなったときの行き先（issue #8） -->
+        <a
+          :href="REPOSITORY_URL"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="hover:underline"
+          data-testid="help-repository-link"
+        >
+          Ratatoskr on GitHub
+        </a>
+      </div>
     </div>
   </div>
 </template>
