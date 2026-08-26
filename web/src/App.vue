@@ -536,11 +536,14 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
           @prev="feeds.prevEntry()"
         />
         <!--
-          スマホのボトムバー。境界でラベルだけが変わる（docs/UX.md）。
-          押す操作は j / k と同じ経路を通るので、キーとの食い違いが生まれない
+          記事送りのバー。境界でラベルだけが変わる（docs/UX.md）。
+          押す操作は j / k と同じ経路を通るので、キーとの食い違いが生まれない。
+
+          **PC にも出す（issue #6）。** マウスだけで読み進める道が無かった。
+          サイドバーの記事を選ぶ形にはしない（一覧は移動手段であって選択画面ではない、
+          という docs/UX.md の方針に反する）
         -->
         <BottomBar
-          v-if="compact"
           :at-first-entry="atFirstEntry"
           :at-last-entry="atLastEntry"
           :pinned="currentPinned"
