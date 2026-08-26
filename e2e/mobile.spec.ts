@@ -125,6 +125,18 @@ test('引き出しは閉じるボタンでも畳める', async ({ page }) => {
   await expect(title(page)).toHaveText('朝刊の 1 本目');
 });
 
+test('引き出しを開いたまま m を押しても、購読管理が引き出しの裏に隠れない', async ({ page }) => {
+  await open(page);
+  await page.getByTestId('open-feed-list').click();
+  await expect(page.getByTestId('feed-1')).toBeVisible();
+
+  await page.keyboard.press('m');
+
+  await expect(page.getByTestId('subscription-manager')).toBeVisible();
+  // 引き出しは不透明で購読管理より手前に出る。畳まないと開いたことに気付けない
+  await expect(page.getByTestId('feed-1')).toHaveCount(0);
+});
+
 test('ボトムバーは境界でラベルだけが変わる', async ({ page }) => {
   await open(page);
   const next = page.getByTestId('bottom-next');

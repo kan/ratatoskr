@@ -40,7 +40,7 @@ const drawerOpen = ref(false);
 
 /**
  * 画面のテーマ。初期値だけシステム設定に従い、一度切り替えたら覚える（lib/theme.ts）。
- * キーは割り当てない（docs/UX.md のキー表に無いものを増やさない）
+ * キーは割り当てない（読み始める前に一度決めれば済む。docs/UX.md のキー表の基準）
  */
 const theme = useTheme();
 
@@ -67,9 +67,17 @@ function selectEntryIn(feedId: number, entryId: number): void {
   drawerOpen.value = false;
 }
 
+/**
+ * オーバーレイを開く。入口はキーとボタンの両方にあるので 1 箇所に集める。
+ * 購読管理は狭い画面だと引き出しの裏に開くので、開く前に畳む
+ */
+function openOverlay(name: NonNullable<typeof activeOverlay.value>): void {
+  if (name === 'subscriptions') drawerOpen.value = false;
+  activeOverlay.value = name;
+}
+
 function openManager(): void {
-  drawerOpen.value = false;
-  activeOverlay.value = 'subscriptions';
+  openOverlay('subscriptions');
 }
 
 /**
@@ -85,7 +93,7 @@ function takePendingSubscription(): void {
   if (url === null) return;
 
   pendingUrl.value = url;
-  activeOverlay.value = 'subscriptions';
+  openManager();
   window.history.replaceState(null, '', window.location.pathname);
 }
 
@@ -178,13 +186,14 @@ function handle(binding: KeyBinding): boolean {
       openAllPins();
       return true;
     }
-    if (
-      binding.action !== 'closeOverlay' &&
-      binding.action !== 'toggleHelp' &&
-      binding.action !== 'togglePinList'
-    ) {
-      return false;
+    // 別のオーバーレイの入口なら切り替える。**Esc を挟ませない。** 初回起動で
+    // 自動で開くヘルプに m が載っている以上、そこから 1 打で行けないと嘘になる
+    if (binding.overlay !== undefined && binding.overlay !== activeOverlay.value) {
+      closeOverlay();
+      openOverlay(binding.overlay);
+      return true;
     }
+    if (binding.action !== 'closeOverlay' && binding.overlay === undefined) return false;
     closeOverlay();
     return true;
   }
@@ -219,7 +228,7 @@ function handle(binding: KeyBinding): boolean {
       togglePin();
       break;
     case 'togglePinList':
-      activeOverlay.value = 'pins';
+      openOverlay('pins');
       break;
     case 'openAllPins':
       // ピン一覧を開いていないときは何もしない（誤爆でタブが大量に開くのを避ける）
@@ -235,8 +244,17 @@ function handle(binding: KeyBinding): boolean {
       openOriginal();
       break;
     case 'toggleHelp':
-      activeOverlay.value = 'help';
+      openOverlay('help');
       break;
+    case 'openSubscriptions':
+      openManager();
+      break;
+    case 'unsubscribeFeed': {
+      // 読んでいるフィードが対象。確認と後始末は左ペインのボタンと同じ経路を通る
+      const current = feeds.currentFeed;
+      if (current !== null) unsubscribeFeed(current.id);
+      break;
+    }
     case 'closeOverlay':
       break;
   }
@@ -340,7 +358,7 @@ function openAllPins(): void {
 
   if (blocked.length === 0) {
     if (opening.length > 0) notify(`${opening.length} 件をタブで開いた`);
-    activeOverlay.value = null;
+    closeOverlay();
     return;
   }
 
@@ -386,6 +404,9 @@ function onKeydown(event: KeyboardEvent): void {
 function closeOverlay(): void {
   if (activeOverlay.value === 'help') markHelpSeen();
   activeOverlay.value = null;
+  // 閉じたら渡された URL も落とす。残すと、次に購読管理を開いた時点で
+  // 押した覚えのない登録がもう一度飛ぶ（m で開き直すと 2 打で起きる）
+  pendingUrl.value = null;
 }
 
 onMounted(() => {
@@ -574,14 +595,11 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
     <SubscriptionManager
       v-if="activeOverlay === 'subscriptions'"
       :initial-url="pendingUrl"
-      @close="
-        activeOverlay = null;
-        pendingUrl = null;
-      "
+      @close="closeOverlay"
     />
     <PinList
       v-if="activeOverlay === 'pins'"
-      @close="activeOverlay = null"
+      @close="closeOverlay"
       @remove="(pin) => removePin(pin)"
     />
   </div>

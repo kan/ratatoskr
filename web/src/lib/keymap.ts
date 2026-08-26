@@ -25,6 +25,8 @@ export type Action =
   | 'pageUp'
   | 'openOriginal'
   | 'toggleHelp'
+  | 'openSubscriptions'
+  | 'unsubscribeFeed'
   | 'closeOverlay';
 
 export interface KeyBinding {
@@ -42,6 +44,13 @@ export interface KeyBinding {
   description: string;
   /** ヘルプでの並び。同じ値は定義順 */
   group: 'move' | 'read' | 'feed' | 'pin' | 'other';
+
+  /**
+   * このキーが開くオーバーレイ。**入口を増やすたびに App.vue の分岐を足さないため**、
+   * どれを開くのかはキーの側に持たせる。開いている間に押されたら、同じものなら閉じ、
+   * 別のものなら切り替える（ヘルプを読んで m を押した人が、Esc を挟まずに済む）
+   */
+  overlay?: 'help' | 'subscriptions' | 'pins';
 
   /**
    * キーそのものが引数を兼ねる場合の値（レートの 1–5）。
@@ -100,6 +109,7 @@ export const KEYMAP: readonly KeyBinding[] = [
   },
   {
     key: 'z',
+    overlay: 'pins',
     label: 'z',
     action: 'togglePinList',
     description: 'ピン一覧を開く / 閉じる',
@@ -119,6 +129,23 @@ export const KEYMAP: readonly KeyBinding[] = [
     description: 'このフィードを今すぐ取得し直す',
     group: 'feed',
   },
+  {
+    key: 'm',
+    overlay: 'subscriptions',
+    label: 'm',
+    action: 'openSubscriptions',
+    description: '購読管理を開く',
+    group: 'feed',
+  },
+  {
+    // **消す操作には修飾キーを付ける。** 購読を解除すると既読位置も設定も失われる。
+    // Shift+S（全て既読）と同じ考え方で、読み進めるキーからも離してある
+    key: 'X',
+    label: 'Shift+X',
+    action: 'unsubscribeFeed',
+    description: 'このフィードの購読を解除する',
+    group: 'feed',
+  },
   ...([1, 2, 3, 4, 5] as const).map((rate) => ({
     key: String(rate),
     label: String(rate),
@@ -127,7 +154,14 @@ export const KEYMAP: readonly KeyBinding[] = [
     description: `このフィードのレートを ${rate} にする`,
     group: 'feed' as const,
   })),
-  { key: '?', label: '?', action: 'toggleHelp', description: 'ヘルプ', group: 'other' },
+  {
+    key: '?',
+    label: '?',
+    action: 'toggleHelp',
+    overlay: 'help',
+    description: 'ヘルプ',
+    group: 'other',
+  },
   {
     key: 'Escape',
     label: 'Esc',

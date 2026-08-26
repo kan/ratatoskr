@@ -280,6 +280,23 @@ test('?add= 付きで開くと、その URL をそのまま購読する', async 
   expect(new URL(page.url()).search).toBe('');
 });
 
+test('閉じてから開き直しても、ブックマークレットの URL を再登録しない', async ({ page }) => {
+  const recorder = await mockApi(page);
+  const target = 'https://example.com/blog/';
+
+  await page.goto(`/?add=${encodeURIComponent(target)}`);
+  await expect.poll(() => recorder.created.map((c) => c.url)).toEqual([target]);
+
+  // Esc で閉じる経路は @close を通らないので、渡された URL が残りやすい
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('subscription-manager')).toBeHidden();
+  await page.keyboard.press('m');
+  await expect(page.getByTestId('subscription-manager')).toBeVisible();
+
+  await page.waitForTimeout(200);
+  expect(recorder.created.map((c) => c.url)).toEqual([target]);
+});
+
 test('登録できない URL は無視して、普通に起動する', async ({ page }) => {
   const recorder = await mockApi(page);
 

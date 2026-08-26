@@ -155,7 +155,7 @@ watch(
     class="flex h-full flex-col overflow-hidden border-r border-neutral-300 dark:border-neutral-700"
   >
     <!--
-      購読管理への入口。キーは割り当てない（docs/UX.md のキー表に無いものを増やさない）。
+      購読管理への入口。キー（m）からも開ける（docs/UX.md のキー表）。
       **スクロールの外に置く。** 一覧は購読の数だけ伸びるので、中に入れると
       下まで読み進めたときに入口が画面の外へ消える
     -->
@@ -263,8 +263,8 @@ watch(
               <span class="truncate">{{ feed.title || feed.url }}</span>
             </button>
             <!--
-              読んでいる最中の解除（issue #2）。キーは割り当てない（docs/UX.md の
-              キー表に無いものを増やさない）。普段は文字色を透明にして場所だけ取り、
+              読んでいる最中の解除（issue #2）。キー（Shift+X）からも解除できる
+              （docs/UX.md のキー表）。普段は文字色を透明にして場所だけ取り、
               行に触れたときに出す。出したり消したりで幅が動くと、フィード名の
               折り返し位置が変わって読みにくい
             -->

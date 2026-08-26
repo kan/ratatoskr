@@ -160,8 +160,68 @@ test('? でヘルプが開き、Esc で閉じる', async ({ page }) => {
   await page.keyboard.press('j');
   await expect(help).toBeVisible();
 
+  // 出どころへの導線もここに置く（issue #8）
+  await expect(page.getByTestId('help-repository-link')).toHaveAttribute(
+    'href',
+    'https://github.com/kan/ratatoskr',
+  );
+
   await page.keyboard.press('Escape');
   await expect(help).toBeHidden();
+  await expect(title(page)).toHaveText('朝刊の 1 本目');
+});
+
+test('m で購読管理が開く', async ({ page }) => {
+  await open(page);
+  await page.keyboard.press('m');
+
+  await expect(page.getByTestId('subscription-manager')).toBeVisible();
+  // キーの一覧にも出る（keymap.ts から自動生成される）
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('?');
+  await expect(page.getByTestId('help-overlay')).toContainText('購読管理を開く');
+});
+
+test('ヘルプを開いたまま m を押すと、Esc を挟まずに購読管理へ移る', async ({ page }) => {
+  // 初回起動ではヘルプが自動で開く。そこに載っているキーが 1 打で効かないと嘘になる
+  await open(page);
+  await page.keyboard.press('?');
+  await expect(page.getByTestId('help-overlay')).toBeVisible();
+
+  await page.keyboard.press('m');
+
+  await expect(page.getByTestId('subscription-manager')).toBeVisible();
+  await expect(page.getByTestId('help-overlay')).toBeHidden();
+  // 戻る側も同じ。開き直しではなく切り替えになる
+  await page.keyboard.press('?');
+  await expect(page.getByTestId('help-overlay')).toBeVisible();
+  await expect(page.getByTestId('subscription-manager')).toBeHidden();
+});
+
+test('Shift+X で読んでいるフィードの購読を解除する', async ({ page }) => {
+  const recorder = await mockApi(page);
+  page.on('dialog', (dialog) => dialog.accept());
+  await page.goto('/');
+  await expect(title(page)).toHaveText('朝刊の 1 本目');
+
+  await page.keyboard.press('X');
+
+  await expect.poll(() => recorder.deleted).toEqual([1]);
+  // カーソルは次の未読フィードへ移り、読み続けられる
+  await expect(title(page)).toHaveText('夕刊の 1 本目');
+});
+
+test('Shift+X の確認を断れば何も起きない', async ({ page }) => {
+  // 購読を消すと既読位置も設定も失われる。取り消せないので必ず確認を挟む
+  const recorder = await mockApi(page);
+  page.on('dialog', (dialog) => dialog.dismiss());
+  await page.goto('/');
+  await expect(title(page)).toHaveText('朝刊の 1 本目');
+
+  await page.keyboard.press('X');
+  await page.waitForTimeout(200);
+
+  expect(recorder.deleted).toEqual([]);
   await expect(title(page)).toHaveText('朝刊の 1 本目');
 });
 
