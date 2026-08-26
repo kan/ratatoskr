@@ -17,6 +17,18 @@ import { parseFeed } from './parse';
 const ACCEPT =
   'application/atom+xml, application/rss+xml, application/xml;q=0.9, text/html;q=0.8, */*;q=0.5';
 
+/**
+ * `<a href>` がフィードを指していそうなパス。`<a>` を絞り込むのに使う。
+ * ここを通っても最後にホスト名と否定リストで確かめる
+ */
+const FEED_PATH = /(\.(xml|rdf|atom|rss)|\/(feeds?|rss|atom)\/?)$/i;
+
+/** そもそも見る価値のある href か。URL を組む前の安い足切り */
+const MAYBE_FEED = /(xml|rdf|atom|rss|feed)/i;
+
+/** 拡張子が .xml でもフィードではないもの */
+const NOT_FEED = /(sitemap|opensearch|manifest|atomsvc)/i;
+
 /** フィードとして扱う type 属性。大文字小文字は無視する */
 const FEED_TYPES = new Set([
   'application/rss+xml',
@@ -80,31 +92,92 @@ export async function discoverFeed(
  *
  * 同じ URL が複数回出てくるサイトがあるので、URL で重複を除く。
  * 順序は HTML に現れた順のまま返す（サイトが上に置いたものが主フィードであることが多い）。
+ *
+ * **`<link>` が 1 つも無ければ `<a href>` に落ちる。** 自動検出用のタグを出さず、
+ * 人間向けのリンクだけを置くサイトがある。落ちるのは 0 件のときだけで、
+ * `<link>` があるサイトの候補に紛れ込ませない（そちらの方が確かなので）。
  */
 async function extractCandidates(html: string, baseUrl: string): Promise<FeedCandidate[]> {
   const found = new Map<string, FeedCandidate>();
+  const fallback = new Map<string, FeedCandidate>();
+  // <a> ごとに組み直さない。走査の間ずっと同じもの。
+  // hash は相対 URL の解決に使われないので、先に落としておけば
+  // 「ページ自身へのリンクか」の比較がそのまま行える
+  const base = new URL(baseUrl);
+  base.hash = '';
 
-  const rewriter = new HTMLRewriter().on('link', {
-    element(element) {
-      const rel = element.getAttribute('rel')?.toLowerCase() ?? '';
-      // rel は空白区切りで複数取りうる（rel="alternate home"）
-      if (!rel.split(/\s+/).includes('alternate')) return;
+  const rewriter = new HTMLRewriter()
+    .on('link', {
+      element(element) {
+        const rel = element.getAttribute('rel')?.toLowerCase() ?? '';
+        // rel は空白区切りで複数取りうる（rel="alternate home"）
+        if (!rel.split(/\s+/).includes('alternate')) return;
 
-      const type = element.getAttribute('type')?.toLowerCase().trim() ?? '';
-      if (!FEED_TYPES.has(type)) return;
+        const type = element.getAttribute('type')?.toLowerCase().trim() ?? '';
+        if (!FEED_TYPES.has(type)) return;
 
-      const href = element.getAttribute('href');
-      if (href === null) return;
+        const href = element.getAttribute('href');
+        if (href === null) return;
 
-      const absolute = absoluteUrl(href, baseUrl);
-      if (absolute === null || found.has(absolute)) return;
-      found.set(absolute, { url: absolute, title: element.getAttribute('title') });
-    },
-  });
+        const absolute = absoluteUrl(href, baseUrl);
+        if (absolute === null || found.has(absolute)) return;
+        found.set(absolute, { url: absolute, title: element.getAttribute('title') });
+      },
+    })
+    .on('a', {
+      element(element) {
+        // <link> は <head>、<a> は <body> にあるので、ここへ来る時点で答えは出ている。
+        // 見つかっていれば fallback は最後に捨てられるので、数える必要が無い
+        if (found.size > 0) return;
+
+        const href = element.getAttribute('href');
+        // 記事一覧のページには <a> が数百ある。URL を組む前に安く落とす
+        if (href === null || !MAYBE_FEED.test(href)) return;
+
+        const absolute = feedLikeUrl(href, base);
+        if (absolute === null) return;
+        // 名前はフィード自身の名乗りに任せる（<a> の文字は「RSS」等の総称が多い）
+        fallback.set(absolute, { url: absolute, title: null });
+      },
+    });
 
   // 変換後の本文は使わない。読み切らないとハンドラが最後まで走らないので捨てるために読む
   await rewriter.transform(new Response(html)).text();
-  return [...found.values()];
+  return found.size > 0 ? [...found.values()] : [...fallback.values()];
+}
+
+/**
+ * `<a href>` がフィードを指していそうか。指していれば絶対 URL、違えば null。
+ *
+ * **同じサイトの中だけを見る。** 外部の購読サービス（feedly など）へのリンクが
+ * 混ざると、そちらを購読してしまう。候補が 1 つなら確認せずに購読する経路がある
+ * ので（api/feeds.ts）、迷うものは候補にしない。
+ */
+function feedLikeUrl(href: string, base: URL): string | null {
+  let url: URL;
+  try {
+    url = new URL(href, base);
+  } catch {
+    return null;
+  }
+
+  // **ホスト名で見る。** origin の完全一致にすると、www の有無や http のままの
+  // 絶対 URL を書いているサイトのリンクを落とす。外部の購読サービスを弾くのが
+  // 目的なので、同じサイトかどうかが分かれば足りる
+  if (siteName(url) !== siteName(base)) return null;
+  if (NOT_FEED.test(url.pathname)) return null;
+  if (!FEED_PATH.test(url.pathname)) return null;
+
+  // <a> には目印や計測用の付け足しが付く。同じフィードが別々の候補になると、
+  // 見た目の同じ選択肢をユーザに見せることになる
+  url.hash = '';
+  // ページ自身へのリンク（<a href="#main">）は候補にしない
+  return url.href === base.href ? null : url.href;
+}
+
+/** www の有無を無視したホスト名。同じサイトかどうかの判定に使う */
+function siteName(url: URL): string {
+  return url.hostname.replace(/^www\./i, '');
 }
 
 function absoluteUrl(href: string, baseUrl: string): string | null {
