@@ -185,7 +185,7 @@ export interface Pin {
 { "url": "https://example.com/", "rate": 3, "folder": "tech" }
 ```
 
-`url` はサイト URL でもフィード URL でもよい。サイト URL の場合は `<link rel="alternate" type="application/rss+xml">` を探してフィード URL を発見する（`HTMLRewriter` を使う）。
+`url` はサイト URL でもフィード URL でもよい。サイト URL の場合は `<link rel="alternate" type="application/rss+xml">` を探してフィード URL を発見する（`HTMLRewriter` を使う）。**`<link>` が 1 つも無ければ、同一サイト内のフィードらしい `<a href>`（`.xml` / `.rdf` / `.atom` / `.rss` で終わる、または `/feed` `/rss` `/atom` で終わる）を候補にする。**
 
 登録後、**同期的に初回クロールを実行**してから返す。ユーザが登録直後に記事を読めるようにするため。
 
