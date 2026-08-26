@@ -30,6 +30,24 @@ const OPAQUE_TAGS = 'script, style, noscript, template, title, svg, head';
  */
 const MIN_PARAGRAPH = 25;
 
+/**
+ * 段落の切れ目になるタグ。ブロック要素は段落を切る、という一般則で選んである。
+ *
+ * **`<p>` だけを見ていると、`<p>` を使わずに本文を書くサイトで加点が丸ごと落ちる。**
+ * 虚構新聞は article 直下に素のテキストを置き、改行は br だけで作っている。
+ * `<p>` もこの一員（段落の切れ目であることに変わりはない）。
+ *
+ * br だけは別扱いにする（softBreak）。
+ */
+const BREAK_TAGS =
+  'p, li, h1, h2, h3, h4, h5, h6, tr, blockquote, pre, figcaption, dt, dd, figure, hr, header, footer, nav, aside, address, form';
+
+/**
+ * 段落と認めるリンク率の上限。**これを超える塊はナビゲーションとみなして数えない。**
+ * 本文の中の語へのリンクが半分を超えることはない
+ */
+const MAX_PARAGRAPH_LINK_SHARE = 0.5;
+
 /** AI に渡す書き出しの長さ */
 const PREVIEW_LENGTH = 80;
 
@@ -113,9 +131,10 @@ export async function scanCandidates(
 
   let opaqueDepth = 0;
   let linkDepth = 0;
-  let inParagraph = false;
   /** いま開いている段落の文字数 */
   let paragraphText = 0;
+  /** そのうちリンクの中にあった文字数 */
+  let paragraphLink = 0;
 
   /**
    * 開いている段落を締めて加点する。
@@ -130,9 +149,17 @@ export async function scanCandidates(
    */
   function creditParagraph(): void {
     const text = paragraphText;
+    const link = paragraphLink;
     paragraphText = 0;
-    inParagraph = false;
+    paragraphLink = 0;
     if (text < MIN_PARAGRAPH) return;
+    // **リンクばかりの塊は段落として数えない。** ナビゲーションや関連記事の一覧は
+    // li で組まれているとは限らず、素のリンクが並ぶだけのこともある。それを数えると
+    // 分母（paragraphTotal）が膨らみ、本文が下限に切られて候補から落ちる。
+    //
+    // 丸ごと捨てるのは、toCandidate のリンク率による比例割引と違って**採点を動かさない**
+    // ため。割引の形にすると `<p>` で書かれた既存のサイトの点数まで全て変わる
+    if (link >= text * MAX_PARAGRAPH_LINK_SHARE) return;
 
     if (scope === null || inScope) paragraphTotal += text;
 
@@ -141,6 +168,17 @@ export async function scanCandidates(
     const grandparent = open[open.length - 2];
     if (parent !== undefined) parent.paragraph += text;
     if (grandparent !== undefined) grandparent.paragraph += text / 2;
+  }
+
+  /**
+   * br による改行。**溜まりが段落と呼べる長さに達していなければ締めない。**
+   *
+   * br は他の切れ目と違って、1 つの段落の中の改行にも使われる。1 行が短い書き方
+   * （詩や箇条書き風の日記）で毎回締めると、全ての行が MIN_PARAGRAPH に届かず
+   * 加点が丸ごと落ちる。長い行はそのまま割れるので、区切りとしては効いたまま
+   */
+  function softBreak(): void {
+    if (paragraphText >= MIN_PARAGRAPH) creditParagraph();
   }
 
   const rewriter = new HTMLRewriter()
@@ -188,14 +226,18 @@ export async function scanCandidates(
         });
       },
     })
-    .on('p', {
+    .on(BREAK_TAGS, {
       element(element) {
         // 前の段落が閉じられていなければ、ここで閉じたものとして締める
         creditParagraph();
-        inParagraph = true;
         element.onEndTag(() => {
           creditParagraph();
         });
+      },
+    })
+    .on('br', {
+      element() {
+        softBreak();
       },
     })
     .on('*', {
@@ -211,7 +253,8 @@ export async function scanCandidates(
             node.preview = (node.preview + chunk.text.trim()).slice(0, PREVIEW_LENGTH);
           }
         }
-        if (inParagraph) paragraphText += length;
+        paragraphText += length;
+        if (linkDepth > 0) paragraphLink += length;
       },
     });
 

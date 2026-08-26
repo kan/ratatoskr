@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import kyokoHtml from './__fixtures__/article-kyoko-np.html?raw';
 import technoEdgeHtml from './__fixtures__/article-techno-edge.html?raw';
 import diaryHtml from './__fixtures__/diary-hyuki.html?raw';
 import { fragmentOf, locateFragmentOccurrence, scanCandidates } from './extract';
@@ -88,6 +89,76 @@ describe('scanCandidates', () => {
     const candidates = await scanCandidates(diaryHtml);
 
     expect(candidates.map((candidate) => candidate.selector)).not.toContain('div.p-2.flex-grow-1');
+  });
+
+  /**
+   * 本文が `<p>` に入っていないサイト（虚構新聞）。article 直下に素のテキストを置き、
+   * 改行は `<br>` だけで作っている。`<p>` からしか点を配らないと候補が 0 件になる
+   */
+  it('p を使わずに書かれた本文でも、入れ物を 1 位にする', async () => {
+    const candidates = await scanCandidates(kyokoHtml);
+
+    expect(candidates[0].selector).toBe('article');
+    // 本文の入れ物なのでリンクはほとんど無い
+    expect(candidates[0].link / candidates[0].text).toBeLessThan(0.1);
+  });
+
+  it('br が段落の切れ目になる', async () => {
+    const line = 'ここは十分な長さのある文で、段落として数えられるべきもの。';
+    // 同じ文字数を 1 つの塊で置いた場合と、br で割った場合で点が変わらないこと。
+    // br を見ないと 1 つの長い段落として数えてしまう
+    const joined = await scanCandidates(
+      `<html><body><article>${line}${line}</article></body></html>`,
+    );
+    const split = await scanCandidates(
+      `<html><body><article>${line}<br>${line}</article></body></html>`,
+    );
+
+    expect(joined[0].selector).toBe('article');
+    expect(split[0].selector).toBe('article');
+    expect(split[0].score).toBe(joined[0].score);
+  });
+
+  it('li で組まれていないリンク列を段落として数えない', async () => {
+    // フッタの関連記事一覧が li で組まれていないサイトがある。これを段落として
+    // 数えると分母が膨らみ、本文が下限に切られて候補から落ちる
+    const links = Array.from(
+      { length: 200 },
+      (_, i) => `<a href="/${i}">関連記事のタイトルその${i}番目です</a>`,
+    ).join('');
+    const candidates = await scanCandidates(
+      `<html><body><div class="wrap">` +
+        `<article><p>${'本文の文字。'.repeat(50)}</p></article>` +
+        `<div class="footer">${links}</div>` +
+        `</div></body></html>`,
+    );
+
+    expect(candidates[0].selector).toBe('article');
+  });
+
+  it('br で刻まれた短い行も、まとめて 1 つの段落として数える', async () => {
+    // 1 行が短い書き方（日記や詩）だと、br ごとに締めると全ての行が
+    // MIN_PARAGRAPH に届かず、本文の加点が丸ごと落ちる
+    const lines = ['朝が来た。', '雨が降った。', '風が吹いた。', '空が晴れた。'];
+    const candidates = await scanCandidates(
+      `<html><body><article><p>${lines.concat(lines).join('<br>')}</p></article></body></html>`,
+    );
+
+    expect(candidates[0].selector).toBe('article');
+    expect(candidates[0].score).toBeGreaterThan(0);
+  });
+
+  it('リンクの並んだ一覧を段落として数えない', async () => {
+    // li ごとに区切るので、1 つ 1 つが短ければ段落にならない。区切らないと
+    // ナビゲーション全体が 1 つの長い段落になる
+    const items = ['トップ', '社会', '政治', '経済', '国際', 'スポーツ', '文化', '社説']
+      .map((name) => `<li><a href="/${name}">${name}</a></li>`)
+      .join('');
+    const candidates = await scanCandidates(
+      `<html><body><div class="nav"><ul>${items}</ul></div></body></html>`,
+    );
+
+    expect(candidates).toEqual([]);
   });
 
   it('段落の無い文書では候補が出ない', async () => {
@@ -263,6 +334,22 @@ describe('sanitizeWithin', () => {
 
   it('当たった数より大きい番号を渡したら null', async () => {
     expect(await sanitizeWithin(diaryHtml, 'div.DIARY-CONTENT', null, 999)).toBeNull();
+  });
+
+  it('p を使わない記事ページからも本文を取り出す', async () => {
+    const candidates = await scanCandidates(kyokoHtml);
+    const body = await sanitizeWithin(
+      kyokoHtml,
+      candidates[0].selector,
+      'https://kyoko-np.net/2026081401.html',
+    );
+
+    expect(body).not.toBeNull();
+    // フィードが配信していたのは 100 字ほどの要約だけ
+    expect(body!.length).toBeGreaterThan(1000);
+    expect(body).toContain('酷暑対策基本法');
+    // ヘッダのナビゲーションやフッタが混ざっていないこと
+    expect(body).not.toContain('虚構新聞社について');
   });
 
   it('実際の記事ページから本文を取り出す', async () => {
