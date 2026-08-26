@@ -111,6 +111,12 @@ export const IMAGE_CACHE = CACHE_NAME;
 export interface MockOptions {
   /** 初回起動時のヘルプを出したままにするか */
   showHelp?: boolean;
+  /**
+   * 朝刊に足す記事の数。**一覧が画面に収まらないことが前提の検証**で使う
+   * （サイドバーのスクロール位置。issue #5）。既定の 3 件では一覧が縦に収まり、
+   * スクロールが一度も起きない
+   */
+  extraEntries?: number;
 }
 
 /**
@@ -132,6 +138,15 @@ export interface ApiRecorder {
 }
 
 export async function mockApi(page: Page, options: MockOptions = {}): Promise<ApiRecorder> {
+  // 足す分は朝刊（feed 1）の後ろに付ける。id を離してあるので、既定の 3 件を
+  // 見ている他のテストの位置表示（(1/2) 朝刊）には影響しない
+  const entries: Entry[] = [
+    ...ENTRIES,
+    ...Array.from({ length: options.extraEntries ?? 0 }, (_, i) =>
+      entry(100 + i, 1, `朝刊の追加 ${i + 1} 本目`, SHORT),
+    ),
+  ];
+
   /**
    * PATCH で書き換えられた設定。フィードを返す全ての経路がこれを重ねる。
    * 重ねないと、設定を変えた直後の手動更新がサーバの初期値で上書きしてしまう
@@ -178,15 +193,15 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
       serverTime: 1786000100,
       schemaVersion: 3,
       feeds: FEEDS,
-      entries: ENTRIES,
+      entries,
       pins: [],
-      maxEntryId: 21,
+      maxEntryId: entries[entries.length - 1].id,
     };
     await route.fulfill({ json: body });
   });
 
   await page.route('**/api/entries*', async (route) => {
-    const body: EntriesResponse = { entries: ENTRIES, nextSinceId: null, hasMore: false };
+    const body: EntriesResponse = { entries, nextSinceId: null, hasMore: false };
     await route.fulfill({ json: body });
   });
 

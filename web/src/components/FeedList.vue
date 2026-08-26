@@ -64,7 +64,8 @@ const selectedFolder = computed({
   set: (value: string | null) => emit('selectFolder', value),
 });
 
-const nav = ref<HTMLElement | null>(null);
+/** スクロールする入れ物。カーソルの行をこの中のどこに置くかを revealActive が決める */
+const list = ref<HTMLElement | null>(null);
 
 /** 手で開いたフィード。カーソルが離れても閉じない */
 const opened = ref(new Set<number>());
@@ -99,6 +100,36 @@ function toggle(feed: Feed): void {
   else opened.value.add(feed.id);
 }
 
+/**
+ * 現在地の前後に見えていてほしい行数（issue #5）。
+ *
+ * **最小限のスクロールにすると、読み進めるたびに現在地が下端に貼り付く。**
+ * 次に何が来るかが見えないので、フィードの終わりが近いことにも気付けない。
+ * 行の高さはフィード名と記事で違うので、いま居る行の高さを 1 行分とみなす。
+ */
+const LOOKAHEAD = 3;
+
+/** カーソルの行を、前後に余白を残した位置に置く */
+function revealActive(): void {
+  const box = list.value;
+  const row = box?.querySelector<HTMLElement>('[data-active="true"]') ?? null;
+  if (box === null || row === null) return;
+
+  const boxRect = box.getBoundingClientRect();
+  const rowRect = row.getBoundingClientRect();
+  const margin = rowRect.height * LOOKAHEAD;
+  const below = boxRect.bottom - rowRect.bottom;
+  const above = rowRect.top - boxRect.top;
+
+  // 足りない方へ寄せる。両方足りない（一覧が余白より低い）ときは下を優先する。
+  // 読む向きは下なので、次に来るものが見えている方が役に立つ。
+  //
+  // **寄せ幅は反対側の余白で頭打ちにする。** 入れ物が 4 行ぶんより低いと、
+  // 余白を空けようとしてカーソルの行そのものを画面の外へ押し出してしまう
+  if (below < margin) box.scrollTop += Math.min(margin - below, Math.max(above, 0));
+  else if (above < margin) box.scrollTop -= Math.min(margin - above, Math.max(below, 0));
+}
+
 // カーソルが動いたら、その行を見える位置に保つ。
 // アニメーションは付けない（記事送りの体感遅延になる。docs/UX.md）
 //
@@ -108,7 +139,7 @@ watch(
   () => [props.currentFeedId, props.currentEntryId],
   async () => {
     await nextTick();
-    nav.value?.querySelector('[data-active="true"]')?.scrollIntoView({ block: 'nearest' });
+    revealActive();
   },
   { immediate: true },
 );
@@ -121,7 +152,6 @@ watch(
     （購読の数だけ伸びる）まで広がり、h-full が画面の高さに収まらなくなる
   -->
   <nav
-    ref="nav"
     class="flex h-full flex-col overflow-hidden border-r border-neutral-300 dark:border-neutral-700"
   >
     <!--
@@ -183,7 +213,7 @@ watch(
     </div>
 
     <!-- スクロールするのはここから下だけ。読んでいるフィード名の sticky もこの中で効く -->
-    <div class="subtle-scrollbar min-h-0 flex-1 overflow-y-auto">
+    <div ref="list" data-testid="feed-list" class="subtle-scrollbar min-h-0 flex-1 overflow-y-auto">
       <!--
         押すと購読管理へ。直すにも解除するにもそこでしかできないので、
         知らせと入口を分けない
