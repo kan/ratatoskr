@@ -33,6 +33,18 @@ const MIN_PARAGRAPH = 25;
 /** AI に渡す書き出しの長さ */
 const PREVIEW_LENGTH = 80;
 
+/**
+ * 本文と認めるのに要る、その記事の段落に占める割合。
+ *
+ * **外枠を本文として掴む事故を止めるための下限。** 結城浩の日記では、候補が
+ * 著者プロフィールの 1 つだけになり（本文の入れ物は一意に名指しできず落ちる）、
+ * それが全記事の本文として保存された。プロフィールは記事の文章の 1% にも満たない。
+ *
+ * 低めに置いてある。本文が複数の入れ物に分かれて書かれるサイトでも、その 1 つが
+ * 1 割は持つ。全て下回れば候補は 0 件になり、全文取得を見送って要約のまま残す
+ */
+const MIN_BODY_SHARE = 0.1;
+
 export interface Candidate {
   /** HTMLRewriter で引ける形のセレクタ。文書内で一意なものだけを返す */
   selector: string;
@@ -55,6 +67,20 @@ interface OpenNode {
   /** 段落から配られた点。直接の子には満額、孫には半額（後述） */
   paragraph: number;
   preview: string;
+  /** フラグメントで絞った対象の中にあるか。絞っていないときは使われない */
+  scoped: boolean;
+}
+
+export interface ScanOptions {
+  /**
+   * 記事 URL の `#` 以下。**1 ページに複数の記事が並ぶ日記型のサイトでは、どの記事かを
+   * これが決める。** 渡すと、そのアンカーを含む入れ物の中だけを候補として数える。
+   *
+   * 結城浩の日記（d.hyuki.com）は月別アーカイブ 1 ページに 1 か月分の記事が並ぶ。
+   * 本文の入れ物 `div.DIARY-CONTENT` はページ内に 11 個あって一意に名指しできず、
+   * 文書全体を見ると候補は著者プロフィールの外枠しか残らなかった
+   */
+  fragment?: string | null;
 }
 
 /**
@@ -69,12 +95,21 @@ interface OpenNode {
  * そのうえでリンク率で割り引く。関連記事の一覧やサイドバーは文字数こそ多いが、
  * そのほとんどがリンクの中にある。
  */
-export async function scanCandidates(html: string): Promise<Candidate[]> {
+export async function scanCandidates(
+  html: string,
+  options: ScanOptions = {},
+): Promise<Candidate[]> {
+  const fragment = normalizeFragment(options.fragment ?? null);
+
   /** いま開いている候補。末尾が最も内側 */
   const open: OpenNode[] = [];
   const closed: OpenNode[] = [];
-  /** 同じセレクタを持つ要素の数。2 以上のものは名指しできないので捨てる */
-  const selectorCount = new Map<string, number>();
+  /** フラグメントが指す記事の入れ物。null なら文書全体が対象 */
+  let scope: OpenNode | null = null;
+  /** その入れ物の中にいるか。開いた記事の外に出たら倒す */
+  let inScope = false;
+  /** 採点の分母。対象が決まった時点で 0 に戻すので、常に「対象の中の総量」 */
+  let paragraphTotal = 0;
 
   let opaqueDepth = 0;
   let linkDepth = 0;
@@ -99,6 +134,8 @@ export async function scanCandidates(html: string): Promise<Candidate[]> {
     inParagraph = false;
     if (text < MIN_PARAGRAPH) return;
 
+    if (scope === null || inScope) paragraphTotal += text;
+
     // 直接の入れ物に満額、その 1 つ上に半額。3 つ上には配らない
     const parent = open[open.length - 1];
     const grandparent = open[open.length - 2];
@@ -106,7 +143,7 @@ export async function scanCandidates(html: string): Promise<Candidate[]> {
     if (grandparent !== undefined) grandparent.paragraph += text / 2;
   }
 
-  await new HTMLRewriter()
+  const rewriter = new HTMLRewriter()
     .on(OPAQUE_TAGS, {
       element(element) {
         opaqueDepth += 1;
@@ -128,12 +165,14 @@ export async function scanCandidates(html: string): Promise<Candidate[]> {
           link: 0,
           paragraph: 0,
           preview: '',
+          // 対象が決まった後に開いた入れ物は、その中にある
+          scoped: inScope,
         };
-        countSelector(selectorCount, node);
         open.push(node);
         element.onEndTag(() => {
           // 閉じる前に締める。順序を逆にすると、最後の段落が 1 つ外側に加点される
           creditParagraph();
+          if (node === scope) inScope = false;
           const index = open.lastIndexOf(node);
           if (index === -1) return;
           open.splice(index, 1);
@@ -174,26 +213,73 @@ export async function scanCandidates(html: string): Promise<Candidate[]> {
         }
         if (inParagraph) paragraphText += length;
       },
-    })
-    .transform(htmlResponse(html))
-    .arrayBuffer();
+    });
+
+  if (fragment !== null) {
+    // **候補の登録より後に足す。** アンカーが入れ物そのものに付いている場合
+    // （`<div id="p01" class="section">`）に、その入れ物自身を対象にできる。
+    // ここで決める「アンカーを抱えている最も内側の入れ物」が対象の定義で、
+    // locateFragmentOccurrence も同じ規則で範囲を決める（規則がずれると、
+    // A の記事から選んだセレクタを B の記事の位置で切り出すことになる）
+    rewriter.on(anchorSelector(fragment), {
+      element() {
+        if (scope !== null) return;
+        const holder = open[open.length - 1];
+        if (holder === undefined) return;
+        scope = holder;
+        holder.scoped = true;
+        inScope = true;
+        // ここから先が対象。分母を「対象の中の段落」に取り直す
+        paragraphTotal = 0;
+      },
+    });
+  }
+
+  await rewriter.transform(htmlResponse(html)).arrayBuffer();
 
   // 文書の終わりで開いたままの段落も締める（入れ物ごと閉じられていないページ）
   creditParagraph();
 
   // 閉じられなかった要素（不正な HTML）も候補には入れる
-  const nodes = [...closed, ...open];
+  const nodes = [...closed, ...open].filter((node) => scope === null || node.scoped);
+
+  /**
+   * 同じセレクタを持つ要素の数。2 以上のものは名指しできないので捨てる。
+   * **数えるのは対象の中だけ。** 日記型のサイトでは、記事の外まで数えると
+   * 本文の入れ物が必ず複数になって候補から落ちる（どの記事かはフラグメントが
+   * 決めるので、記事の中で一意なら sanitizeWithin が同じ場所を引ける）
+   */
+  // **絞ったときは id を使わない。** 繰り返し構造の中の id は記事ごとに違うので
+  // （`<div id="p01">` / `<div id="p02">`）、それをフィード全体のセレクタとして
+  // 覚えると他の記事が全て当たらなくなり、毎クロール判定し直す空回りになる
+  const useId = scope === null;
+  const selectorCount = new Map<string, number>();
+  for (const node of nodes) {
+    const selector = selectorOf(node, useId);
+    if (selector === null) continue;
+    selectorCount.set(selector, (selectorCount.get(selector) ?? 0) + 1);
+  }
+
+  // 本文は、その記事にある文章の大半を占める。ごく一部しか持たない入れ物を
+  // 1 位にすると、著者プロフィールのような外枠を本文として掴む（実際に踏んだ）。
+  // 全て下回るなら候補は 0 件になり、呼び出し側は全文取得を見送る
+  const floor = paragraphTotal * MIN_BODY_SHARE;
 
   return nodes
-    .map((node) => toCandidate(node, selectorCount))
+    .map((node) => toCandidate(node, selectorCount, useId))
     .filter((candidate): candidate is Candidate => candidate !== null)
+    .filter((candidate) => candidate.score >= floor)
     .sort((a, b) => b.score - a.score);
 }
 
-function toCandidate(node: OpenNode, selectorCount: Map<string, number>): Candidate | null {
+function toCandidate(
+  node: OpenNode,
+  selectorCount: Map<string, number>,
+  useId: boolean,
+): Candidate | null {
   if (node.text === 0 || node.paragraph === 0) return null;
 
-  const selector = selectorOf(node);
+  const selector = selectorOf(node, useId);
   // 名指しできないものは、後で同じ場所を引ける保証が無いので候補にしない
   if (selector === null || (selectorCount.get(selector) ?? 0) !== 1) return null;
 
@@ -219,11 +305,13 @@ function classList(value: string | null): string[] {
  * class を絞らないのは、`article.pickup-content` のように同じ class の要素が
  * ページ内に何度も出てくるため（テクノエッジの関連記事がまさにこれ）。
  */
-function selectorOf(node: OpenNode): string | null {
+function selectorOf(node: OpenNode, useId = true): string | null {
   // id にもタグ名を付ける。一意かどうかを数えているのは候補のタグだけなので、
   // <h1 id="content"> のように候補でない要素が同じ id を持つと、一意と誤って
   // 数えたうえで先に出てくる方（見出し）を掴んでしまう
-  if (node.id !== null && /^[A-Za-z_-][\w-]*$/.test(node.id)) return `${node.tag}#${node.id}`;
+  if (useId && node.id !== null && /^[A-Za-z_-][\w-]*$/.test(node.id)) {
+    return `${node.tag}#${node.id}`;
+  }
   if (node.classes.length > 0) return node.tag + node.classes.map((name) => `.${name}`).join('');
 
   // **class も id も持たない素の HTML はタグ名で名指しする。** class を全く使わない
@@ -233,8 +321,119 @@ function selectorOf(node: OpenNode): string | null {
   return node.tag;
 }
 
-function countSelector(counts: Map<string, number>, node: OpenNode): void {
-  const selector = selectorOf(node);
-  if (selector === null) return;
-  counts.set(selector, (counts.get(selector) ?? 0) + 1);
+/**
+ * 記事 URL の `#` 以下を取り出す。無ければ null。
+ *
+ * 日記型のサイトは 1 ページに複数の記事が並び、**どの記事かはここが決める**
+ * （`https://d.hyuki.com/202509.html#i20250924072819`）。
+ */
+export function fragmentOf(url: string): string | null {
+  const hash = url.indexOf('#');
+  if (hash === -1) return null;
+  const fragment = url.slice(hash + 1);
+  return fragment === '' ? null : fragment;
+}
+
+/**
+ * 属性セレクタにそのまま埋められる形だけを通す。
+ *
+ * `%E3%81%82` のように符号化された形で来ることがあるので戻してから見る。
+ * 引用符やバックスラッシュを含むものは、セレクタを組み立てる側で壊れるので捨てる
+ * （捨てても文書全体を見る従来の動きに落ちるだけで、悪くはならない）。
+ */
+function normalizeFragment(fragment: string | null): string | null {
+  if (fragment === null || fragment === '') return null;
+
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(fragment);
+  } catch {
+    return null;
+  }
+  return /^[\w.:-]+$/.test(decoded) ? decoded : null;
+}
+
+/** 古い日記系は `<a name="...">`、新しいものは id。どちらも見る */
+function anchorSelector(fragment: string): string {
+  return `[id="${fragment}"], [name="${fragment}"]`;
+}
+
+/**
+ * セレクタに当たる何番目の要素が、そのフラグメントの記事のものかを返す。
+ *
+ * **1 ページに複数の記事が並ぶサイトのため。** 覚えたセレクタ（`div.DIARY-CONTENT`）は
+ * ページ内で何度も当たるので、番号で選ばないと必ず 1 件目の本文になる。
+ *
+ * 探す範囲は**アンカーを抱えている入れ物の中だけ**に限る。「アンカーより後の最初の
+ * 一致」で済ませると、記事の末尾にパーマリンクを置く作りで隣の記事の本文を採る
+ * （エラーにならず、他人の本文が静かに保存される）。入れ物の中に一致が無ければ
+ * null を返し、呼び出し側は従来どおり 1 件目を使う。
+ *
+ * 一致がアンカーの前にあっても後にあっても採れる。前者は記事の末尾にアンカーを置く形、
+ * 後者は結城浩の日記（`<article><h2><a id="i2025…"></a></h2><div class="DIARY-CONTENT">`）。
+ */
+export async function locateFragmentOccurrence(
+  html: string,
+  selector: string,
+  fragment: string,
+): Promise<number | null> {
+  const safe = normalizeFragment(fragment);
+  if (safe === null) return null;
+
+  /**
+   * いま開いている入れ物。`matchesBefore` は「その入れ物が開いた時点で、
+   * セレクタに当たった数」。**対象の中の一致は、この数以降に並ぶ。**
+   */
+  const openBoxes: { matchesBefore: number }[] = [];
+  let matchCount = 0;
+  let answer: number | null = null;
+  /** アンカーを抱えている入れ物。scanCandidates の scope と同じ規則で決める */
+  let scope: { matchesBefore: number } | null = null;
+
+  await new HTMLRewriter()
+    // 入れ物の開閉を先に追う。一致がどの入れ物に属するかを数えるのに要る
+    .on(CANDIDATE_TAGS, {
+      element(element) {
+        const box = { matchesBefore: matchCount };
+        openBoxes.push(box);
+        element.onEndTag(() => {
+          const at = openBoxes.lastIndexOf(box);
+          if (at !== -1) openBoxes.splice(at, 1);
+        });
+      },
+    })
+    .on(selector, {
+      element() {
+        // アンカーを見た後で、まだ対象の入れ物が開いているなら、これがその記事のもの
+        if (answer === null && scope !== null && openBoxes.includes(scope)) answer = matchCount;
+        matchCount += 1;
+      },
+    })
+    .on(anchorSelector(safe), {
+      element() {
+        if (answer !== null || scope !== null) return;
+
+        const holder = openBoxes[openBoxes.length - 1];
+        if (holder === undefined) return;
+        scope = holder;
+        // アンカーより前に、この入れ物の中で当たっていればそれを採る。
+        // 記事の末尾にパーマリンクを置く作りがこれにあたる
+        if (matchCount > holder.matchesBefore) answer = matchCount - 1;
+      },
+    })
+    .transform(htmlResponse(html))
+    .arrayBuffer();
+
+  return answer;
+}
+
+/**
+ * 記事 URL から `#` 以下を落としたページの URL。
+ *
+ * 日記型のサイトでは複数の記事が同じページを指すので、取りに行くときはここでまとめる。
+ * フラグメントは HTTP では送られないので、落としても取得結果は変わらない。
+ */
+export function pageUrlOf(url: string): string {
+  const hash = url.indexOf('#');
+  return hash === -1 ? url : url.slice(0, hash);
 }

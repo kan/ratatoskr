@@ -7,7 +7,13 @@ import {
 import { updateFullTextSelector, type CrawlTarget } from '../db/feeds';
 import { chooseBodySelector } from './choose';
 import { resolveTweetEmbeds } from './embed';
-import { scanCandidates } from './extract';
+import {
+  type Candidate,
+  fragmentOf,
+  locateFragmentOccurrence,
+  pageUrlOf,
+  scanCandidates,
+} from './extract';
 import { sanitizeWithin } from './sanitize';
 import {
   describeNetworkError,
@@ -41,6 +47,14 @@ const MAX_ARTICLES_PER_FEED = 10;
 /** 同じサーバへ同時に投げる数。フィード本体（4）より控えめにする */
 const CONCURRENCY = 2;
 
+/**
+ * 本文の位置を決めるのに試すページ数。
+ *
+ * 1 本目がリンクだけの記事でも 2〜3 本見れば外れる。全件試すと、候補が永久に
+ * 出ないサイト（JavaScript で描くサイト）で毎クロール 10 ページ分を走査し続ける
+ */
+const MAX_SELECTOR_TRIALS = 3;
+
 const ACCEPT = 'text/html, application/xhtml+xml;q=0.9, */*;q=0.5';
 
 export interface FullTextOptions {
@@ -72,7 +86,11 @@ export async function fillFullText(
   const targets = await selectMissingFullText(db, feed.id, limit);
   // 取りに行かなかった分だけ返す。**取りに行って失敗した分は返さない。**
   // 記事 URL が全滅しているフィード（サイト移転）で毎回 10 件ずつ叩き続けると、
-  // サブリクエスト上限に当たる
+  // サブリクエスト上限に当たる。
+  //
+  // **返すのは記事数の分で、ページ数の分ではない。** 同じページを指す記事は 1 回しか
+  // 取りに行かないが、そこで返してしまうと予算が抽出の量を縛らなくなる（1 ページに
+  // 10 記事載るフィードが 20 本あれば 200 記事分の走査が通ってしまう）
   releaseBudget(budget, limit - targets.length);
   if (targets.length === 0) return { filled: [] };
 
@@ -85,7 +103,7 @@ export async function fillFullText(
 
   let selector = feed.fullTextSelector;
   if (selector === null) {
-    selector = await decideSelector(db, feed.id, pages[0].html, options.ai);
+    selector = await decideSelector(db, feed.id, pages, options.ai);
     // 本文らしい入れ物が 1 つも無いページだった（JavaScript で描くサイト等）。
     // 取りに行った記事には印を残す。残さないと毎クロール同じ記事を叩き続ける
     if (selector === null) {
@@ -104,7 +122,7 @@ export async function fillFullText(
   // 混ぜてはいけない。混ぜると、採れない記事が続く限り毎クロール AI を呼び、
   // 正しかったかもしれないセレクタを上書きし続ける（判定はフィードにつき 1 回）
   if (extraction.unmatched.length === pages.length && feed.fullTextSelector !== null) {
-    const rechosen = await decideSelector(db, feed.id, pages[0].html, options.ai);
+    const rechosen = await decideSelector(db, feed.id, pages, options.ai);
     if (rechosen !== null && rechosen !== selector) {
       selector = rechosen;
       // 前のセレクタで採れなかった記事も、新しいセレクタなら採れるかもしれない
@@ -148,6 +166,11 @@ interface ArticlePage {
 /**
  * 記事ページを取ってくる。
  *
+ * **同じページを指す記事はまとめて 1 回だけ取る。** 日記型のサイトでは 1 ページに
+ * 1 か月分の記事が並び、記事 URL はフラグメントだけが違う。記事ごとに取りに行くと、
+ * 同じ 75KB を 1 回のクロールで 10 回引くことになり、相手のサーバへの礼儀にも
+ * サブリクエスト上限にも反する。
+ *
  * 取れなかったものは「二度と取れない（gone）」と「今回は駄目だった」に分ける。
  * 前者には印を残して取り直しを止め、後者は次の機会に回す。
  */
@@ -155,19 +178,32 @@ async function fetchArticles(
   targets: FullTextTarget[],
   fetchImpl: typeof fetch,
 ): Promise<{ pages: ArticlePage[]; gone: number[] }> {
+  const byPage = new Map<string, FullTextTarget[]>();
+  for (const target of targets) {
+    const url = pageUrlOf(target.url);
+    const group = byPage.get(url);
+    if (group === undefined) byPage.set(url, [target]);
+    else group.push(target);
+  }
+
   const pages: ArticlePage[] = [];
   const gone: number[] = [];
+  const urls = [...byPage.keys()];
 
-  for (let i = 0; i < targets.length; i += CONCURRENCY) {
-    const chunk = targets.slice(i, i + CONCURRENCY);
+  for (let i = 0; i < urls.length; i += CONCURRENCY) {
+    const chunk = urls.slice(i, i + CONCURRENCY);
     const results = await Promise.allSettled(
-      chunk.map(async (target) => ({ target, outcome: await fetchArticle(target.url, fetchImpl) })),
+      chunk.map(async (url) => ({ url, outcome: await fetchArticle(url, fetchImpl) })),
     );
     for (const result of results) {
       if (result.status !== 'fulfilled') continue;
-      const { target, outcome } = result.value;
-      if (outcome.kind === 'ok') pages.push({ target, html: outcome.html });
-      else if (outcome.kind === 'gone') gone.push(target.id);
+      const { url, outcome } = result.value;
+      const group = byPage.get(url) ?? [];
+      if (outcome.kind === 'ok') {
+        for (const target of group) pages.push({ target, html: outcome.html });
+      } else if (outcome.kind === 'gone') {
+        for (const target of group) gone.push(target.id);
+      }
     }
   }
   return { pages, gone };
@@ -207,19 +243,48 @@ async function fetchArticle(url: string, fetchImpl: typeof fetch): Promise<Artic
 /**
  * 記事ページのどこが本文かを決めて覚える。
  * 決められなければ null を返し、次の取得で改めて試す。
+ *
+ * **1 本目で決めない。** 候補が出るまで取れたページを順に試す。日記型のサイトには
+ * リンクと画像だけの記事が普通に混ざっていて、それに当たると段落が 0 になり候補が
+ * 出ない。1 本目だけを見ていると、その回に取れた 10 件すべてを諦めることになる。
  */
 async function decideSelector(
   db: D1Database,
   feedId: number,
-  html: string,
+  pages: ArticlePage[],
   ai: Ai | undefined,
 ): Promise<string | null> {
-  const candidates = await scanCandidates(html);
-  const chosen = await chooseBodySelector(candidates, ai);
-  if (chosen === null) return null;
+  for (const page of pages.slice(0, MAX_SELECTOR_TRIALS)) {
+    const chosen = await chooseBodySelector(await candidatesFor(page), ai);
+    if (chosen === null) continue;
 
-  await updateFullTextSelector(db, feedId, chosen.selector, chosen.source);
-  return chosen.selector;
+    await updateFullTextSelector(db, feedId, chosen.selector, chosen.source);
+    return chosen.selector;
+  }
+  return null;
+}
+
+/**
+ * 1 ページ分の候補。**フラグメントで絞った場合と絞らない場合の両方を採点して、
+ * 点の高い方を採る。**
+ *
+ * 絞るのが常に正しいとは限らない。記事 URL の `#` は記事を指すとは限らず、
+ * `#comments` のようにページの一部を指すこともある。その場合に絞ると、本文が
+ * 候補から消えてコメント欄が選ばれる。点数は同じ尺度（段落の量をリンク率で
+ * 割り引いたもの）なので、そのまま比べられる。
+ */
+async function candidatesFor(page: ArticlePage): Promise<Candidate[]> {
+  const fragment = fragmentOf(page.target.url);
+  if (fragment === null) return await scanCandidates(page.html);
+
+  const scoped = await scanCandidates(page.html, { fragment });
+  // **絞った先に文章が無いことと、ページに本文が無いことは別物。** 前者で
+  // ページ全体に落とすと、リンクだけの記事に当たった回にページの外枠を
+  // セレクタとして覚えてしまう。この記事では決めず、次のページに回す
+  if (scoped.length === 0) return [];
+
+  const whole = await scanCandidates(page.html);
+  return scoped[0].score > (whole[0]?.score ?? 0) ? scoped : whole;
 }
 
 interface Extraction {
@@ -244,7 +309,12 @@ async function extractAll(pages: ArticlePage[], selector: string): Promise<Extra
   const extraction: Extraction = { bodies: [], rejected: [], unmatched: [] };
 
   for (const page of pages) {
-    const fullBody = await sanitizeWithin(page.html, selector, page.target.url);
+    const fullBody = await sanitizeWithin(
+      page.html,
+      selector,
+      page.target.url,
+      await occurrenceFor(page, selector),
+    );
     if (fullBody === null) {
       extraction.unmatched.push(page.target.id);
     } else if (fullBody.length <= page.target.bodyLength) {
@@ -254,6 +324,19 @@ async function extractAll(pages: ArticlePage[], selector: string): Promise<Extra
     }
   }
   return extraction;
+}
+
+/**
+ * 覚えたセレクタに当たるもののうち、この記事のものは何番目か。
+ *
+ * **1 ページに複数の記事が並ぶ日記型のサイトのため。** 記事 URL のフラグメントが
+ * どの記事かを決めるので、それが無いページでは常に最初の 1 つ（0）になり、
+ * 従来と同じ動きをする。
+ */
+async function occurrenceFor(page: ArticlePage, selector: string): Promise<number> {
+  const fragment = fragmentOf(page.target.url);
+  if (fragment === null) return 0;
+  return (await locateFragmentOccurrence(page.html, selector, fragment)) ?? 0;
 }
 
 /**

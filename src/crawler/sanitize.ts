@@ -237,15 +237,25 @@ export async function sanitizeHtml(html: string, baseUrl: string | null = null):
  *
  * 外側は「タグを剥がして中身を残す」ではなく「テキストごと捨てる」。本文の前後には
  * ナビゲーションや関連記事が必ずあり、剥がすだけではそれが本文に混ざる。
+ *
+ * `occurrence` は「当たったもののうち何番目を採るか」。日記型のサイトは 1 ページに
+ * 複数の記事が並ぶので、記事ごとにここが変わる。
  */
 export async function sanitizeWithin(
   html: string,
   selector: string,
   baseUrl: string | null = null,
+  occurrence = 0,
 ): Promise<string | null> {
   let matched = false;
   /** 対象の中にいるか。開始タグで立て、終了タグで倒す */
   let inside = false;
+  /**
+   * ここまでに当たった数。occurrence 番目だけを見る。
+   * **数え方は「`.on(selector)` が通知した順」**で、番号を作る側
+   * （crawler/extract.ts の locateFragmentOccurrence）と揃えてある
+   */
+  let seen = 0;
 
   const response = new HTMLRewriter()
     .onDocument({
@@ -255,9 +265,10 @@ export async function sanitizeWithin(
     })
     .on(selector, {
       element(element) {
-        // 同じセレクタに複数当たることは無い前提だが（extract.ts が一意なものしか
-        // 選ばない）、当たったら最初の 1 つだけを見る
         if (matched) return;
+        // 1 ページに複数の記事が並ぶサイトでは、同じセレクタが記事の数だけ当たる。
+        // どれを採るかは呼び出し側が記事 URL のフラグメントから決めて渡す。既定は最初の 1 つ
+        if (seen++ !== occurrence) return;
         matched = true;
         inside = true;
         element.onEndTag(() => {

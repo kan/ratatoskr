@@ -23,6 +23,22 @@ function articlePage(text: string): string {
   </body></html>`;
 }
 
+/**
+ * 1 ページに 2 記事が並ぶ日記型のページ。**どの記事かはフラグメントが決める。**
+ * 結城浩の日記（d.hyuki.com）がこの形で、本文の入れ物は記事の数だけ存在する。
+ */
+function diaryPage(first: string, second: string): string {
+  const entry = (anchor: string, text: string): string => `<article class="entry">
+      <h2><a id="${anchor}" name="${anchor}">見出し</a></h2>
+      <div class="content"><p>${text}</p></div>
+    </article>`;
+  return `<!doctype html><html><body>
+    <div class="profile"><p>著者のプロフィール。ページのどこにでも付いてくる短い紹介文。</p></div>
+    ${entry('p01', first)}
+    ${entry('p02', second)}
+  </body></html>`;
+}
+
 function stubFetch(pages: Record<string, string>): { impl: typeof fetch; calls: string[] } {
   const calls: string[] = [];
   const impl = async (input: RequestInfo | URL): Promise<Response> => {
@@ -74,6 +90,118 @@ describe('fillFullText', () => {
     expect(entry.body).toBe(SUMMARY);
     // 本文の外にある文字は持ち込まない
     expect(entry.full_body).not.toContain('ナビの文字');
+  });
+
+  it('1 ページに複数の記事が並ぶサイトで、記事ごとに違う本文を採る', async () => {
+    const page = 'https://example.com/202509.html';
+    const first = 'ひとつ目の記事にしか無い本文です。'.repeat(10);
+    const second = 'ふたつ目の記事にしか無い本文です。'.repeat(10);
+
+    const feedId = await seedFeed(env.DB, 'https://example.com/feed', { fullText: 1 });
+    await seedEntry(env.DB, feedId, { url: `${page}#p01`, body: SUMMARY });
+    await seedEntry(env.DB, feedId, { url: `${page}#p02`, body: SUMMARY });
+    const html = diaryPage(first, second);
+    // 取りに行くのはページの URL。フラグメントは HTTP では送られない
+    const stub = stubFetch({ [page]: html });
+
+    const result = await fillFullText(env.DB, await targetOf(feedId), {
+      fetchImpl: stub.impl,
+      ai: undefined,
+      budget: { remaining: 10 },
+    });
+
+    expect(result.filled).toHaveLength(2);
+    // 同じページを指す記事はまとめて 1 回だけ取る（相手のサーバへの礼儀）
+    expect(stub.calls).toEqual([page]);
+    // 記事の中を見れば本文の入れ物が一意に名指しできる。
+    // ページ全体を見ると div.content は 2 つあって候補にならない
+    expect((await getFeedRow(env.DB, feedId)).full_text_selector).toBe('div.content');
+
+    const rows = await getEntryRows(env.DB, feedId);
+    const bodyOf = (url: string): string =>
+      rows.find((row) => row.url === url)!.full_body as string;
+    // フラグメントを見ないと、両方が 1 件目の本文で埋まる。それが元の不具合だった
+    expect(bodyOf(`${page}#p01`)).toContain('ひとつ目');
+    expect(bodyOf(`${page}#p01`)).not.toContain('ふたつ目');
+    expect(bodyOf(`${page}#p02`)).toContain('ふたつ目');
+    expect(bodyOf(`${page}#p02`)).not.toContain('ひとつ目');
+  });
+
+  it('文章の無い記事が先頭に来ても、他の記事でセレクタを決める', async () => {
+    // 日記型のサイトには「リンクを 1 本貼っただけ」の記事が普通に混ざる。
+    // 1 本目だけを見てセレクタを決めると、その回に取れた記事を全部諦めることになる
+    const page = 'https://example.com/202509.html';
+    const feedId = await seedFeed(env.DB, 'https://example.com/feed', { fullText: 1 });
+    await seedEntry(env.DB, feedId, { url: `${page}#p01`, body: SUMMARY });
+    await seedEntry(env.DB, feedId, { url: `${page}#p02`, body: SUMMARY });
+    const html = diaryPage(
+      '<a href="https://example.com/x">リンクだけの記事</a>',
+      'ふたつ目の記事にしか無い本文です。'.repeat(10),
+    );
+    const stub = stubFetch({ [page]: html });
+
+    const result = await fillFullText(env.DB, await targetOf(feedId), {
+      fetchImpl: stub.impl,
+      ai: undefined,
+      budget: { remaining: 10 },
+    });
+
+    expect((await getFeedRow(env.DB, feedId)).full_text_selector).toBe('div.content');
+    // セレクタさえ決まれば、リンクだけの記事もその記事の中身として採れる
+    expect(result.filled).toHaveLength(2);
+    const rows = await getEntryRows(env.DB, feedId);
+    expect(rows.find((row) => row.url === `${page}#p01`)!.full_body).toContain('リンクだけの記事');
+    expect(rows.find((row) => row.url === `${page}#p02`)!.full_body).toContain('ふたつ目');
+  });
+
+  it('記事を指さないフラグメントでは、絞らずに本文を選ぶ', async () => {
+    // 記事 URL の # は記事を指すとは限らない。#comments で絞ると本文が候補から
+    // 消えてコメント欄が選ばれる。絞った場合と絞らない場合を比べて点の高い方を採る
+    const url = 'https://example.com/article/1#comments';
+    const feedId = await seedFeed(env.DB, 'https://example.com/feed', { fullText: 1 });
+    await seedEntry(env.DB, feedId, { url, body: SUMMARY });
+    const html = `<!doctype html><html><body>
+      <article class="post"><div class="body"><p>${'記事ページにしか無い本文です。'.repeat(10)}</p></div></article>
+      <div id="comments"><div class="c"><p>${'読者からのコメントです。'.repeat(3)}</p></div></div>
+    </body></html>`;
+    const stub = stubFetch({ 'https://example.com/article/1': html });
+
+    const result = await fillFullText(env.DB, await targetOf(feedId), {
+      fetchImpl: stub.impl,
+      ai: undefined,
+      budget: { remaining: 10 },
+    });
+
+    expect(result.filled).toHaveLength(1);
+    expect((await getFeedRow(env.DB, feedId)).full_text_selector).toBe('div.body');
+    const [entry] = await getEntryRows(env.DB, feedId);
+    expect(entry.full_body).toContain('記事ページにしか無い本文');
+    expect(entry.full_body).not.toContain('コメント');
+  });
+
+  it('本文らしい入れ物が無いページでは、外枠を掴まずに見送る', async () => {
+    // 本文の入れ物が名指しできず、プロフィールのような外枠しか残らないページ。
+    // ここで外枠を採ると、全記事が同じ紹介文で埋まる（実際に踏んだ）
+    const page = 'https://example.com/202509.html';
+    const long = 'どの入れ物も名指しできない本文です。'.repeat(10);
+
+    const feedId = await seedFeed(env.DB, 'https://example.com/feed', { fullText: 1 });
+    await seedEntry(env.DB, feedId, { url: page, body: SUMMARY });
+    const stub = stubFetch({ [page]: diaryPage(long, long) });
+
+    const result = await fillFullText(env.DB, await targetOf(feedId), {
+      fetchImpl: stub.impl,
+      ai: undefined,
+      budget: { remaining: 10 },
+    });
+
+    expect(result.filled).toEqual([]);
+    expect((await getFeedRow(env.DB, feedId)).full_text_selector).toBeNull();
+    // 取りに行った印は残す。残さないと毎クロール同じ記事を叩き続ける
+    const [entry] = await getEntryRows(env.DB, feedId);
+    expect(entry.full_body).toBe('');
+    // フィードが配信した要約はそのまま読める
+    expect(entry.body).toBe(SUMMARY);
   });
 
   it('全文取得を入れていないフィードには取りに行かない', async () => {

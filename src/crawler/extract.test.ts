@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import technoEdgeHtml from './__fixtures__/article-techno-edge.html?raw';
-import { scanCandidates } from './extract';
+import diaryHtml from './__fixtures__/diary-hyuki.html?raw';
+import { fragmentOf, locateFragmentOccurrence, scanCandidates } from './extract';
 import { sanitizeWithin } from './sanitize';
 
 /**
@@ -80,12 +81,124 @@ describe('scanCandidates', () => {
     expect(open[0].score).toBeGreaterThan(0);
   });
 
+  it('その記事の文章のごく一部しか持たない入れ物は候補にしない', async () => {
+    // 結城浩の日記を、どの記事かを指定せずに読む。本文の入れ物はページ内に 11 個
+    // あって一意に名指しできないので落ち、残るのは著者プロフィールの外枠だけになる。
+    // それを本文として採ると、全記事が同じプロフィールで埋まる（実際にそうなった）
+    const candidates = await scanCandidates(diaryHtml);
+
+    expect(candidates.map((candidate) => candidate.selector)).not.toContain('div.p-2.flex-grow-1');
+  });
+
   it('段落の無い文書では候補が出ない', async () => {
     const candidates = await scanCandidates(
       '<html><body><div class="nav"><a href="/a">A</a><a href="/b">B</a></div></body></html>',
     );
 
     expect(candidates).toEqual([]);
+  });
+});
+
+/**
+ * 1 ページに複数の記事が並ぶ日記型のサイト（結城浩の日記）。
+ * 記事 URL は `https://d.hyuki.com/202509.html#i20250924072819` の形で、
+ * **どの記事かはフラグメントが決める。**
+ */
+describe('フラグメントで記事を絞る', () => {
+  const 記事 = 'i20250921130556';
+
+  it('記事の中だけを見れば、本文の入れ物が一意に名指しできる', async () => {
+    const candidates = await scanCandidates(diaryHtml, { fragment: 記事 });
+
+    // div.DIARY-CONTENT はページ内に 11 個あるが、この記事の中には 1 つしかない
+    expect(candidates[0].selector).toBe('div.DIARY-CONTENT');
+  });
+
+  it('絞った先の文章だけを数える', async () => {
+    const scoped = await scanCandidates(diaryHtml, { fragment: 記事 });
+    const whole = await scanCandidates(diaryHtml);
+
+    // 絞らなければ、この記事の本文はどの候補にも出てこない
+    expect(whole.map((candidate) => candidate.selector)).not.toContain('div.DIARY-CONTENT');
+    expect(scoped[0].preview).toContain('編集者さん');
+  });
+
+  it('記事ごとに違う id をセレクタにしない', async () => {
+    // 繰り返し構造の中の id は記事ごとに違う。これをフィード全体のセレクタとして
+    // 覚えると、他の記事が全て当たらなくなって毎クロール判定し直す空回りになる
+    const entry = (anchor: string, text: string): string =>
+      `<div id="${anchor}" class="section"><h3>見出し</h3><p>${text}</p></div>`;
+    const html = `<html><body>${entry('p01', 'ひとつ目の本文。'.repeat(10))}${entry(
+      'p02',
+      'ふたつ目の本文。'.repeat(10),
+    )}</body></html>`;
+
+    const first = await scanCandidates(html, { fragment: 'p01' });
+    const second = await scanCandidates(html, { fragment: 'p02' });
+
+    // どの記事から決めても同じセレクタになる
+    expect(first[0].selector).toBe('div.section');
+    expect(second[0].selector).toBe('div.section');
+  });
+
+  it('覚えたセレクタの何番目がその記事かを返す', async () => {
+    const first = await locateFragmentOccurrence(diaryHtml, 'div.DIARY-CONTENT', 'i20250924072819');
+    const second = await locateFragmentOccurrence(diaryHtml, 'div.DIARY-CONTENT', 記事);
+
+    // アンカーは記事の見出しにあり、本文の入れ物はその後ろにある
+    expect(first).toBe(0);
+    expect(second).toBe(1);
+  });
+
+  it('記事の末尾にアンカーがあっても、その記事の本文を採る', async () => {
+    // パーマリンクを記事の末尾に置く作り。「アンカーより後の最初の一致」で
+    // 済ませると隣の記事の本文を採ってしまう（エラーにならないので気付けない）
+    const entry = (anchor: string, text: string): string =>
+      `<div class="entry"><div class="content"><p>${text}</p></div>` +
+      `<p class="foot"><a name="${anchor}" id="${anchor}">この記事</a></p></div>`;
+    const html = `<html><body>${entry('p01', 'ひとつ目の本文。'.repeat(10))}${entry(
+      'p02',
+      'ふたつ目の本文。'.repeat(10),
+    )}</body></html>`;
+
+    expect(await locateFragmentOccurrence(html, 'div.content', 'p01')).toBe(0);
+    expect(await locateFragmentOccurrence(html, 'div.content', 'p02')).toBe(1);
+  });
+
+  it('アンカーを抱えている入れ物の外にある一致は採らない', async () => {
+    // 目次のリンク先が記事の外にある形。範囲を区切らないと、関係のない
+    // 入れ物を「アンカーより後の最初の一致」として掴む
+    const html = `<html><body>
+      <div class="toc"><p><a name="p01" id="p01">目次</a></p></div>
+      <div class="entry"><div class="content"><p>${'本文。'.repeat(20)}</p></div></div>
+    </body></html>`;
+
+    expect(await locateFragmentOccurrence(html, 'div.content', 'p01')).toBeNull();
+  });
+
+  it('アンカーが見つからなければ null', async () => {
+    expect(
+      await locateFragmentOccurrence(diaryHtml, 'div.DIARY-CONTENT', 'i19700101000000'),
+    ).toBeNull();
+  });
+
+  it('セレクタに埋められない形のフラグメントは扱わない', async () => {
+    // 属性セレクタを組み立てる先なので、引用符を含むものは通さない
+    expect(await locateFragmentOccurrence(diaryHtml, 'div.DIARY-CONTENT', 'a"b')).toBeNull();
+  });
+});
+
+describe('fragmentOf', () => {
+  it('記事 URL の # 以下を取り出す', () => {
+    expect(fragmentOf('https://d.hyuki.com/202509.html#i20250921130556')).toBe('i20250921130556');
+  });
+
+  it('# が無ければ null', () => {
+    expect(fragmentOf('https://www.techno-edge.net/article/2026/08/18/5400.html')).toBeNull();
+  });
+
+  it('# だけなら null', () => {
+    expect(fragmentOf('https://example.com/a#')).toBeNull();
   });
 });
 
@@ -133,6 +246,23 @@ describe('sanitizeWithin', () => {
 
   it('対象が見つからなければ null', async () => {
     expect(await sanitizeWithin(page, 'article.missing', null)).toBeNull();
+  });
+
+  it('同じセレクタが並ぶページでは、指定した番号のものを採る', async () => {
+    const base = 'https://d.hyuki.com/202509.html';
+    const first = await sanitizeWithin(diaryHtml, 'div.DIARY-CONTENT', base, 0);
+    const second = await sanitizeWithin(diaryHtml, 'div.DIARY-CONTENT', base, 1);
+
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    // 番号を渡さなければ全記事が 1 件目の本文になる。それが元の不具合だった
+    expect(second).not.toBe(first);
+    expect(second).toContain('編集者さん');
+    expect(first).not.toContain('編集者さん');
+  });
+
+  it('当たった数より大きい番号を渡したら null', async () => {
+    expect(await sanitizeWithin(diaryHtml, 'div.DIARY-CONTENT', null, 999)).toBeNull();
   });
 
   it('実際の記事ページから本文を取り出す', async () => {
