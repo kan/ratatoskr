@@ -7,6 +7,7 @@ import {
   getEntries,
   getSync,
   importOpml,
+  onSessionExpired,
   refetchFeed,
   updateFeed,
 } from '@/lib/api';
@@ -71,6 +72,13 @@ export const useSessionStore = defineStore('session', () => {
    * 手元にもキューにも残らない状態なので、黙って続けずに画面に出す
    */
   const localError = ref<string | null>(null);
+  /**
+   * Access のセッションが切れた（lib/api.ts の SESSION_EXPIRED）。
+   *
+   * 立つと定期同期を止める。ログインし直すまで何を叩いても同じリダイレクトに
+   * 当たるので、叩き続けても未読は増えない
+   */
+  const signedOut = ref(false);
   /** サーバが持つ最大 entry id。M4 の GET /api/sync のカーソルになる */
   const entryCursor = ref(0);
   const syncedAt = ref(0);
@@ -94,6 +102,7 @@ export const useSessionStore = defineStore('session', () => {
     onLocalStoreUnavailable((reason) => {
       localError.value = reason;
     });
+    onSessionExpired(handleSignedOut);
 
     // 手元の読み出しとネットワークは互いに依存しない。往復を待たせないよう先に投げる。
     // await するまでの間に失敗しても未処理拒否にならないようにしておく
@@ -119,6 +128,8 @@ export const useSessionStore = defineStore('session', () => {
       await fillRemaining();
       feedsStore.recountUnread();
       phase.value = 'ready';
+      // 繋がった。次にセッションが切れたときのために 1 回分を戻す
+      clearReloadChance();
       // 手元の間引きは全部揃ってから。読み始めは妨げない（完了を待たない）
       void pruneStoredEntries();
     } catch (err) {
@@ -223,6 +234,76 @@ export const useSessionStore = defineStore('session', () => {
   /** 同期が走っている間は次を始めない。遅い回線で要求が積み上がらないように */
   let syncing = false;
   let lastSyncAt = 0;
+  let syncTimer: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * セッションが切れたときの後始末。
+   *
+   * **見えていない間だけ再読み込みする。** 復帰にはログインし直すしかなく、
+   * それはナビゲーション要求（＝再読み込み）でしか通らない。ただし読んでいる最中に
+   * 勝手に飛ばすと、読みかけの記事ごとログイン画面に持っていかれる。隠れている間なら
+   * 邪魔にならないので、そこで済ませて戻ってきたときには繋がっている状態にする。
+   * 見えている間は帯を出して、押すかどうかを本人に委ねる（docs/UX.md）。
+   *
+   * 手元に積んだ既読は IndexedDB に残るので、再読み込みしても失われない（不変条件 3）。
+   */
+  function handleSignedOut(): void {
+    if (signedOut.value) return;
+    signedOut.value = true;
+    if (syncTimer !== null) clearInterval(syncTimer);
+    reloadWhenHidden();
+  }
+
+  function reloadWhenHidden(): void {
+    if (document.visibilityState === 'visible') {
+      // まだ見えている。次に隠れたときに済ませる
+      document.addEventListener('visibilitychange', reloadWhenHidden, { once: true });
+      return;
+    }
+    // **このタブでは 1 回だけ。** 読み込み直してもログイン画面へ行き着かない状況
+    // （画面は配られるのに API だけ弾かれる等）だと、裏で延々と読み込み直すことになる。
+    // 2 回目からは帯だけ出して本人に委ねる
+    if (takeReloadChance()) void reloadNow();
+  }
+
+  /**
+   * **手元への書き込みが終わってから飛ぶ。** 同じ visibilitychange で
+   * flushLocalState が投げた IndexedDB のトランザクションは、待たずに
+   * ナビゲーションすると中断される。直前に読んだ分の既読が手元からも消えて、
+   * 読み込み直した先でまた未読として出てくる。
+   */
+  async function reloadNow(): Promise<void> {
+    await localWrites.catch(() => undefined);
+    window.location.reload();
+  }
+
+  /**
+   * 自動での読み込み直しをこのタブで使い切ったか。
+   *
+   * sessionStorage はタブを閉じるまで残り、読み込み直しをまたいで引き継がれる。
+   * **使えない設定のブラウザでは自動で読み込み直さない。** 数えられないまま
+   * リロードすると、失敗し続ける状況で歯止めがゼロになる（隠れたタブが延々と
+   * 読み込み直す）。帯は出ているので、押せば同じところに行き着く。
+   */
+  const RELOAD_KEY = 'ratatoskr:relogin';
+
+  function takeReloadChance(): boolean {
+    try {
+      if (sessionStorage.getItem(RELOAD_KEY) !== null) return false;
+      sessionStorage.setItem(RELOAD_KEY, '1');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function clearReloadChance(): void {
+    try {
+      sessionStorage.removeItem(RELOAD_KEY);
+    } catch {
+      // 消せなくても実害は無い（次の 1 回を諦めるだけ）
+    }
+  }
 
   /**
    * サーバとの差分同期。**バックグラウンドでも回す**ので、失敗しても画面には出さない。
@@ -231,13 +312,16 @@ export const useSessionStore = defineStore('session', () => {
    * 末尾に足されるだけで（absorbNewEntries）、読んでいる位置は変わらない。
    */
   async function sync(): Promise<void> {
-    if (syncing || phase.value === 'booting') return;
+    // **signedOut は timer と別に見る。** 起動の取得で踏んだ場合、止める対象の
+    // タイマはまだ張られていない（startSync は boot の末尾）
+    if (syncing || signedOut.value || phase.value === 'booting') return;
     syncing = true;
     try {
       const body = await getSync({ entryCursor: entryCursor.value, since: syncedAt.value });
       await applySync(body);
     } catch (err) {
       // 次の回で取り直せる。読んでいる最中に知らせても手立てが無い
+      // （セッション切れだけは例外で、onSessionExpired が別に受けている）
       console.warn('差分同期に失敗', err);
     } finally {
       syncing = false;
@@ -259,9 +343,10 @@ export const useSessionStore = defineStore('session', () => {
    * 戻ってきたときにも 1 回叩いて、隠れている間に間引かれた分を取り戻す。
    */
   function startSync(): void {
-    setInterval(() => void sync(), SYNC_INTERVAL_MS);
+    syncTimer = setInterval(() => void sync(), SYNC_INTERVAL_MS);
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState !== 'visible') return;
+      if (signedOut.value) return;
       if (Date.now() - lastSyncAt < SYNC_MIN_GAP_MS) return;
       void sync();
     });
@@ -467,7 +552,7 @@ export const useSessionStore = defineStore('session', () => {
         outbox.queueRate(feed.id, feed.rate);
       }
     }
-    void putFeeds(changed);
+    trackLocalWrite(putFeeds(changed));
   }
 
   /**
@@ -481,7 +566,7 @@ export const useSessionStore = defineStore('session', () => {
     // ピンが動いていないなら、全件の書き直しを丸ごと省く（feeds / 未読例外と同じ考え方）
     if (pinsStore.revision === persisted.pinRevision) return;
     persisted.pinRevision = pinsStore.revision;
-    void savePins(pinsStore.pins);
+    trackLocalWrite(savePins(pinsStore.pins));
   }
 
   /** 未読に戻した記事の増減。例外は基本ゼロ件なので、両方空なら走査ごと省く */
@@ -492,7 +577,7 @@ export const useSessionStore = defineStore('session', () => {
     for (const entryId of entriesStore.forcedUnread) {
       if (saved.has(entryId)) continue;
       saved.add(entryId);
-      void putEntryState(entryId);
+      trackLocalWrite(putEntryState(entryId));
       outbox.queueUnread(entryId, true);
     }
     // 削除しながら回るので複製を辿る
@@ -505,6 +590,16 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * 手元への書き込みの現在地。**完了を待ちたいのは離脱の直前だけ**なので、
+   * 呼び出し側には await させず、最後の 1 本をここで持っておく
+   */
+  let localWrites: Promise<unknown> = Promise.resolve();
+
+  function trackLocalWrite(write: Promise<unknown>): void {
+    localWrites = write;
+  }
 
   /** 手元の変化を IndexedDB に書き戻し、送信キューに積む */
   function flushLocalState(): void {
@@ -571,6 +666,7 @@ export const useSessionStore = defineStore('session', () => {
     phase,
     error,
     localError,
+    signedOut,
     entryCursor,
     syncedAt,
     boot,

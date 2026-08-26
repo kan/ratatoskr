@@ -36,6 +36,36 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Access のセッションが切れたときに投げるエラーの code。
+ *
+ * サーバは 401 を返さない。**Access が横取りして、別オリジンのログイン画面への
+ * リダイレクトを返す。** 既定の `redirect: 'follow'` だと飛び先が CORS で弾かれ、
+ * `TypeError: Failed to fetch` になる。繋がらないのかログインが切れたのかを
+ * 呼び出し側から見分けられないので、`redirect: 'manual'` で受け止める
+ * （リダイレクトは追わずに `type: 'opaqueredirect'` として手元に返る）。
+ */
+export const SESSION_EXPIRED = 'session_expired';
+
+let signedOutHandler: (() => void) | null = null;
+
+/**
+ * セッション切れに気付いたときの後始末を登録する。
+ *
+ * **判定はここ 1 箇所。** 定期同期だけでなく、既読の送信も購読の追加も同じ
+ * リダイレクトに当たる。呼び出し側ごとに書くと、拾い漏れた経路だけが
+ * 「黙って失敗し続ける」状態に戻る。
+ */
+export function onSessionExpired(handler: () => void): void {
+  signedOutHandler = handler;
+}
+
+function checkSignedOut(response: Response): void {
+  if (response.type !== 'opaqueredirect') return;
+  signedOutHandler?.();
+  throw new ApiError(SESSION_EXPIRED, 'ログインし直す必要がある', response.status);
+}
+
 type QueryParams = Record<string, string | number | boolean | undefined>;
 
 async function get<T>(path: string, params: QueryParams = {}): Promise<T> {
@@ -50,8 +80,10 @@ async function get<T>(path: string, params: QueryParams = {}): Promise<T> {
     headers: { accept: 'application/json' },
     // Access の cookie を載せる
     credentials: 'same-origin',
+    redirect: 'manual',
   });
 
+  checkSignedOut(response);
   if (!response.ok) throw await toApiError(response);
   return (await response.json()) as T;
 }
@@ -122,11 +154,13 @@ async function send<T>(
     },
     body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
     credentials: 'same-origin',
+    redirect: 'manual',
     // 離脱時にも送り切るための keepalive。ただしボディは 64KB までなので、
     // OPML のような大きい本文には付けない
     keepalive: !isForm,
   });
 
+  checkSignedOut(response);
   if (!response.ok) throw await toApiError(response);
   return (await response.json()) as T;
 }
@@ -180,8 +214,10 @@ export async function createFeed(params: CreateFeedRequest): Promise<CreateFeedR
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     body: JSON.stringify(params),
     credentials: 'same-origin',
+    redirect: 'manual',
   });
 
+  checkSignedOut(response);
   if (response.status === 300) {
     const body = (await response.json()) as FeedCandidatesResponse;
     return { kind: 'candidates', candidates: body.candidates, foundAt: body.foundAt };

@@ -159,6 +159,11 @@ const atLastEntry = computed(() => feeds.entryIndex >= feeds.entryCount - 1);
 /** 手動更新やピンのように、画面が変わらないことのある操作の結果を出す場所 */
 const notice = ref<string | null>(null);
 
+/** ログインし直す唯一の道はナビゲーション要求（stores/session.ts） */
+function reloadForLogin(): void {
+  window.location.reload();
+}
+
 function notify(message: string): void {
   notice.value = message;
 }
@@ -455,10 +460,26 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
 
     <main class="flex h-dvh flex-col overflow-hidden">
       <p
-        v-if="session.error"
+        v-if="session.error && !session.signedOut"
         class="shrink-0 bg-amber-100 px-3 py-1 text-xs text-amber-900 dark:bg-amber-900 dark:text-amber-100"
       >
         サーバに繋がらないので手元のデータで表示している: {{ session.error }}
+      </p>
+      <!--
+        Access のセッション切れ（issue #7）。**繋がらないのとは分けて出す。**
+        こちらは待っても直らず、ログインし直す以外に手が無い。
+        隠れている間に済ませる場合もあるが（stores/session.ts）、
+        読んでいる最中は本人に押させる
+      -->
+      <p
+        v-if="session.signedOut"
+        class="flex shrink-0 items-center gap-3 bg-amber-100 px-3 py-1 text-xs text-amber-900 dark:bg-amber-900 dark:text-amber-100"
+        data-testid="signed-out"
+      >
+        <span>ログインの期限が切れた。読み込み直すまで新しい記事は届かない</span>
+        <button type="button" class="font-bold hover:underline" @click="reloadForLogin">
+          読み込み直す
+        </button>
       </p>
       <p
         v-if="session.localError"

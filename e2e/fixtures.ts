@@ -154,6 +154,8 @@ export interface ApiRecorder {
   images: string[];
   /** GET /api/sync が叩かれた URL。定期ポーリングの検証に使う */
   syncCalls: string[];
+  /** GET /api/bootstrap を叩いた回数。読み込み直したかどうかの判定に使う */
+  bootstrapCalls: number;
   /** 次の同期で返す応答。積んだ分から順に使い、空なら「変化なし」を返す */
   nextSync: SyncResponse[];
 }
@@ -190,6 +192,7 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
     refetched: [],
     images: [],
     syncCalls: [],
+    bootstrapCalls: 0,
     nextSync: [],
   };
 
@@ -212,6 +215,7 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
   });
 
   await page.route('**/api/bootstrap*', async (route) => {
+    recorder.bootstrapCalls += 1;
     const body: BootstrapResponse = {
       serverTime: 1786000100,
       schemaVersion: 3,

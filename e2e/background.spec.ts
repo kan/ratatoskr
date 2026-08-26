@@ -9,14 +9,30 @@ import { ENTRIES, entry, FEEDS, mockApi, syncResponse } from './fixtures';
  * （5 分の経過は E2E では待てない）。
  */
 
+async function setVisibility(page: Page, state: 'hidden' | 'visible'): Promise<void> {
+  await page.evaluate((value) => {
+    Object.defineProperty(document, 'visibilityState', { value, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, state);
+}
+
 /** タブを隠して戻す。フォアグラウンド復帰の契機を起こす */
 async function returnToTab(page: Page): Promise<void> {
-  for (const state of ['hidden', 'visible']) {
-    await page.evaluate((value) => {
-      Object.defineProperty(document, 'visibilityState', { value, configurable: true });
-      document.dispatchEvent(new Event('visibilitychange'));
-    }, state);
-  }
+  await setVisibility(page, 'hidden');
+  await setVisibility(page, 'visible');
+}
+
+/**
+ * Access のセッション切れを起こす。サーバは 401 ではなく、別オリジンの
+ * ログイン画面へのリダイレクトを返す（issue #7）
+ */
+async function expireSession(page: Page, pattern = '**/api/sync*'): Promise<void> {
+  await page.route(pattern, (route) =>
+    route.fulfill({
+      status: 302,
+      headers: { location: 'https://kanf.cloudflareaccess.com/cdn-cgi/access/login/example' },
+    }),
+  );
 }
 
 const iconHrefs = (page: Page) =>
@@ -151,3 +167,60 @@ async function feedOrder(page: Page): Promise<(string | null)[]> {
     .locator('[data-testid^="feed-"]')
     .evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')));
 }
+
+test('セッションが切れたら、読んでいる最中は帯で知らせるだけに留める', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+  await expireSession(page);
+
+  await returnToTab(page);
+
+  // 待っても直らない。繋がらないときの帯とは別に出す
+  await expect(page.getByTestId('signed-out')).toBeVisible();
+  // **読みかけごとログイン画面へ持っていかない。** 押すかどうかは本人に委ねる
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+});
+
+test('セッションが切れた後にタブを離れると、読み込み直して繋がった状態にする', async ({ page }) => {
+  const recorder = await mockApi(page);
+  await page.goto('/');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+  await expireSession(page);
+  await returnToTab(page);
+  await expect(page.getByTestId('signed-out')).toBeVisible();
+
+  const booted = recorder.bootstrapCalls;
+  // **読んでいる最中には飛ばさない。** 隠れてから済ませる
+  await setVisibility(page, 'hidden');
+
+  await expect.poll(() => recorder.bootstrapCalls).toBeGreaterThan(booted);
+});
+
+test('読み込み直しても直らないときは、裏で繰り返さない', async ({ page }) => {
+  // 画面は配られるのに API だけ弾かれる状況。数えていないと裏で延々と読み込み直す
+  await mockApi(page);
+  // recorder は数えられない（下の route が API を丸ごと横取りするので、
+  // fixtures のハンドラまで届かない）。読み込み直したかどうかは load で数える
+  let loads = 0;
+  page.on('load', () => {
+    loads += 1;
+  });
+  await page.goto('/');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+
+  await expireSession(page, '**/api/**');
+  // 既読の送信も同じリダイレクトに当たる（判定は lib/api.ts の 1 箇所）
+  await page.keyboard.press('j');
+  await expect(page.getByTestId('signed-out')).toBeVisible();
+
+  // 1 回目は読み込み直す
+  await setVisibility(page, 'hidden');
+  await expect.poll(() => loads).toBe(2);
+
+  // その先でも弾かれたら諦める。手元のデータで読めるので、帯だけ出して本人に委ねる
+  await expect(page.getByTestId('signed-out')).toBeVisible();
+  await setVisibility(page, 'hidden');
+  await page.waitForTimeout(500);
+  expect(loads).toBe(2);
+});
