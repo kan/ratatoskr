@@ -124,6 +124,39 @@ test('保持期間を過ぎた既読記事は手元からも消える', async ({
   await expect.poll(() => storedEntryIds(page)).toEqual([501]);
 });
 
+/**
+ * 手元の控えは、他の端末で読んだ分だけ遅れている（issue #10）。
+ * 遅れた控えのまま座ると、向こうで読み終えたフィードの既読記事から始まってしまう。
+ */
+test('他の端末で読み終えたフィードからは始めない', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+  // 控えが手元に残るのを待つ。ここまでが「前回のタブ」
+  await expect.poll(() => storedReadSeq(page, 1)).toBe(11);
+
+  // その後、別の端末で朝刊を読み終えた。サーバだけが先に進んでいる状態
+  await page.route('**/api/bootstrap*', (route) =>
+    route.fulfill({
+      json: {
+        serverTime: 1786000100,
+        schemaVersion: SCHEMA_VERSION,
+        feeds: FEEDS.map((feed) =>
+          feed.id === 1 ? { ...feed, readSeq: 12, unreadCount: 0 } : feed,
+        ),
+        entries: ENTRIES,
+        pins: [],
+        maxEntryId: 21,
+      },
+    }),
+  );
+
+  await page.reload();
+  // 手元の控えでは朝刊の 2 本目が未読だが、サーバの既読が届いた時点で座り直す
+  await expect(page.getByTestId('entry-title')).toHaveText('夕刊の 1 本目');
+  await expect(page.getByTestId('feed-1')).not.toContainText('(');
+});
+
 /** IndexedDB に残っている記事の id */
 async function storedEntryIds(page: Page): Promise<number[]> {
   return page.evaluate(async () => {

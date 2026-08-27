@@ -62,6 +62,15 @@ export const useEntriesStore = defineStore('entries', () => {
     return cleared;
   }
 
+  /**
+   * そのフィードに未読例外（u）が残っているか。
+   * 例外はほぼ常にゼロ件なので、その場合は記事の走査ごと省く（記事送りの経路から呼ばれる）。
+   */
+  function hasForcedUnread(feedId: number): boolean {
+    if (forcedUnread.size === 0) return false;
+    return of(feedId).some((entry) => forcedUnread.has(entry.id));
+  }
+
   /** 起動時に IndexedDB から読み戻す。保存済みなのでリビジョンは動かさない */
   function restoreForcedUnread(entryIds: number[]): void {
     for (const entryId of entryIds) forcedUnread.add(entryId);
@@ -128,6 +137,7 @@ export const useEntriesStore = defineStore('entries', () => {
     isUnread,
     setForcedUnread,
     clearForcedUnreadIn,
+    hasForcedUnread,
     restoreForcedUnread,
     unreadOf,
     countUnread,

@@ -55,6 +55,17 @@ export const useFeedsStore = defineStore('feeds', () => {
   /** このフィードに入った時点の既読位置。ここより下の記事は二度と出さない */
   const entryFloor = ref(0);
 
+  /**
+   * 手元の控えだけを頼りに座らせた着地点（起動時）。サーバの状態が届いた時点で
+   * 正しかったかを確かめ直すために覚えておく（confirmLanding）。
+   */
+  const provisionalLanding = ref<{
+    feedId: number;
+    entryId: number;
+    /** 座った時点で u の例外だったか。**座った後では分からない**（表示で外れる） */
+    forcedUnread: boolean;
+  } | null>(null);
+
   /** 未読のあるフィードを全て消化した状態 */
   const finished = ref(false);
 
@@ -72,8 +83,16 @@ export const useFeedsStore = defineStore('feeds', () => {
   const entryCount = computed(() => currentEntries.value.length);
   const started = computed(() => feedIndex.value >= 0);
 
+  /**
+   * 読む対象になるフィードか。s / a と先読みと着地先の探索が、全てこの判定を通る。
+   *
+   * **サーバの未読数は、まだ届いていない u の例外を知らない**（送信は outbox 経由で
+   * 遅れる。不変条件 3）。当てた直後から数え直す（recountUnread）までの間は
+   * サーバの値がそのまま入っているので、手元の例外もここで見る。
+   * 例外はほぼ常にゼロ件なので、その場合は記事の走査ごと省かれる
+   */
   function isReadable(feed: Feed): boolean {
-    return feed.unreadCount > 0;
+    return feed.unreadCount > 0 || entriesStore.hasForcedUnread(feed.id);
   }
 
   /**
@@ -342,9 +361,14 @@ export const useFeedsStore = defineStore('feeds', () => {
 
   /**
    * いまの範囲の先頭の未読にカーソルを座らせ直す。起動時のほか、購読が消えたとき
-   * （setFeeds / dropFeed）と絞り込みを変えたとき（setFolder）にも通る
+   * （setFeeds / dropFeed）と絞り込みを変えたとき（setFolder）にも通る。
+   *
+   * `provisional` は**手元の控えだけを頼りに座らせる**とき（起動時）に立てる。控えは
+   * 他の端末で読んだ分だけ遅れているので、サーバの状態が届いた時点で confirmLanding が
+   * 確かめ直す（issue #10）。
    */
-  function enterFirstUnread(): void {
+  function enterFirstUnread({ provisional = false } = {}): void {
+    provisionalLanding.value = null;
     const index = findFeed(0, 1, isReadable);
     if (index === -1) {
       feedIndex.value = -1;
@@ -352,28 +376,81 @@ export const useFeedsStore = defineStore('feeds', () => {
       finished.value = feeds.value.some(inFolder);
       return;
     }
+    // **enterFeed の前に控える。** 着地した記事を表示した時点で未読例外（u）は外れるので
+    // （「表示したら既読」が唯一の規則）、入った後では例外だったことが分からなくなる
+    const forced = provisional ? new Set(entriesStore.forcedUnread) : null;
     enterFeed(index, 'first');
+
+    const feed = currentFeed.value;
+    const entry = currentEntry.value;
+    if (forced !== null && feed !== null && entry !== null) {
+      provisionalLanding.value = {
+        feedId: feed.id,
+        entryId: entry.id,
+        forcedUnread: forced.has(entry.id),
+      };
+    }
+  }
+
+  /**
+   * 起動時に手元の控えだけで座らせたカーソルを、サーバの既読で確かめ直す（issue #10）。
+   *
+   * 手元の既読は、他の端末で読んだ分だけ遅れている（送るのは随時でも、受け取るのは
+   * 起動と定期同期のときだけ）。遅れた控えのまま座ると、**向こうで読み終えたフィードの
+   * 既読記事の上にカーソルが乗る。** 未読数だけはサーバの値に直るので、左ペインは 0 なのに
+   * 記事は出ている、という食い違った状態で始まることになる。
+   *
+   * 座り直すのは**ユーザがまだ動かしていないとき**だけ。動かしていれば現在位置が着地点と
+   * 食い違うので、そこで暫定ではなくなる（手で選んだ位置を奪わない）。
+   *
+   * @param serverReadSeq サーバが返した既読ウォーターマーク。**手元と混ぜる前の値**
+   *   （setFeeds はサーバのオブジェクトをそのまま使うことがあるので、後から読むと
+   *   手元の既読が混ざっている）。**取れなかったときは null**（起動の取得が失敗した場合）。
+   *   暫定の印を外すだけで座り直さない。後から届いた定期同期でカーソルが飛ぶ方が困る
+   */
+  function confirmLanding(serverReadSeq: ReadonlyMap<number, number> | null): void {
+    const landing = provisionalLanding.value;
+    provisionalLanding.value = null;
+    if (landing === null || serverReadSeq === null) return;
+    // ユーザが動かしていれば、その位置が正
+    if (currentFeed.value?.id !== landing.feedId) return;
+    if (currentEntry.value?.id !== landing.entryId) return;
+    // u で未読に戻した記事に座っていたなら、サーバの既読より後ろでも控えは正しい
+    if (landing.forcedUnread) return;
+
+    const readSeq = serverReadSeq.get(landing.feedId);
+    // 購読が消えていれば setFeeds が既に逃がしている
+    if (readSeq === undefined) return;
+    // サーバでも未読だったなら控えは古くなかった
+    if (entriesStore.isUnread(landing.entryId, readSeq)) return;
+
+    enterFirstUnread();
   }
 
   /** 着地先。記事を名指しできるのは、左ペインの一覧から直接飛ぶ場合（不変条件 2 の経路） */
   type Landing = 'first' | 'last' | { entryId: number };
 
   /**
-   * そのフィードで読む記事の並び。未読があれば未読だけ、無ければ手元にある全件。
-   * 既読のフィードに戻ってきたときに読み返せるようにするための規則で、
-   * カーソルを入れるときと左ペインに並べるときで同じでなければならない。
+   * そのフィードで読む記事の並びと、それが未読側かどうか。未読のフィードは未読だけ、
+   * 読み終えたフィードは手元にある全件（既読のフィードに戻ってきたときに読み返せる
+   * ようにするため）。カーソルを入れるときと左ペインに並べるときで同じでなければ
+   * ならないので、判定と並びをここでまとめて決める。
+   *
+   * **記事がまだ届いていないことを「未読が無い」と読み替えない**（issue #10）。
+   * 未読数はサーバの申告で、記事は背景取得で後から届く。既読側に落とすと、
+   * その隙間に入ったフィードで手元の既読記事が並ぶ
    */
-  function readingList(feed: Feed): Entry[] {
+  function readingList(feed: Feed): { list: Entry[]; unreadMode: boolean } {
     const unread = entriesStore.unreadOf(feed.id, feed.readSeq);
-    return unread.length > 0 ? unread : entriesStore.of(feed.id);
+    const unreadMode = unread.length > 0 || isReadable(feed);
+    return { list: unreadMode ? unread : entriesStore.of(feed.id), unreadMode };
   }
 
   function enterFeed(index: number, position: Landing): void {
     const feed = feeds.value[index];
     if (feed === undefined) return;
 
-    const unread = entriesStore.unreadOf(feed.id, feed.readSeq);
-    const list = readingList(feed);
+    const { list, unreadMode } = readingList(feed);
     const landing = landingIndex(list, position);
 
     // 記事リストと位置を別々に書き換えると、その途中の一瞬だけ
@@ -383,7 +460,9 @@ export const useFeedsStore = defineStore('feeds', () => {
     currentEntries.value = [];
     feedIndex.value = index;
     entryIndex.value = landing;
-    entryFloor.value = unread.length > 0 ? feed.readSeq : 0;
+    // 読み返しに入ったときだけ床を落とす。未読のフィードで落とすと、後から届く
+    // 未読に混じって手元の既読記事まで並ぶ（absorbNewEntries は床から上を全部足す）
+    entryFloor.value = unreadMode ? feed.readSeq : 0;
     finished.value = false;
     currentEntries.value = list;
   }
@@ -547,7 +626,7 @@ export const useFeedsStore = defineStore('feeds', () => {
     if (currentFeed.value?.id === feedId) return currentEntries.value;
 
     const feed = feeds.value.find((candidate) => candidate.id === feedId);
-    return feed === undefined ? [] : readingList(feed);
+    return feed === undefined ? [] : readingList(feed).list;
   }
 
   /**
@@ -629,7 +708,7 @@ export const useFeedsStore = defineStore('feeds', () => {
     for (let n = 0; n < PREFETCH_FEEDS; n += 1) {
       index = findFeed(index + 1, 1, isReadable);
       if (index === -1) break;
-      for (const entry of readingList(feeds.value[index])) {
+      for (const entry of readingList(feeds.value[index]).list) {
         if (take(entry)) return urls.slice(0, PREFETCH_IMAGES);
       }
     }
@@ -695,6 +774,7 @@ export const useFeedsStore = defineStore('feeds', () => {
     setFeeds,
     recountUnread,
     enterFirstUnread,
+    confirmLanding,
     absorbNewEntries,
     selectFeed,
     selectEntry,

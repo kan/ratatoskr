@@ -135,6 +135,9 @@ export const useSessionStore = defineStore('session', () => {
     } catch (err) {
       // 手元のデータで操作は続けられる。失敗はヘッダに出すだけに留める
       error.value = err instanceof Error ? err.message : String(err);
+      // 起動時のカーソルを確かめる相手が来なかった。**後から届く定期同期では座り直さない。**
+      // 読んでいる最中にカーソルが飛ぶ方が困るので、暫定の印だけ外す（issue #10）
+      feedsStore.confirmLanding(null);
     }
 
     // **起動の取得が失敗しても張る。** オフラインで開いた場合こそ、繋がった後に
@@ -161,7 +164,9 @@ export const useSessionStore = defineStore('session', () => {
     entriesStore.restoreForcedUnread(forcedUnread);
     // IndexedDB は id 順で返ってくる。読む順序に並べ直してから渡す
     feedsStore.setFeeds(sortByReadingOrder(snapshot.feeds));
-    feedsStore.enterFirstUnread();
+    // 手元の控えは他の端末で読んだ分だけ遅れている。ここで座らせる位置は暫定で、
+    // サーバの状態が届いた時点で confirmLanding が確かめ直す（issue #10）
+    feedsStore.enterFirstUnread({ provisional: true });
     entryCursor.value = snapshot.entryCursor;
     syncedAt.value = snapshot.syncedAt;
     phase.value = 'hydrated';
@@ -185,6 +190,13 @@ export const useSessionStore = defineStore('session', () => {
     // 出し切ってあれば、当てた後の値をそのまま次の差分の起点にできる
     flushLocalState();
 
+    // 起動時のカーソルを確かめ直すのに使う（issue #10）。**setFeeds より前に控える。**
+    // あちらはサーバのオブジェクトをそのまま採ることがあり、後から読むと手元の既読が
+    // 混ざっている。**定期同期では確かめ直さない**（読んでいる最中にカーソルを動かさない）
+    const serverReadSeq = background
+      ? null
+      : new Map(body.feeds.map((feed) => [feed.id, feed.readSeq]));
+
     entriesStore.ingest(entries);
     // まだ送信が通っていないピンは残す（setPins の中で url を突き合わせる）
     pinsStore.setPins(body.pins);
@@ -195,6 +207,7 @@ export const useSessionStore = defineStore('session', () => {
 
     if (!feedsStore.started) feedsStore.enterFirstUnread();
     else feedsStore.absorbNewEntries();
+    feedsStore.confirmLanding(serverReadSeq);
 
     // **サーバの未読数をそのまま信じない。** u で未読に戻した記事はサーバが知らず、
     // 保持期間で手元から消した記事はサーバにまだある。どちらも手元で数え直す。

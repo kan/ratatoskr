@@ -14,6 +14,11 @@ const props = defineProps<{
   entry: Entry | null;
   /** この記事にピンが立っているか。目印を出すだけで、操作は親が持つ */
   pinned: boolean;
+  /**
+   * 出す記事が無いときの文言。**読み込み中と区別が付くのは親だけ**なので、
+   * 文言そのものを受け取る（起動の途中は「無い」と断定しない。issue #10）
+   */
+  emptyLabel: string;
 }>();
 
 /**
@@ -212,7 +217,7 @@ defineExpose({ pageDown, pageUp, scrollToBottom });
           <!-- eslint-disable-next-line vue/no-v-html -->
           <div class="article-body" @error.capture="onLoadError" v-html="entry.body"></div>
         </template>
-        <p v-else class="text-sm text-neutral-500">記事がありません</p>
+        <p v-else class="text-sm text-neutral-500">{{ emptyLabel }}</p>
       </div>
     </article>
 

@@ -750,3 +750,143 @@ describe('フォルダでの絞り込み（issue #3）', () => {
     expect(feeds.folders).toEqual(['News', '開発', '']);
   });
 });
+
+describe('起動時のカーソル（issue #10）', () => {
+  /** 手元の控えだけで起動した状態。他の端末で読んだ分は、まだ届いていない */
+  function hydrated() {
+    const feeds = useFeedsStore();
+    useEntriesStore().ingest([...entries(1, [10, 11]), ...entries(2, [20, 21])]);
+    feeds.setFeeds([feed(1, { rate: 5, unreadCount: 2 }), feed(2, { rate: 3, unreadCount: 2 })]);
+    feeds.enterFirstUnread({ provisional: true });
+    return feeds;
+  }
+
+  it('他の端末で読み終えていたフィードからは、次の未読へ座り直す', () => {
+    const feeds = hydrated();
+    expect(feeds.currentEntry?.id).toBe(10);
+
+    // サーバではフィード 1 を読み終えている（控えが遅れていた）
+    feeds.setFeeds([
+      feed(1, { rate: 5, readSeq: 11, unreadCount: 0 }),
+      feed(2, { rate: 3, unreadCount: 2 }),
+    ]);
+    feeds.confirmLanding(
+      new Map([
+        [1, 11],
+        [2, 0],
+      ]),
+    );
+
+    expect(feeds.currentFeed?.id).toBe(2);
+    expect(feeds.currentEntry?.id).toBe(20);
+  });
+
+  it('サーバでも未読だったなら座り直さない', () => {
+    const feeds = hydrated();
+    feeds.setFeeds([feed(1, { rate: 5, unreadCount: 2 }), feed(2, { rate: 3, unreadCount: 2 })]);
+    feeds.confirmLanding(
+      new Map([
+        [1, 0],
+        [2, 0],
+      ]),
+    );
+
+    expect(feeds.currentFeed?.id).toBe(1);
+    expect(feeds.currentEntry?.id).toBe(10);
+  });
+
+  it('ユーザが動かした後なら座り直さない（手で選んだ位置を奪わない）', () => {
+    const feeds = hydrated();
+    feeds.nextEntry(); // 11 へ
+
+    feeds.setFeeds([
+      feed(1, { rate: 5, readSeq: 11, unreadCount: 0 }),
+      feed(2, { rate: 3, unreadCount: 2 }),
+    ]);
+    feeds.confirmLanding(
+      new Map([
+        [1, 11],
+        [2, 0],
+      ]),
+    );
+
+    expect(feeds.currentFeed?.id).toBe(1);
+    expect(feeds.currentEntry?.id).toBe(11);
+  });
+
+  it('確かめ直すのは一度きり（次の同期でカーソルを動かさない）', () => {
+    const feeds = hydrated();
+    feeds.confirmLanding(new Map([[1, 0]]));
+    expect(feeds.currentEntry?.id).toBe(10);
+
+    // 以降は暫定ではない。他の端末が読み終えても、読んでいる位置は動かさない
+    feeds.confirmLanding(new Map([[1, 11]]));
+    expect(feeds.currentEntry?.id).toBe(10);
+  });
+
+  it('u で未読に戻した記事に座っていたら、サーバが既読でも座り直さない', () => {
+    // 座った時点で例外は外れる（表示したら既読）。外れた後の状態で判定すると、
+    // 「後で読むために u を押した記事」が起動のたびに奪われる
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    entriesStore.ingest([...entries(1, [10, 11]), ...entries(2, [20, 21])]);
+    entriesStore.restoreForcedUnread([10]);
+    feeds.setFeeds([
+      feed(1, { rate: 5, readSeq: 11, unreadCount: 1 }),
+      feed(2, { rate: 3, unreadCount: 2 }),
+    ]);
+    feeds.enterFirstUnread({ provisional: true });
+    expect(feeds.currentEntry?.id).toBe(10);
+
+    feeds.confirmLanding(
+      new Map([
+        [1, 11],
+        [2, 0],
+      ]),
+    );
+
+    expect(feeds.currentFeed?.id).toBe(1);
+    expect(feeds.currentEntry?.id).toBe(10);
+  });
+
+  it('サーバの状態が取れなければ座り直さない（起動の取得に失敗した場合）', () => {
+    // 後から届いた定期同期でカーソルが飛ぶ方が困る。暫定の印を外すだけにする
+    const feeds = hydrated();
+    feeds.confirmLanding(null);
+    expect(feeds.currentEntry?.id).toBe(10);
+
+    feeds.confirmLanding(new Map([[1, 11]]));
+    expect(feeds.currentEntry?.id).toBe(10);
+  });
+
+  it('送信待ちの u が残っているフィードは、サーバが未読 0 と言っても読む対象に残る', () => {
+    // サーバの未読数は entry_states を数えるが、まだ届いていない u は知らない。
+    // 数え直す前のサーバの値で飛ばすと、戻した記事に辿り着けなくなる
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    entriesStore.ingest(entries(1, [10, 11]));
+    entriesStore.restoreForcedUnread([10]);
+    feeds.setFeeds([feed(1, { readSeq: 11, unreadCount: 0 })]);
+
+    feeds.enterFirstUnread();
+    expect(feeds.finished).toBe(false);
+    expect(feeds.currentEntry?.id).toBe(10);
+  });
+
+  it('未読があるフィードでは、手元の既読記事を並べない', () => {
+    // サーバは未読 1 件と言っているが、その記事はまだ届いていない。
+    // ここで手元の既読記事に落ちると、開くたびに読み終えた記事が出てくる
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    entriesStore.ingest(entries(1, [50, 60]));
+    feeds.setFeeds([feed(1, { readSeq: 60, unreadCount: 1 })]);
+    feeds.enterFirstUnread();
+
+    expect(feeds.currentEntries).toEqual([]);
+
+    // 背景取得で未読が届く。既読の 50 / 60 は混ざらない
+    entriesStore.ingest(entries(1, [61]));
+    feeds.absorbNewEntries();
+    expect(feeds.currentEntries.map((e) => e.id)).toEqual([61]);
+  });
+});

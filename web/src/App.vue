@@ -134,6 +134,14 @@ const position = computed(() =>
   feeds.started ? `(${feeds.entryIndex + 1}/${feeds.entryCount})` : '',
 );
 
+/**
+ * 記事を出せないときの文言。**背景取得が終わるまでは「無い」と断定しない。**
+ * 初回起動は手元が空で、サーバが未読と言っているフィードの記事も後から届く（issue #10）
+ */
+const emptyLabel = computed(() =>
+  session.phase === 'ready' || session.error ? '未読の記事がありません' : '読み込み中…',
+);
+
 /** いま読んでいる記事にピンが立っているか。本文の見出しの目印に使う */
 const currentPinned = computed(() => {
   const url = feeds.currentEntry?.url;
@@ -575,18 +583,14 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
         class="flex h-full items-center justify-center"
         data-testid="empty"
       >
-        <!-- 背景取得が終わるまでは「無い」と断定しない（初回起動は手元が空のため） -->
-        <p class="text-sm text-neutral-500">
-          {{
-            session.phase === 'ready' || session.error ? '未読の記事がありません' : '読み込み中…'
-          }}
-        </p>
+        <p class="text-sm text-neutral-500">{{ emptyLabel }}</p>
       </div>
       <template v-else>
         <EntryReader
           ref="reader"
           class="min-h-0 flex-1"
           :entry="feeds.currentEntry"
+          :empty-label="emptyLabel"
           :pinned="currentPinned"
           @next="feeds.nextEntry()"
           @prev="feeds.prevEntry()"
