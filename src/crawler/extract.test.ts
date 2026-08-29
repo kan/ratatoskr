@@ -161,6 +161,35 @@ describe('scanCandidates', () => {
     expect(candidates).toEqual([]);
   });
 
+  it('hr があっても走査が止まらない', async () => {
+    // hr は空要素なので、終了タグを待つ形で登録すると HTMLRewriter が
+    // 「No end tag」を投げて走査ごと落ちる。例外は crawl の Promise.allSettled に
+    // 拾われるので、そのフィードだけ静かに全文が埋まらなくなる（実際に踏んだ）
+    const line = 'ここは十分な長さのある文で、段落として数えられるべきもの。';
+    const candidates = await scanCandidates(
+      `<html><body><article>${line}<hr>${line}</article></body></html>`,
+    );
+
+    expect(candidates[0].selector).toBe('article');
+  });
+
+  it('SVG の中の自己終了タグがあっても走査が止まらない', async () => {
+    // SVG / MathML の中では HTML と違って自己終了タグが有効なので、終了タグを
+    // 待つ形で登録すると「No end tag」で走査ごと落ちる。opaque（svg / title）と
+    // リンク（a）の両方で再現した
+    const line = 'ここは十分な長さのある文で、段落として数えられるべきもの。';
+    for (const mark of ['<svg class="i"/>', '<svg><title/></svg>', '<svg><a href="#"/></svg>']) {
+      const candidates = await scanCandidates(
+        `<html><body><article>${line}${mark}${line}</article></body></html>`,
+      );
+
+      // 落ちないだけでなく、印の後ろの文章も数に入っていること。開いた印を
+      // 下ろせないまま進むと、以降のテキストが全て漏れる
+      expect(candidates[0].selector).toBe('article');
+      expect(candidates[0].text).toBe(line.length * 2);
+    }
+  });
+
   it('段落の無い文書では候補が出ない', async () => {
     const candidates = await scanCandidates(
       '<html><body><div class="nav"><a href="/a">A</a><a href="/b">B</a></div></body></html>',

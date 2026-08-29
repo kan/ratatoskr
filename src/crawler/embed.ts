@@ -6,6 +6,7 @@ import {
   USER_AGENT,
   type FetchBudget,
 } from './fetch';
+import { elementScope } from './rewriter';
 import { sanitizeHtml } from './sanitize';
 
 /**
@@ -100,14 +101,19 @@ async function findEmptyTweetQuotes(html: string): Promise<EmptyQuote[]> {
     .on('blockquote', {
       element(element) {
         const quote = { index: quotes.length, url: null as string | null, text: 0 };
-        quotes.push(quote);
-        // 入れ子の blockquote は外側だけを見る。内側は外側の一部として数える
-        if (depth === 0) current = quote;
-        depth += 1;
-        element.onEndTag(() => {
-          depth = Math.max(0, depth - 1);
-          if (depth === 0) current = null;
-        });
+        elementScope(
+          element,
+          () => {
+            quotes.push(quote);
+            // 入れ子の blockquote は外側だけを見る。内側は外側の一部として数える
+            if (depth === 0) current = quote;
+            depth += 1;
+          },
+          () => {
+            depth -= 1;
+            if (depth === 0) current = null;
+          },
+        );
       },
     })
     .on('blockquote a', {

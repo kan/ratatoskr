@@ -13,7 +13,7 @@
  * ライブラリを持ち込むほどの仕事でもない。
  */
 
-import { htmlResponse } from './sanitize';
+import { elementScope, htmlResponse, onEndTag } from './rewriter';
 
 /**
  * 本文の入れ物になりうるタグ。段落そのもの（p）は入れない。
@@ -38,6 +38,9 @@ const MIN_PARAGRAPH = 25;
  * `<p>` もこの一員（段落の切れ目であることに変わりはない）。
  *
  * br だけは別扱いにする（softBreak）。
+ *
+ * `hr` のような空要素も混ざる。終了タグが無いので締めるのは開いた時点だけになるが、
+ * それで足りる（rewriter.ts の onEndTag）。
  */
 const BREAK_TAGS =
   'p, li, h1, h2, h3, h4, h5, h6, tr, blockquote, pre, figcaption, dt, dd, figure, hr, header, footer, nav, aside, address, form';
@@ -184,10 +187,15 @@ export async function scanCandidates(
   const rewriter = new HTMLRewriter()
     .on(OPAQUE_TAGS, {
       element(element) {
-        opaqueDepth += 1;
-        element.onEndTag(() => {
-          opaqueDepth = Math.max(0, opaqueDepth - 1);
-        });
+        elementScope(
+          element,
+          () => {
+            opaqueDepth += 1;
+          },
+          () => {
+            opaqueDepth -= 1;
+          },
+        );
       },
     })
     .on(CANDIDATE_TAGS, {
@@ -206,31 +214,41 @@ export async function scanCandidates(
           // 対象が決まった後に開いた入れ物は、その中にある
           scoped: inScope,
         };
-        open.push(node);
-        element.onEndTag(() => {
-          // 閉じる前に締める。順序を逆にすると、最後の段落が 1 つ外側に加点される
-          creditParagraph();
-          if (node === scope) inScope = false;
-          const index = open.lastIndexOf(node);
-          if (index === -1) return;
-          open.splice(index, 1);
-          closed.push(node);
-        });
+        elementScope(
+          element,
+          () => {
+            open.push(node);
+          },
+          () => {
+            // 閉じる前に締める。順序を逆にすると、最後の段落が 1 つ外側に加点される
+            creditParagraph();
+            if (node === scope) inScope = false;
+            const index = open.lastIndexOf(node);
+            if (index === -1) return;
+            open.splice(index, 1);
+            closed.push(node);
+          },
+        );
       },
     })
     .on('a', {
       element(element) {
-        linkDepth += 1;
-        element.onEndTag(() => {
-          linkDepth = Math.max(0, linkDepth - 1);
-        });
+        elementScope(
+          element,
+          () => {
+            linkDepth += 1;
+          },
+          () => {
+            linkDepth -= 1;
+          },
+        );
       },
     })
     .on(BREAK_TAGS, {
       element(element) {
         // 前の段落が閉じられていなければ、ここで閉じたものとして締める
         creditParagraph();
-        element.onEndTag(() => {
+        onEndTag(element, () => {
           creditParagraph();
         });
       },
@@ -438,11 +456,16 @@ export async function locateFragmentOccurrence(
     .on(CANDIDATE_TAGS, {
       element(element) {
         const box = { matchesBefore: matchCount };
-        openBoxes.push(box);
-        element.onEndTag(() => {
-          const at = openBoxes.lastIndexOf(box);
-          if (at !== -1) openBoxes.splice(at, 1);
-        });
+        elementScope(
+          element,
+          () => {
+            openBoxes.push(box);
+          },
+          () => {
+            const at = openBoxes.lastIndexOf(box);
+            if (at !== -1) openBoxes.splice(at, 1);
+          },
+        );
       },
     })
     .on(selector, {

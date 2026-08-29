@@ -8,6 +8,8 @@
  * RSS/Atom 自体のパースには使わない（HTML 専用）。
  */
 
+import { elementScope, htmlResponse } from './rewriter';
+
 // 記事本文として意味のあるタグだけを残す
 const ALLOWED_TAGS = tagSet(`
   a abbr b blockquote br caption cite code dd del div dl dt em figcaption figure
@@ -196,17 +198,6 @@ function applyPolicy(element: Element, baseUrl: string | null): void {
   }
 }
 
-// 記事ページ 1 枚まるごとを渡されることがある（crawler/extract.ts）。body に入るのは
-// 断片なので doctype は要らない。HTMLRewriter の Doctype には remove() が無く
-// ハンドラからは落とせないので、渡す前に削っておく
-const LEADING_DOCTYPE = /^\uFEFF?\s*<!doctype[^>]*>/i;
-
-export function htmlResponse(html: string): Response {
-  return new Response(html.replace(LEADING_DOCTYPE, ''), {
-    headers: { 'content-type': 'text/html; charset=utf-8' },
-  });
-}
-
 export async function sanitizeHtml(html: string, baseUrl: string | null = null): Promise<string> {
   if (html.trim() === '') return '';
 
@@ -269,11 +260,16 @@ export async function sanitizeWithin(
         // 1 ページに複数の記事が並ぶサイトでは、同じセレクタが記事の数だけ当たる。
         // どれを採るかは呼び出し側が記事 URL のフラグメントから決めて渡す。既定は最初の 1 つ
         if (seen++ !== occurrence) return;
-        matched = true;
-        inside = true;
-        element.onEndTag(() => {
-          inside = false;
-        });
+        elementScope(
+          element,
+          () => {
+            matched = true;
+            inside = true;
+          },
+          () => {
+            inside = false;
+          },
+        );
       },
     })
     .on('*', {
