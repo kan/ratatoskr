@@ -37,6 +37,41 @@ export function releaseBudget(budget: FetchBudget, unused: number): void {
   if (unused > 0) budget.remaining += unused;
 }
 
+/**
+ * 認証の要らない JSON の API を 1 本引く。**引けなければ全て null に倒す。**
+ *
+ * 名乗りと打ち切りは上の定数を共有する（片方だけ緩めることに意味は無い）。
+ * ネットワークの失敗・エラー応答・壊れた JSON をどれも同じ「無かった」に畳むのは、
+ * **呼び出し側がどれも同じ扱いをする**ため——記事 1 本の埋め込みや投稿 1 件が
+ * 引けなくても、フィードの取得自体は成功している。`feeds.last_error` に書くと
+ * フィードが壊れているように見えるので書かない。
+ *
+ * @param label 引けなかったときにログへ残す名前
+ */
+export async function fetchJson(
+  url: string,
+  fetchImpl: typeof fetch,
+  label: string,
+): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      headers: { 'user-agent': USER_AGENT, accept: 'application/json' },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (err) {
+    console.warn(`${label}の取得に失敗`, url, describeNetworkError(err).message);
+    return null;
+  }
+  if (!response.ok) return null;
+
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
 export type FetchOutcome =
   /** 304。本文を読まずに終わり */
   | { kind: 'notModified' }

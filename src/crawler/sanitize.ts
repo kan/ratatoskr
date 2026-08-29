@@ -93,9 +93,19 @@ function embedHostLabel(host: string): string | null {
   return null;
 }
 
-/** 属性値に埋め込める形にする。ここで作る HTML は自分で組み立てるので必ず通す */
-function escapeAttribute(value: string): string {
-  return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
+/**
+ * HTML に埋め込める形にする。**自前で組み立てる HTML は必ずここを通す。**
+ *
+ * 属性値にもテキストにも同じものを使う。属性値だけなら `>` は落とさなくてよいが、
+ * 用途ごとに規則を分けると「どちらを呼ぶか」を毎回考えることになり、片方を
+ * 忘れたときに黙って壊れる（サニタイズは例外を出さず、中身だけ残す）。
+ */
+export function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
 }
 
 /** 埋め込み URL から、人が開いて意味のある URL に直す */
@@ -119,7 +129,7 @@ function embedLink(src: string | null, baseUrl: string | null): string | null {
 
   // p で包まない。WordPress の埋め込みは <p><iframe></iframe></p> の形なので、
   // 包むと p の入れ子になり、ブラウザの解釈で段落が分断される
-  const href = escapeAttribute(watchableUrl(url));
+  const href = escapeHtml(watchableUrl(url));
   return `<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`;
 }
 

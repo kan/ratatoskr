@@ -527,6 +527,122 @@ describe('fillFullText', () => {
     expect((await getFeedRow(env.DB, feedId)).full_text_selector).toBe('article.entry');
   });
 
+  it('Bluesky は記事ページを取りに行かず、API から埋める', async () => {
+    // bsky.app の投稿ページは SPA で本文が HTML に入っていない。走査しても候補は
+    // 出ないので、毎クロール 1 件ごとに 1 リクエストを捨てることになっていた
+    const feedId = await seedFeed(env.DB, 'https://bsky.app/profile/x.example.com/rss', {
+      fullText: 1,
+    });
+    await seedEntry(env.DB, feedId, {
+      url: 'https://bsky.app/profile/x.example.com/post/3aaa',
+      body: SUMMARY,
+    });
+    await seedEntry(env.DB, feedId, {
+      url: 'https://bsky.app/profile/x.example.com/post/3bbb',
+      body: SUMMARY,
+    });
+
+    const calls: string[] = [];
+    const impl = async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes('resolveHandle')) {
+        return new Response(JSON.stringify({ did: 'did:plc:example' }));
+      }
+      const posts = [...new URL(url).searchParams.getAll('uris')].map((uri) => ({
+        uri,
+        record: { text: `${uri.split('/').pop()} の本文\nもう 1 行` },
+      }));
+      return new Response(JSON.stringify({ posts }));
+    };
+    const budget: FetchBudget = { remaining: 10 };
+
+    const result = await fillFullText(env.DB, await targetOf(feedId), {
+      fetchImpl: impl as unknown as typeof fetch,
+      ai: undefined,
+      budget,
+    });
+
+    // 投稿ページは 1 枚も引かない。要求は名前解決 1 回と投稿の取得 1 回だけ
+    expect(calls).toHaveLength(2);
+    expect(calls.some((url) => url.startsWith('https://bsky.app/'))).toBe(false);
+    expect(result.filled).toHaveLength(2);
+    // 記事ページ用に確保した枠は返し、API が要る分（2 回）だけを使う
+    expect(budget.remaining).toBe(8);
+
+    const rows = await getEntryRows(env.DB, feedId);
+    expect(rows.find((row) => row.url?.endsWith('3aaa'))!.full_body).toBe(
+      '<p>3aaa の本文<br>もう 1 行</p>',
+    );
+    // 本文の位置を覚える場所は要らない（記事ページを見ないので）
+    expect((await getFeedRow(env.DB, feedId)).full_text_selector).toBeNull();
+  });
+
+  it('Bluesky の投稿と普通の記事が混ざっていても、それぞれの経路で埋める', async () => {
+    // 振り分けは記事ごと。バッチ全体で決めると、1 件混ざっただけで残り全部が
+    // 「候補の出ないページを引くだけ」に戻る
+    const feedId = await seedFeed(env.DB, 'https://example.com/feed', { fullText: 1 });
+    await seedEntry(env.DB, feedId, {
+      url: 'https://bsky.app/profile/did:plc:example/post/3aaa',
+      body: SUMMARY,
+    });
+    await seedEntry(env.DB, feedId, { url: 'https://example.com/a', body: SUMMARY });
+
+    const calls: string[] = [];
+    const impl = async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input);
+      calls.push(url);
+      if (url.startsWith('https://public.api.bsky.app/')) {
+        const posts = [...new URL(url).searchParams.getAll('uris')].map((uri) => ({
+          uri,
+          record: { text: '投稿の本文' },
+        }));
+        return new Response(JSON.stringify({ posts }));
+      }
+      return new Response(articlePage(BODY), { headers: { 'content-type': 'text/html' } });
+    };
+
+    const result = await fillFullText(env.DB, await targetOf(feedId), {
+      fetchImpl: impl as unknown as typeof fetch,
+      ai: undefined,
+      budget: { remaining: 10 },
+    });
+
+    expect(result.filled).toHaveLength(2);
+    // 投稿ページは引かず、記事ページだけ引く
+    expect(calls.filter((url) => url.startsWith('https://bsky.app/'))).toEqual([]);
+    expect(calls).toContain('https://example.com/a');
+
+    const rows = await getEntryRows(env.DB, feedId);
+    expect(rows.find((row) => row.url?.endsWith('3aaa'))!.full_body).toBe('<p>投稿の本文</p>');
+    expect(rows.find((row) => row.url === 'https://example.com/a')!.full_body).toContain(
+      'これは記事ページにしか無い本文です',
+    );
+  });
+
+  it('Bluesky の API が落ちている回に、記事へ印を残さない', async () => {
+    // 印（full_body = '')は selectMissingFullText から永久に外す働きがあるので、
+    // 一時的な失敗で付けると購読を入れ直すまで戻らない。消された投稿とは分ける
+    const feedId = await seedFeed(env.DB, 'https://bsky.app/profile/x.example.com/rss', {
+      fullText: 1,
+    });
+    await seedEntry(env.DB, feedId, {
+      url: 'https://bsky.app/profile/did:plc:example/post/3aaa',
+      body: SUMMARY,
+    });
+    const impl = (async () => new Response('nope', { status: 502 })) as unknown as typeof fetch;
+
+    const result = await fillFullText(env.DB, await targetOf(feedId), {
+      fetchImpl: impl,
+      ai: undefined,
+      budget: { remaining: 10 },
+    });
+
+    expect(result.filled).toEqual([]);
+    // 次のクロールで取り直せるよう、印を付けずに残す
+    expect((await getEntryRows(env.DB, feedId))[0].full_body).toBeNull();
+  });
+
   it('消えた記事ページには印を残し、他の記事は取り込む', async () => {
     const feedId = await seedFeed(env.DB, 'https://example.com/feed', { fullText: 1 });
     await seedEntry(env.DB, feedId, { url: 'https://example.com/gone', body: SUMMARY });

@@ -5,6 +5,7 @@ import {
   type FullTextTarget,
 } from '../db/entries';
 import { updateFullTextSelector, type CrawlTarget } from '../db/feeds';
+import { blueskyPostRef, fetchBlueskyPosts, type BlueskyPostRef } from './bluesky';
 import { chooseBodySelector, type BodySelector } from './choose';
 import { resolveTweetEmbeds } from './embed';
 import {
@@ -74,6 +75,19 @@ export interface FullTextResult {
   filled: number[];
 }
 
+/**
+ * 1 つの経路が出した答え。**書き込むのは呼び出し側で 1 回だけ。**
+ *
+ * `updates` に載らなかった記事は「今回は決めない」。次のクロールで取り直す
+ * （一時的な失敗にあたる）。`fullBody: ''` は「取りに行ったが採らなかった」印で、
+ * `selectMissingFullText` の対象から外れる。**取り直しを永久に止める重さがある**
+ * ので、確かに駄目だと分かったときだけ付ける。
+ */
+interface FillOutcome {
+  updates: { id: number; fullBody: string }[];
+  filled: number[];
+}
+
 export async function fillFullText(
   db: D1Database,
   feed: CrawlTarget,
@@ -98,14 +112,56 @@ export async function fillFullText(
   releaseBudget(budget, limit - targets.length);
   if (targets.length === 0) return { filled: [] };
 
+  // **どう採るかは記事ごとに決まる。** Bluesky の投稿は記事ページを見ても本文が
+  // 入っていない（SPA）ので API から組み立てる（src/crawler/bluesky.ts）。
+  // バッチ全体で振り分けると、1 件でも別ホストの記事が混ざった回に、残り全部が
+  // 「候補の出ないページを引くだけ」に戻る
+  const posts: BlueskyTarget[] = [];
+  const articles: FullTextTarget[] = [];
+  for (const target of targets) {
+    const ref = blueskyPostRef(target.url);
+    if (ref === null) articles.push(target);
+    else posts.push({ target, ref });
+  }
+
+  // 記事ページを引くために確保した枠のうち、Bluesky に回る分は返す。API 側は
+  // 10 件を 1〜2 回で取るので、自分で要る分だけ確保し直す。返さないと、この
+  // フィードが cron 1 回の全文取得の枠（20 件）を握ったまま数回しか使わない
+  releaseBudget(budget, posts.length);
+
+  const outcomes = [
+    await fillFromBluesky(posts, options),
+    await fillFromArticlePages(db, feed, articles, options),
+  ];
+
+  // **書き込みは 1 回にまとめる。** 印の意味（`''` は取り直しを止める）を
+  // 1 か所で持つのと、D1 への往復を増やさないのと、両方のため
+  await updateFullBodies(
+    db,
+    outcomes.flatMap((outcome) => outcome.updates),
+  );
+  return { filled: outcomes.flatMap((outcome) => outcome.filled) };
+}
+
+/**
+ * 記事ページから採る（既定の経路）。
+ *
+ * 本文の位置はフィードにつき 1 回だけ決めて `feeds.full_text_selector` に覚える。
+ * 覚えたセレクタが用を成さなくなったときだけ判定し直す。
+ */
+async function fillFromArticlePages(
+  db: D1Database,
+  feed: CrawlTarget,
+  targets: FullTextTarget[],
+  options: FullTextOptions,
+): Promise<FillOutcome> {
+  if (targets.length === 0) return { updates: [], filled: [] };
+
   const { pages, gone } = await fetchArticles(targets, options.fetchImpl);
   // 記事ページが消えている（404 / 410）ものには印を残す。残さないと、サイト移転で
   // URL が全滅したフィードの同じ 10 件を 15 分ごとに叩き続けることになる。
   // 一時的な失敗（打ち切り・5xx・接続断）は印を付けず、次の機会に回す
-  if (pages.length === 0) {
-    await markTried(db, gone);
-    return { filled: [] };
-  }
+  if (pages.length === 0) return { updates: tried(gone), filled: [] };
 
   // **覚えていたセレクタと、このクロールで決めたセレクタを分けて持つ。** 決めた方は
   // 抽出で確かめるまで保存しない（外枠を掴んでいたと分かってから取り消すより、
@@ -118,8 +174,7 @@ export async function fillFullText(
     // 本文らしい入れ物が 1 つも無いページだった（JavaScript で描くサイト等）。
     // 取りに行った記事には印を残す。残さないと毎クロール同じ記事を叩き続ける
     if (chosen === null) {
-      await markTried(db, [...gone, ...pages.map((page) => page.target.id)]);
-      return { filled: [] };
+      return { updates: tried([...gone, ...pages.map((page) => page.target.id)]), filled: [] };
     }
     selector = chosen.selector;
   }
@@ -147,7 +202,7 @@ export async function fillFullText(
   if (extraction.collapsed) {
     // **外枠を指していると分かった。** 決めたばかりなら保存しない。覚えていたものなら
     // 捨てる（残すと次のクロールでも同じ外枠を全記事の本文として保存し続ける）。
-    // 文章のある記事が入った回に決め直せるようになるが、この回の記事には下で
+    // 文章のある記事が入った回に決め直せるようになるが、この回の記事には
     // 「取りに行ったが採らなかった」印が付くので、何度も取りに行くことにはならない
     if (remembered !== null) await updateFullTextSelector(db, feed.id, null, null);
   } else if (chosen !== null) {
@@ -171,22 +226,54 @@ export async function fillFullText(
   //
   // **消えた記事ページの印も同じ書き込みで付ける。** 上の clearRejectedFullText は
   // このフィードの印を区別せずに消すので、先に付けても巻き添えになる
-  await updateFullBodies(db, [
-    ...extraction.bodies,
-    ...[...extraction.rejected, ...extraction.unmatched, ...gone].map((id) => ({
-      id,
-      fullBody: '',
-    })),
-  ]);
-  return { filled: extraction.bodies.map((body) => body.id) };
+  return {
+    updates: [
+      ...extraction.bodies,
+      ...tried([...extraction.rejected, ...extraction.unmatched, ...gone]),
+    ],
+    filled: extraction.bodies.map((body) => body.id),
+  };
 }
 
-/** 「取りに行ったが採らなかった」印だけを付ける（migrations/0003_full_text.sql） */
-function markTried(db: D1Database, entryIds: number[]): Promise<void> {
-  return updateFullBodies(
-    db,
-    entryIds.map((id) => ({ id, fullBody: '' })),
+/**
+ * Bluesky の投稿を API から採る。
+ *
+ * セレクタは要らない（記事ページを見ないので、覚える場所が無い）。長さでの足切りも
+ * しない——API が返した投稿がその投稿の全てなので、比べる相手がいない。
+ */
+async function fillFromBluesky(
+  posts: BlueskyTarget[],
+  options: FullTextOptions,
+): Promise<FillOutcome> {
+  if (posts.length === 0) return { updates: [], filled: [] };
+
+  const { bodies, missing } = await fetchBlueskyPosts(
+    posts.map((post) => post.ref),
+    options,
   );
+
+  const outcome: FillOutcome = { updates: [], filled: [] };
+  for (const { target, ref } of posts) {
+    const fullBody = bodies.get(ref.rkey);
+    if (fullBody !== undefined) {
+      outcome.updates.push({ id: target.id, fullBody });
+      outcome.filled.push(target.id);
+    } else if (missing.has(ref.rkey)) {
+      // 消された・非公開の投稿。取り直しても結果は変わらない
+      outcome.updates.push({ id: target.id, fullBody: '' });
+    }
+  }
+  return outcome;
+}
+
+interface BlueskyTarget {
+  target: FullTextTarget;
+  ref: BlueskyPostRef;
+}
+
+/** 「取りに行ったが採らなかった」印（migrations/0003_full_text.sql） */
+function tried(entryIds: number[]): { id: number; fullBody: string }[] {
+  return entryIds.map((id) => ({ id, fullBody: '' }));
 }
 
 interface ArticlePage {

@@ -1,11 +1,4 @@
-import {
-  describeNetworkError,
-  releaseBudget,
-  reserveBudget,
-  TIMEOUT_MS,
-  USER_AGENT,
-  type FetchBudget,
-} from './fetch';
+import { fetchJson, releaseBudget, reserveBudget, type FetchBudget } from './fetch';
 import { elementScope } from './rewriter';
 import { sanitizeHtml } from './sanitize';
 
@@ -100,11 +93,17 @@ async function findEmptyTweetQuotes(html: string): Promise<EmptyQuote[]> {
   await new HTMLRewriter()
     .on('blockquote', {
       element(element) {
+        // **番号は blockquote を見た数で振る。** 差し替える側（replaceQuotes）は
+        // blockquote を無条件に数え直すので、ここで数え落とすと以降が 1 つずれ、
+        // 別の引用が oEmbed の中身で置き換わる（例外にならないので気付けない）。
+        // blockquote は SVG / MathML の中でも HTML へ抜け出すため、実際には
+        // 終了タグを持たない形にならない（実測）が、数え方を elementScope の
+        // 成否に預ける理由も無い
         const quote = { index: quotes.length, url: null as string | null, text: 0 };
+        quotes.push(quote);
         elementScope(
           element,
           () => {
-            quotes.push(quote);
             // 入れ子の blockquote は外側だけを見る。内側は外側の一部として数える
             if (depth === 0) current = quote;
             depth += 1;
@@ -180,25 +179,8 @@ async function fetchTweet(url: string, fetchImpl: typeof fetch): Promise<string 
     `${OEMBED_ENDPOINT}?url=${encodeURIComponent(url)}` +
     '&omit_script=1&dnt=1&hide_thread=1&lang=ja';
 
-  let response: Response;
-  try {
-    response = await fetchImpl(endpoint, {
-      headers: { 'user-agent': USER_AGENT, accept: 'application/json' },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (err) {
-    console.warn('ポストの取得に失敗', url, describeNetworkError(err).message);
-    return null;
-  }
   // 消された・非公開のポストは 404。記事の側は直しようがないので黙って落とす
-  if (!response.ok) return null;
-
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    return null;
-  }
+  const payload = await fetchJson(endpoint, fetchImpl, 'ポスト');
   if (typeof payload !== 'object' || payload === null) return null;
 
   const quoted = (payload as { html?: unknown }).html;
