@@ -40,7 +40,7 @@ const MIN_PARAGRAPH = 25;
  * br だけは別扱いにする（softBreak）。
  *
  * `hr` のような空要素も混ざる。終了タグが無いので締めるのは開いた時点だけになるが、
- * それで足りる（rewriter.ts の onEndTag）。
+ * それで足りる（sanitize.ts の onEndTag）。
  */
 const BREAK_TAGS =
   'p, li, h1, h2, h3, h4, h5, h6, tr, blockquote, pre, figcaption, dt, dd, figure, hr, header, footer, nav, aside, address, form';
@@ -77,6 +77,12 @@ export interface Candidate {
   score: number;
   /** 書き出し。AI が「これは関連記事の一覧ではないか」を判断する手がかりになる */
   preview: string;
+  /**
+   * 中の文章そのものの指紋。**同じフィードの別ページと突き合わせるために使う。**
+   * 一致すれば「どの記事にも同じものが出る塊」＝サイトの外枠で、本文ではない
+   * （本文は記事ごとに違う、というのが唯一の定義）。src/crawler/repeat.ts
+   */
+  signature: string;
 }
 
 interface OpenNode {
@@ -88,6 +94,8 @@ interface OpenNode {
   /** 段落から配られた点。直接の子には満額、孫には半額（後述） */
   paragraph: number;
   preview: string;
+  /** 中の文章を順に畳み込んだ値。Candidate.signature の材料 */
+  hash: number;
   /** フラグメントで絞った対象の中にあるか。絞っていないときは使われない */
   scoped: boolean;
 }
@@ -211,6 +219,7 @@ export async function scanCandidates(
           link: 0,
           paragraph: 0,
           preview: '',
+          hash: FNV_OFFSET,
           // 対象が決まった後に開いた入れ物は、その中にある
           scoped: inScope,
         };
@@ -259,20 +268,27 @@ export async function scanCandidates(
       },
     })
     .on('*', {
+      // 走査でいちばん多く呼ばれる。**同じ文字列を作り直さない**
+      // （記事ページは 4MB まで通すので、1 回の余分な確保が積み上がる）
       text(chunk) {
         if (opaqueDepth > 0) return;
-        const length = chunk.text.trim().length;
-        if (length === 0) return;
+        const text = chunk.text.trim();
+        if (text.length === 0) return;
 
-        for (const node of open) {
-          node.text += length;
-          if (linkDepth > 0) node.link += length;
-          if (node.preview.length < PREVIEW_LENGTH && linkDepth === 0) {
-            node.preview = (node.preview + chunk.text.trim()).slice(0, PREVIEW_LENGTH);
+        if (open.length > 0) {
+          // 指紋は開いている入れ物に畳み込むためのもの。入れ物の外では捨てるだけ
+          const chunkHash = hashText(text);
+          for (const node of open) {
+            node.text += text.length;
+            if (linkDepth > 0) node.link += text.length;
+            node.hash = Math.imul(node.hash ^ chunkHash, FNV_PRIME);
+            if (node.preview.length < PREVIEW_LENGTH && linkDepth === 0) {
+              node.preview += text.slice(0, PREVIEW_LENGTH - node.preview.length);
+            }
           }
         }
-        paragraphText += length;
-        if (linkDepth > 0) paragraphLink += length;
+        paragraphText += text.length;
+        if (linkDepth > 0) paragraphLink += text.length;
       },
     });
 
@@ -352,7 +368,28 @@ function toCandidate(
     link: node.link,
     score: Math.round(node.paragraph * (1 - linkDensity)),
     preview: node.preview,
+    // 長さも混ぜる。畳み込みだけだと違う文章が同じ値になる余地が残る
+    signature: `${node.text.toString(36)}-${(node.hash >>> 0).toString(36)}`,
   };
+}
+
+const FNV_OFFSET = 0x811c9dc5;
+const FNV_PRIME = 0x01000193;
+
+/**
+ * 文章の畳み込み（FNV-1a）。入れ物の指紋は、中に出てきた文字列のこの値を
+ * 出てきた順に畳み込んで作る。
+ *
+ * **部分木のテキストを溜め込まない。** 記事ページは 80KB を超え、入れ物ごとに
+ * 中身を複製すると走査 1 回で何倍にも膨らむ。値を転がすだけなら入れ物 1 つ
+ * につき数値 1 個で済む（HTMLRewriter は木を作らないので、後から集計もできない）。
+ */
+function hashText(text: string): number {
+  let hash = FNV_OFFSET;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = Math.imul(hash ^ text.charCodeAt(i), FNV_PRIME);
+  }
+  return hash;
 }
 
 function classList(value: string | null): string[] {

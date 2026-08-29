@@ -14,13 +14,30 @@ import { fillFullText, looksSummaryOnly } from './fulltext';
  * extract.test.ts が実際の記事ページで見ている。
  */
 
-/** 本文 1 段落ぶんの記事ページ。selector を当てれば本文だけが取れる */
-function articlePage(text: string): string {
+/**
+ * 本文 1 段落ぶんの記事ページ。selector（`article.entry`）を当てれば本文だけが取れる。
+ * 本文のまわりに付くもの（ナビ / 注意書き）は記事ページごとに差し替える。
+ */
+function articlePage(text: string, chrome: string = NAV_AND_FOOTER): string {
   return `<!doctype html><html><body>
-    <nav class="global"><a href="/">トップ</a>ナビの文字</nav>
     <div class="wrap"><article class="entry"><p>${text}</p></article></div>
-    <footer>フッタの文字</footer>
+    ${chrome}
   </body></html>`;
+}
+
+const NAV_AND_FOOTER = `<nav class="global"><a href="/">トップ</a>ナビの文字</nav>
+    <footer>フッタの文字</footer>`;
+
+/**
+ * どの記事にも同じ注意書きが付くページ。本文を短くしておくと、点数だけで決めた
+ * ときに注意書きの方が高くなる（朝日新聞の記事ページがこの形で、著作権表記が
+ * 本文を抜いて 1 位になることがある）。
+ */
+const NOTICE =
+  'このサイトに掲載の記事・写真の無断転載を禁じます。すべての内容は著作権法により保護されています。';
+
+function pageWithNotice(text: string): string {
+  return articlePage(text, `<div class="notice"><p>${NOTICE}</p></div>`);
 }
 
 /**
@@ -154,6 +171,112 @@ describe('fillFullText', () => {
     expect(rows.find((row) => row.url === `${page}#p02`)!.full_body).toContain('ふたつ目');
   });
 
+  it('どの記事にも同じ注意書きが出るなら、点数が 1 位でも本文に選ばない', async () => {
+    // 本文は記事ごとに違う、が本文の唯一の定義（src/crawler/repeat.ts）。
+    // 突き合わせないと、この形では注意書きが全記事の本文として保存される
+    const feedId = await seedFeed(env.DB, 'https://example.com/feed', { fullText: 1 });
+    const pages: Record<string, string> = {};
+    for (let i = 0; i < 3; i += 1) {
+      const url = `https://example.com/${i}`;
+      await seedEntry(env.DB, feedId, { url, body: SUMMARY });
+      pages[url] = pageWithNotice(`${i} 本目の記事にしか無い本文です。これは短めの本文。`);
+    }
+    const stub = stubFetch(pages);
+
+    const result = await fillFullText(env.DB, await targetOf(feedId), {
+      fetchImpl: stub.impl,
+      ai: undefined,
+      budget: { remaining: 10 },
+    });
+
+    expect((await getFeedRow(env.DB, feedId)).full_text_selector).toBe('article.entry');
+    expect(result.filled).toHaveLength(3);
+    for (const row of await getEntryRows(env.DB, feedId)) {
+      expect(row.full_body).not.toContain('無断転載');
+    }
+  });
+
+  it('全ての記事が同じ本文になったら、採らずにセレクタを捨てる', async () => {
+    // 結城浩の日記は著者プロフィールの入れ物をセレクタとして覚えてしまい、
+    // 全 15 件の全文が同じ 1329 バイトになっていた（実測）。長さでも点数でも
+    // 表に出ないので、記事どうしを突き合わせるまで気付けない
+    const feedId = await seedFeed(env.DB, 'https://example.com/feed', {
+      fullText: 1,
+      fullTextSelector: 'div.notice',
+    });
+    const pages: Record<string, string> = {};
+    for (let i = 0; i < 2; i += 1) {
+      const url = `https://example.com/${i}`;
+      await seedEntry(env.DB, feedId, { url, body: SUMMARY });
+      pages[url] = pageWithNotice(`${i} 本目の記事にしか無い本文です。これは短めの本文。`);
+    }
+
+    const result = await fillFullText(env.DB, await targetOf(feedId), {
+      fetchImpl: stubFetch(pages).impl,
+      ai: undefined,
+      budget: { remaining: 10 },
+    });
+
+    // 判定し直して本文の入れ物に乗り換える。乗り換えられなければ捨てるだけ
+    expect((await getFeedRow(env.DB, feedId)).full_text_selector).toBe('article.entry');
+    expect(result.filled).toHaveLength(2);
+    for (const row of await getEntryRows(env.DB, feedId)) {
+      expect(row.full_body).not.toContain('無断転載');
+    }
+  });
+
+  it('決めたばかりのセレクタでも、全記事が同じ本文になれば覚えない', async () => {
+    // 1 ページに複数の記事が並ぶサイトでは突き合わせる別ページが無いので、
+    // 選定時の足切りが効かず外枠が選ばれうる。覚えてしまうと、次のクロールから
+    // 全記事の本文が同じ外枠になる（結城浩の日記がこの形で壊れていた）
+    const page = 'https://example.com/202509.html';
+    const feedId = await seedFeed(env.DB, 'https://example.com/feed', { fullText: 1 });
+    // 記事のアンカーが解決できないページ。絞り込みが効かず、ページ全体から選ぶ
+    await seedEntry(env.DB, feedId, { url: `${page}#x01`, body: SUMMARY });
+    await seedEntry(env.DB, feedId, { url: `${page}#x02`, body: SUMMARY });
+    const html = diaryPage('ひとつ目の記事の短い本文。', 'ふたつ目の記事の短い本文。');
+
+    const result = await fillFullText(env.DB, await targetOf(feedId), {
+      fetchImpl: stubFetch({ [page]: html }).impl,
+      ai: undefined,
+      budget: { remaining: 10 },
+    });
+
+    expect(result.filled).toHaveLength(0);
+    expect((await getFeedRow(env.DB, feedId)).full_text_selector).toBeNull();
+    for (const row of await getEntryRows(env.DB, feedId)) {
+      expect(row.full_body).toBe('');
+    }
+  });
+
+  it('乗り換え先が無ければ、外枠を指すセレクタを捨てて記事は要約のまま残す', async () => {
+    // 本文が候補として出ないサイト（リンクを 1 本貼っただけの日記）では、
+    // 判定し直しても行き先が無い。それでも外枠を保存し続けてはいけない
+    const feedId = await seedFeed(env.DB, 'https://example.com/feed', {
+      fullText: 1,
+      fullTextSelector: 'div.notice',
+    });
+    const pages: Record<string, string> = {};
+    for (let i = 0; i < 2; i += 1) {
+      const url = `https://example.com/${i}`;
+      await seedEntry(env.DB, feedId, { url, body: SUMMARY });
+      pages[url] = pageWithNotice(`<a href="https://example.com/x${i}">リンク</a>`);
+    }
+
+    const result = await fillFullText(env.DB, await targetOf(feedId), {
+      fetchImpl: stubFetch(pages).impl,
+      ai: undefined,
+      budget: { remaining: 10 },
+    });
+
+    expect(result.filled).toHaveLength(0);
+    expect((await getFeedRow(env.DB, feedId)).full_text_selector).toBeNull();
+    // 「取りに行ったが採らなかった」印。次のクロールで同じ記事を叩き直さない
+    for (const row of await getEntryRows(env.DB, feedId)) {
+      expect(row.full_body).toBe('');
+    }
+  });
+
   it('記事を指さないフラグメントでは、絞らずに本文を選ぶ', async () => {
     // 記事 URL の # は記事を指すとは限らない。#comments で絞ると本文が候補から
     // 消えてコメント欄が選ばれる。絞った場合と絞らない場合を比べて点の高い方を採る
@@ -244,7 +367,9 @@ describe('fillFullText', () => {
     for (let i = 0; i < 5; i += 1) {
       const url = `https://example.com/${i}`;
       await seedEntry(env.DB, feedId, { url, body: SUMMARY });
-      pages[url] = articlePage(BODY);
+      // 記事ごとに違う本文にする。同じ本文が並ぶと「セレクタが外枠を掴んでいる」
+      // 側の検出に当たって、採らない扱いになる（src/crawler/repeat.ts）
+      pages[url] = articlePage(`${i} 本目。${BODY}`);
     }
     const stub = stubFetch(pages);
     const budget: FetchBudget = { remaining: 2 };
@@ -333,7 +458,7 @@ describe('fillFullText', () => {
     for (let i = 0; i < 4; i += 1) {
       const url = `https://example.com/${i}`;
       ids.push(await seedEntry(env.DB, feedId, { url, body: SUMMARY }));
-      pages[url] = articlePage(BODY);
+      pages[url] = articlePage(`${i} 本目。${BODY}`);
     }
     const stub = stubFetch(pages);
 

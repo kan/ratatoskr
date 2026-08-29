@@ -5,7 +5,7 @@ import {
   type FullTextTarget,
 } from '../db/entries';
 import { updateFullTextSelector, type CrawlTarget } from '../db/feeds';
-import { chooseBodySelector } from './choose';
+import { chooseBodySelector, type BodySelector } from './choose';
 import { resolveTweetEmbeds } from './embed';
 import {
   type Candidate,
@@ -14,6 +14,7 @@ import {
   pageUrlOf,
   scanCandidates,
 } from './extract';
+import { bodiesCollapsed, repeatedSignatures } from './repeat';
 import { sanitizeWithin } from './sanitize';
 import {
   describeNetworkError,
@@ -48,10 +49,13 @@ const MAX_ARTICLES_PER_FEED = 10;
 const CONCURRENCY = 2;
 
 /**
- * 本文の位置を決めるのに試すページ数。
+ * 本文の位置を決めるのに走査するページ数。
  *
  * 1 本目がリンクだけの記事でも 2〜3 本見れば外れる。全件試すと、候補が永久に
- * 出ないサイト（JavaScript で描くサイト）で毎クロール 10 ページ分を走査し続ける
+ * 出ないサイト（JavaScript で描くサイト）で毎クロール 10 ページ分を走査し続ける。
+ *
+ * **3 は「繰り返しを見つけるのに要る数」でもある。** 別々のページを突き合わせて
+ * 初めて外枠が分かるので（src/crawler/repeat.ts）、1 ページで打ち切ると信号が無い
  */
 const MAX_SELECTOR_TRIALS = 3;
 
@@ -98,38 +102,59 @@ export async function fillFullText(
   // 記事ページが消えている（404 / 410）ものには印を残す。残さないと、サイト移転で
   // URL が全滅したフィードの同じ 10 件を 15 分ごとに叩き続けることになる。
   // 一時的な失敗（打ち切り・5xx・接続断）は印を付けず、次の機会に回す
-  if (gone.length > 0) await markTried(db, gone);
-  if (pages.length === 0) return { filled: [] };
+  if (pages.length === 0) {
+    await markTried(db, gone);
+    return { filled: [] };
+  }
 
-  let selector = feed.fullTextSelector;
+  // **覚えていたセレクタと、このクロールで決めたセレクタを分けて持つ。** 決めた方は
+  // 抽出で確かめるまで保存しない（外枠を掴んでいたと分かってから取り消すより、
+  // 初めから保存しない方が状態が 1 つ減る）
+  const remembered = feed.fullTextSelector;
+  let chosen: BodySelector | null = null;
+  let selector = remembered;
   if (selector === null) {
-    selector = await decideSelector(db, feed.id, pages, options.ai);
+    chosen = await chooseSelector(pages, options.ai);
     // 本文らしい入れ物が 1 つも無いページだった（JavaScript で描くサイト等）。
     // 取りに行った記事には印を残す。残さないと毎クロール同じ記事を叩き続ける
-    if (selector === null) {
-      await markTried(
-        db,
-        pages.map((page) => page.target.id),
-      );
+    if (chosen === null) {
+      await markTried(db, [...gone, ...pages.map((page) => page.target.id)]);
       return { filled: [] };
     }
+    selector = chosen.selector;
   }
 
   let extraction = await extractAll(pages, selector);
 
-  // **覚えていたセレクタがどの記事にも当たらなくなったときだけ**判定し直す。
-  // サイトが作り替えられた場合にあたる。「当たったが短くて採らなかった」を
+  // **覚えていたセレクタが用を成さなくなったときだけ**判定し直す。当たるものが
+  // 1 つも無くなった（サイトの作り替え）か、どの記事も同じ本文になった
+  // （外枠を掴んでいる）場合にあたる。「当たったが短くて採らなかった」を
   // 混ぜてはいけない。混ぜると、採れない記事が続く限り毎クロール AI を呼び、
-  // 正しかったかもしれないセレクタを上書きし続ける（判定はフィードにつき 1 回）
-  if (extraction.unmatched.length === pages.length && feed.fullTextSelector !== null) {
-    const rechosen = await decideSelector(db, feed.id, pages, options.ai);
-    if (rechosen !== null && rechosen !== selector) {
-      selector = rechosen;
-      // 前のセレクタで採れなかった記事も、新しいセレクタなら採れるかもしれない
-      await clearRejectedFullText(db, feed.id);
+  // 正しかったかもしれないセレクタを上書きし続ける（判定はフィードにつき 1 回）。
+  //
+  // このクロールで決めたばかりのセレクタ（chosen）は対象にしない。同じ材料で
+  // 決め直しても同じ答えになるだけで、走査を 1 回増やすことにしかならない
+  if (chosen === null && (extraction.unmatched.length === pages.length || extraction.collapsed)) {
+    const rechosen = await chooseSelector(pages, options.ai);
+    if (rechosen !== null && rechosen.selector !== selector) {
+      chosen = rechosen;
+      selector = rechosen.selector;
       // 取り直しはしないので、余分な取得は増えない
       extraction = await extractAll(pages, selector);
     }
+  }
+
+  if (extraction.collapsed) {
+    // **外枠を指していると分かった。** 決めたばかりなら保存しない。覚えていたものなら
+    // 捨てる（残すと次のクロールでも同じ外枠を全記事の本文として保存し続ける）。
+    // 文章のある記事が入った回に決め直せるようになるが、この回の記事には下で
+    // 「取りに行ったが採らなかった」印が付くので、何度も取りに行くことにはならない
+    if (remembered !== null) await updateFullTextSelector(db, feed.id, null, null);
+  } else if (chosen !== null) {
+    await updateFullTextSelector(db, feed.id, chosen.selector, chosen.source);
+    // 本文の位置が変わった。前に「取りに行ったが採らなかった」で印を付けた記事も
+    // 今度は採れるかもしれないので、印を消して次のクロールで拾い直させる
+    await clearRejectedFullText(db, feed.id);
   }
 
   // **埋め込みの解決は、抽出が確定してから 1 回だけ。** 抽出の中でやると、
@@ -142,10 +167,16 @@ export async function fillFullText(
   // 採らなかった記事にも印を残す。残さないと毎クロール同じ記事を取りに行く。
   // **セレクタが当たらなかったものも同じ。** 判定し直しても同じ答えになる場合
   // （再判定で選び直せなかった / 同じセレクタが返った）に取り直しが止まらなくなる。
-  // 印は本文の位置を判定し直したときに消えるので、後から拾い直す道は残る
+  // 印は本文の位置を判定し直したときに消えるので、後から拾い直す道は残る。
+  //
+  // **消えた記事ページの印も同じ書き込みで付ける。** 上の clearRejectedFullText は
+  // このフィードの印を区別せずに消すので、先に付けても巻き添えになる
   await updateFullBodies(db, [
     ...extraction.bodies,
-    ...[...extraction.rejected, ...extraction.unmatched].map((id) => ({ id, fullBody: '' })),
+    ...[...extraction.rejected, ...extraction.unmatched, ...gone].map((id) => ({
+      id,
+      fullBody: '',
+    })),
   ]);
   return { filled: extraction.bodies.map((body) => body.id) };
 }
@@ -161,6 +192,13 @@ function markTried(db: D1Database, entryIds: number[]): Promise<void> {
 interface ArticlePage {
   target: FullTextTarget;
   html: string;
+  /**
+   * フラグメントを落とした取得先。**どの記事が同じページのものかを表す。**
+   * `fetchArticles` が取得をまとめるのに使った区切りをそのまま下流へ渡す
+   * （繰り返しの判定は別々のページの間だけで意味を持つので、毎回 URL から
+   * 導き直すと同じ規則が何か所にも散る）
+   */
+  pageUrl: string;
 }
 
 /**
@@ -200,7 +238,7 @@ async function fetchArticles(
       const { url, outcome } = result.value;
       const group = byPage.get(url) ?? [];
       if (outcome.kind === 'ok') {
-        for (const target of group) pages.push({ target, html: outcome.html });
+        for (const target of group) pages.push({ target, html: outcome.html, pageUrl: url });
       } else if (outcome.kind === 'gone') {
         for (const target of group) gone.push(target.id);
       }
@@ -241,27 +279,70 @@ async function fetchArticle(url: string, fetchImpl: typeof fetch): Promise<Artic
 }
 
 /**
- * 記事ページのどこが本文かを決めて覚える。
- * 決められなければ null を返し、次の取得で改めて試す。
+ * 記事ページのどこが本文かを決める。決められなければ null。
+ *
+ * **保存はしない。** 決めたセレクタが正しいかどうかは、それで抜いてみるまで
+ * 分からない（どの記事も同じ本文になれば外枠を掴んでいる）ので、確かめた側で保存する。
  *
  * **1 本目で決めない。** 候補が出るまで取れたページを順に試す。日記型のサイトには
  * リンクと画像だけの記事が普通に混ざっていて、それに当たると段落が 0 になり候補が
  * 出ない。1 本目だけを見ていると、その回に取れた 10 件すべてを諦めることになる。
+ *
+ * **複数のページを突き合わせてから決める。** どのページにも同じ文章で出てくる
+ * 塊は本文ではないので、候補から外す（src/crawler/repeat.ts）。朝日新聞の記事
+ * ページでは著作権表記が本文を抜いて 1 位になることがあり、外さないと点数だけでは
+ * それを選ぶ（実測）。
  */
-async function decideSelector(
-  db: D1Database,
-  feedId: number,
+async function chooseSelector(
   pages: ArticlePage[],
   ai: Ai | undefined,
-): Promise<string | null> {
-  for (const page of pages.slice(0, MAX_SELECTOR_TRIALS)) {
-    const chosen = await chooseBodySelector(await candidatesFor(page), ai);
-    if (chosen === null) continue;
+): Promise<BodySelector | null> {
+  const { ordered, distinct } = trialOrder(pages);
+  // 絞らない側の走査はページにしか依らないので、同じページでは 1 回で済ませる
+  const whole = new Map<string, Candidate[]>();
 
-    await updateFullTextSelector(db, feedId, chosen.selector, chosen.source);
-    return chosen.selector;
+  const trials: Candidate[][] = [];
+  for (const page of ordered.slice(0, MAX_SELECTOR_TRIALS)) {
+    trials.push(await candidatesFor(page, whole));
+  }
+
+  // **繰り返しを数えるのは別々のページの間だけ。** 1 ページに 1 か月分が並ぶ
+  // 日記型のサイトでは複数の記事が同じ HTML を指すので、そのまま数えると同じ
+  // ページを 3 回見て「どのページにも出る」と誤って判定する。別々のページは
+  // trialOrder が先頭に寄せてある
+  const repeated = repeatedSignatures(trials.slice(0, distinct));
+
+  for (const candidates of trials) {
+    const kept = candidates.filter((candidate) => !repeated.has(candidate.signature));
+    const chosen = await chooseBodySelector(kept, ai);
+    if (chosen !== null) return chosen;
   }
   return null;
+}
+
+/**
+ * 試す順。**別々のページを先に並べ、その本数を添えて返す。**
+ *
+ * 見るのは先頭の MAX_SELECTOR_TRIALS 件だけなので、並べ替えないと日記型のサイトで
+ * 同じページばかり 3 回見ることになり、繰り返しの信号が取れない。同じページの
+ * 別の記事も後ろに残す。1 本目がリンクだけの記事だったときに、そこで諦めずに
+ * 隣の記事で決められるのはこれがあるため。
+ *
+ * 別々のページが**先頭から distinct 件**になるので、繰り返しを数える側は
+ * 同じ判定をやり直さずに済む。
+ */
+function trialOrder(pages: ArticlePage[]): { ordered: ArticlePage[]; distinct: number } {
+  const seen = new Set<string>();
+  const first: ArticlePage[] = [];
+  const rest: ArticlePage[] = [];
+  for (const page of pages) {
+    if (seen.has(page.pageUrl)) rest.push(page);
+    else {
+      seen.add(page.pageUrl);
+      first.push(page);
+    }
+  }
+  return { ordered: [...first, ...rest], distinct: first.length };
 }
 
 /**
@@ -273,9 +354,12 @@ async function decideSelector(
  * 候補から消えてコメント欄が選ばれる。点数は同じ尺度（段落の量をリンク率で
  * 割り引いたもの）なので、そのまま比べられる。
  */
-async function candidatesFor(page: ArticlePage): Promise<Candidate[]> {
+async function candidatesFor(
+  page: ArticlePage,
+  whole: Map<string, Candidate[]>,
+): Promise<Candidate[]> {
   const fragment = fragmentOf(page.target.url);
-  if (fragment === null) return await scanCandidates(page.html);
+  if (fragment === null) return await wholePage(page, whole);
 
   const scoped = await scanCandidates(page.html, { fragment });
   // **絞った先に文章が無いことと、ページに本文が無いことは別物。** 前者で
@@ -283,8 +367,24 @@ async function candidatesFor(page: ArticlePage): Promise<Candidate[]> {
   // セレクタとして覚えてしまう。この記事では決めず、次のページに回す
   if (scoped.length === 0) return [];
 
-  const whole = await scanCandidates(page.html);
-  return scoped[0].score > (whole[0]?.score ?? 0) ? scoped : whole;
+  const unscoped = await wholePage(page, whole);
+  return scoped[0].score > (unscoped[0]?.score ?? 0) ? scoped : unscoped;
+}
+
+/**
+ * 絞らずに走査した候補。**同じページでは 1 回しか走査しない。**
+ *
+ * 日記型のサイトでは 3 回の試行が同じ HTML になることがあり、絞らない側は
+ * 記事によらず同じ結果になる。走査は 4MB までのページに対するフルパスなので、
+ * そのまま回すと同じ仕事を 3 回する
+ */
+async function wholePage(page: ArticlePage, memo: Map<string, Candidate[]>): Promise<Candidate[]> {
+  const cached = memo.get(page.pageUrl);
+  if (cached !== undefined) return cached;
+
+  const candidates = await scanCandidates(page.html);
+  memo.set(page.pageUrl, candidates);
+  return candidates;
 }
 
 interface Extraction {
@@ -293,6 +393,12 @@ interface Extraction {
   rejected: number[];
   /** セレクタがどこにも当たらなかった記事。判定し直すかどうかの材料になる */
   unmatched: number[];
+  /**
+   * どの記事も同じ本文になった。**セレクタが外枠を指している証拠**なので、
+   * 抜けたもの（bodies）は 1 件も採らず、unmatched と同じく判定し直す材料にする
+   * （src/crawler/repeat.ts）
+   */
+  collapsed: boolean;
 }
 
 /**
@@ -302,11 +408,18 @@ interface Extraction {
  * 注釈やパンくずだけを掴んで「本文が数十字になる」形で失敗する。それを書き込むと、
  * 全文取得を入れたせいで読めるものが減る。
  *
- * 「当たらなかった」と「当たったが採らなかった」を分けて返す。前者はサイトの
- * 作り替えを疑う材料で、後者は判定し直しても直らない（同じ記事が短いだけ）。
+ * **別々の記事から同じ本文が出てきたら、どちらも採らない。** それはセレクタが
+ * 本文ではなく外枠を指しているということで、長さでも点数でも表に出ない
+ * （結城浩の日記は全 15 件の全文が同じ著者プロフィールになっていた）。
+ *
+ * 「当たらなかった」「当たったが採らなかった」「別の記事と同じだった」を分けて
+ * 返す。1 つ目と 3 つ目はサイトの作り替え・判定の誤りを疑う材料で、2 つ目は
+ * 判定し直しても直らない（同じ記事が短いだけ）。
  */
 async function extractAll(pages: ArticlePage[], selector: string): Promise<Extraction> {
-  const extraction: Extraction = { bodies: [], rejected: [], unmatched: [] };
+  const rejected: number[] = [];
+  const unmatched: number[] = [];
+  const extracted: { id: number; url: string; fullBody: string }[] = [];
 
   for (const page of pages) {
     const fullBody = await sanitizeWithin(
@@ -315,15 +428,20 @@ async function extractAll(pages: ArticlePage[], selector: string): Promise<Extra
       page.target.url,
       await occurrenceFor(page, selector),
     );
-    if (fullBody === null) {
-      extraction.unmatched.push(page.target.id);
-    } else if (fullBody.length <= page.target.bodyLength) {
-      extraction.rejected.push(page.target.id);
-    } else {
-      extraction.bodies.push({ id: page.target.id, fullBody });
-    }
+    if (fullBody === null) unmatched.push(page.target.id);
+    else if (fullBody.length <= page.target.bodyLength) rejected.push(page.target.id);
+    else extracted.push({ id: page.target.id, url: page.target.url, fullBody });
   }
-  return extraction;
+
+  // 外枠を掴んでいると分かったなら、抜けたものは 1 件残らず外枠。1 件でも採ると、
+  // 防ぎたかった「外枠が本文として保存される」がその回に限って通る
+  const collapsed = bodiesCollapsed(extracted);
+  return {
+    bodies: collapsed ? [] : extracted.map(({ id, fullBody }) => ({ id, fullBody })),
+    rejected: collapsed ? [...rejected, ...extracted.map((body) => body.id)] : rejected,
+    unmatched,
+    collapsed,
+  };
 }
 
 /**

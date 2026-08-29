@@ -190,6 +190,23 @@ describe('scanCandidates', () => {
     }
   });
 
+  it('中の文章が同じなら同じ指紋、違えば違う指紋になる', async () => {
+    // フィードをまたいだ突き合わせ（src/crawler/repeat.ts）の材料。
+    // 文字数だけでは、同じ長さの別の文章を取り違える
+    const page = (text: string): string => `<html><body><article>${text}</article></body></html>`;
+    const a = 'ここは十分な長さのある文で、段落として数えられるべきもの。';
+    const b = 'ここは十分な長さのある文で、段落として数えるべきものです。';
+
+    const [first, second, again] = await Promise.all([
+      scanCandidates(page(a)),
+      scanCandidates(page(b)),
+      scanCandidates(page(a)),
+    ]);
+
+    expect(first[0].signature).toBe(again[0].signature);
+    expect(first[0].signature).not.toBe(second[0].signature);
+  });
+
   it('段落の無い文書では候補が出ない', async () => {
     const candidates = await scanCandidates(
       '<html><body><div class="nav"><a href="/a">A</a><a href="/b">B</a></div></body></html>',

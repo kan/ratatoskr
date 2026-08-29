@@ -10,7 +10,14 @@ import type { Candidate } from './extract';
  */
 
 function candidate(selector: string, score: number): Candidate {
-  return { selector, text: score * 2, link: 0, score, preview: `${selector} の書き出し` };
+  return {
+    selector,
+    text: score * 2,
+    link: 0,
+    score,
+    preview: `${selector} の書き出し`,
+    signature: `sig-${selector}`,
+  };
 }
 
 /** 指定した文字列を返すだけの Workers AI。渡されたプロンプトも控える */
