@@ -119,6 +119,65 @@ describe('crawl', () => {
     expect(newer.body).toContain('href="https://example.com/posts/1"');
   });
 
+  it('タイトルを配らないフィードでは、本文の書き出しを見出しにする', async () => {
+    // Bluesky のプロフィール RSS には item の title が無い。そのままだと
+    // 左ペインが「(無題)」で埋まり、開くまでどれがどれか分からない
+    const feedId = await seedFeed(env.DB, 'https://bsky.app/profile/x.example.com/rss');
+    const stub = stubFetch(() =>
+      xmlResponse(
+        `<?xml version="1.0" encoding="UTF-8"?>
+         <rss version="2.0"><channel><title>@x</title>
+           <link>https://bsky.app/profile/x.example.com</link>
+           <item>
+             <link>https://bsky.app/profile/x.example.com/post/3aaa</link>
+             <description>今日の体重: 133.4kg&#xA;連続52日目</description>
+             <guid isPermaLink="false">at://did:plc:example/app.bsky.feed.post/3aaa</guid>
+           </item>
+         </channel></rss>`,
+      ),
+    );
+
+    await crawl(env, { now: NOW, fetchImpl: stub.fetch, feedIds: [feedId] });
+
+    const [row] = await getEntryRows(env.DB, feedId);
+    expect(row.title).toBe('今日の体重: 133.4kg 連続52日目');
+  });
+
+  it('見出しは、埋め込みを解いた後の本文から作る', async () => {
+    // 引用だけの記事は、フィードには空の blockquote しか無い。解く前に作ると
+    // 見出しが空になり、本文には読める引用があるのに「(無題)」で並ぶ
+    const feedId = await seedFeed(env.DB, 'https://example.com/feed');
+    const stub = stubFetch((call) => {
+      if (call.url.startsWith('https://publish.x.com/')) {
+        return new Response(
+          JSON.stringify({
+            html:
+              '<blockquote class="twitter-tweet"><p lang="ja" dir="ltr">引用されたポストの本文</p>' +
+              '&mdash; 誰か (@somebody) <a href="https://x.com/somebody/status/1">August 13, 2026</a>' +
+              '</blockquote>',
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return xmlResponse(
+        `<?xml version="1.0" encoding="UTF-8"?>
+         <rss version="2.0"><channel><title>題の無いフィード</title>
+           <link>https://example.com/</link>
+           <item>
+             <link>https://example.com/a</link>
+             <description>&lt;blockquote class="twitter-tweet"&gt;&lt;a href="https://x.com/somebody/status/1"&gt;&lt;/a&gt;&lt;/blockquote&gt;</description>
+             <guid>https://example.com/a</guid>
+           </item>
+         </channel></rss>`,
+      );
+    });
+
+    await crawl(env, { now: NOW, fetchImpl: stub.fetch, feedIds: [feedId] });
+
+    const [row] = await getEntryRows(env.DB, feedId);
+    expect(row.title).toContain('引用されたポストの本文');
+  });
+
   it('同じ記事を二重に取り込まず、新着だけを追加する', async () => {
     const id = await seedFeed(env.DB, 'https://again.example.com/feed.xml');
     const first = stubFetch(() => xmlResponse(rss2Xml));

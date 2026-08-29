@@ -16,6 +16,7 @@ import { fetchFeed, type FetchBudget } from './fetch';
 import { fillFullText, looksSummaryOnly, type FullTextOptions } from './fulltext';
 import { parseFeed } from './parse';
 import { sanitizeHtml } from './sanitize';
+import { titleFromBody } from './title';
 import {
   backoffAfterFailure,
   intervalAfterNoUpdate,
@@ -191,6 +192,9 @@ async function crawlFeed(
   // ポストの引用を持つフィードは全て全文取得を入れていないものだった）。
   // mayHaveTweetEmbed の足切りで、そういうフィードは 1 回も取りに行かない
   await resolveEmbedsInNewEntries(db, target.id, rows, options);
+  // **本文が確定してから見出しを作る。** 埋め込みを解いた後の本文を見るので、
+  // 引用だけの記事（フィードには空の blockquote しか無い）でも見出しが付く
+  await fillMissingTitles(db, target.id, rows);
   const inserted = await insertEntries(db, rows, now);
 
   const fetchInterval =
@@ -240,6 +244,33 @@ async function resolveEmbedsInNewEntries(
   for (const row of candidates) {
     if (known.has(row.guidHash)) continue;
     row.body = await resolveTweetEmbeds(row.body, options);
+  }
+}
+
+/**
+ * タイトルを配らないフィードで、本文の書き出しを見出しに補う（src/crawler/title.ts）。
+ *
+ * **まだ取り込んでいない記事だけを対象にする。** フィードは更新のたびに全件を
+ * 配り直すので、既知の記事まで対象にすると毎クロール 100 件ぶんの走査が無駄になる
+ * （取り込みは `INSERT OR IGNORE` なので、既知の行の題はどのみち書き換わらない）。
+ * 埋め込みの解決と同じ考え方。
+ *
+ * `guidHash` は既に `toNewEntry` で元の item から作ってあるので、ここで題を
+ * 補っても記事の同一性は動かない（導出した値を識別に混ぜると、フィードが本文を
+ * 書き直しただけで別の記事として入り直す）。
+ */
+async function fillMissingTitles(db: D1Database, feedId: number, rows: NewEntry[]): Promise<void> {
+  const candidates = rows.filter((row) => row.title === '');
+  if (candidates.length === 0) return;
+
+  const known = await selectKnownGuidHashes(
+    db,
+    feedId,
+    candidates.map((row) => row.guidHash),
+  );
+  for (const row of candidates) {
+    if (known.has(row.guidHash)) continue;
+    row.title = await titleFromBody(row.body);
   }
 }
 
