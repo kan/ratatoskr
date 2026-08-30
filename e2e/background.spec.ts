@@ -169,6 +169,33 @@ test('読み終えた画面のリロードから、届いた新着へそのま�
   await expect(page.getByTestId('entry-title')).toHaveText('押して届いた記事');
 });
 
+test('読み終えたら、最後に読んでいたフィードの一覧を左ペインに残さない', async ({ page }) => {
+  // 読み終えてもカーソルは最後のフィードに残る（k で読み返すために要る）。
+  // 左ペインまでそれを「いま読んでいる」と読むと、読むものが無いのに一覧が開いたまま
+  // 居座り、読み込み直すか別のフィードを押すまで直らない
+  await mockApi(page);
+  await page.goto('/');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+  await expect(page.getByTestId('entry-list-1')).toBeVisible();
+
+  for (let i = 0; i < 5; i++) await page.keyboard.press('S');
+  await expect(page.getByTestId('finished')).toBeVisible();
+
+  // 最後に読んでいたのは夕刊。その一覧も、朝刊の一覧も畳まれている
+  await expect(page.getByTestId('entry-list-2')).toBeHidden();
+  await expect(page.getByTestId('entry-list-1')).toBeHidden();
+  // ヘッダも同じ。記事を出していないのに名前と位置が残ると、読み終えた画面が
+  // 「まだ夕刊の 1/1 を読んでいる」と言っていることになる
+  await expect(page.getByTestId('position')).not.toContainText('夕刊');
+  await expect(page.getByTestId('position')).not.toContainText('(1/1)');
+
+  // k で読み返しに戻れば、その先の一覧はまた開く（カーソル自体は消していない）。
+  // 夕刊は 1 本しか無いので、戻る先は前のフィードの末尾になる（docs/UX.md の j / k）
+  await page.keyboard.press('k');
+  await expect(page.getByTestId('finished')).toBeHidden();
+  await expect(page.getByTestId('entry-list-1')).toBeVisible();
+});
+
 test('読み終えた画面で r を押しても、届いた新着から読み始められる', async ({ page }) => {
   // 記事が増える経路は差分同期だけではない。r（フィード単位の取り直し）でも
   // 座り直せないと、「1 件の新着を取得した」と出たまま画面は動かない

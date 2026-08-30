@@ -127,11 +127,14 @@ watch(
   { immediate: true },
 );
 
-const feedTitle = computed(() => feeds.currentFeed?.title ?? '');
-
-/** ヘッダに出す現在位置。読み始める前は出すものが無い */
+/**
+ * ヘッダに出すフィード名と現在位置。**読み始める前と読み終えた後は出すものが無い。**
+ * 記事を出していないのに名前と位置が残ると、読み終えた画面が「まだ夕刊の 1/1 を
+ * 読んでいる」と言っていることになる（左ペインの印を消すのと同じ理由）
+ */
+const feedTitle = computed(() => feeds.readingFeed?.title ?? '');
 const position = computed(() =>
-  feeds.started ? `(${feeds.entryIndex + 1}/${feeds.entryCount})` : '',
+  feeds.readingFeed === null ? '' : `(${feeds.entryIndex + 1}/${feeds.entryCount})`,
 );
 
 /**
@@ -497,8 +500,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
       v-if="!compact || drawerOpen"
       :class="compact ? 'fixed inset-0 z-20 bg-white dark:bg-neutral-950' : ''"
       :feeds="feeds.visibleFeeds"
-      :current-feed-id="feeds.currentFeed?.id ?? null"
-      :current-entry-id="feeds.currentEntry?.id ?? null"
+      :current-feed-id="feeds.readingFeed?.id ?? null"
+      :current-entry-id="feeds.readingFeed === null ? null : (feeds.currentEntry?.id ?? null)"
       :entries-of="feeds.entriesFor"
       :pinned-urls="pins.urls"
       :compact="compact"

@@ -84,6 +84,17 @@ export const useFeedsStore = defineStore('feeds', () => {
   const started = computed(() => feedIndex.value >= 0);
 
   /**
+   * いま読んでいるフィード。**読み終えていれば null。**
+   *
+   * `currentFeed` はカーソルの居場所で、読み終えても最後のフィードに残る
+   * （`k` で読み返し、`a` で戻り、`r` で取り直す先がそこなので、消してはいけない）。
+   * 一方で左ペインの「いまここを読んでいる」印は、読み終えた時点で消えなければ
+   * ならない。**残すと最後のフィードの一覧が開いたままになり**、読むものが無いのに
+   * まだそこに居るように見える（読み込み直すか、別のフィードを押すまで直らない）
+   */
+  const readingFeed = computed<Feed | null>(() => (finished.value ? null : currentFeed.value));
+
+  /**
    * 読む対象になるフィードか。s / a と先読みと着地先の探索が、全てこの判定を通る。
    *
    * **サーバの未読数は、まだ届いていない u の例外を知らない**（送信は outbox 経由で
@@ -793,6 +804,7 @@ export const useFeedsStore = defineStore('feeds', () => {
     readRevision,
     settingsRevision,
     currentFeed,
+    readingFeed,
     currentEntry,
     entryCount,
     started,
