@@ -288,6 +288,43 @@ describe('フィード間の移動', () => {
     expect(feeds.finished).toBe(true);
   });
 
+  it('読了後に新着が届いたら、そこへ座り直す', () => {
+    // 読み終えてもカーソルは最後のフィードに残る（started は真のまま）ので、
+    // 座り直す道が無いと、未読数だけ増えて「全て読み終えた」から動かなくなる
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    entriesStore.ingest(entries(1, [1, 2]));
+    feeds.setFeeds([feed(1, { unreadCount: 2 })]);
+    feeds.enterFirstUnread();
+    feeds.nextEntry();
+    feeds.nextEntry();
+    expect(feeds.finished).toBe(true);
+
+    entriesStore.ingest(entries(1, [3]));
+    feeds.setFeeds([feed(1, { readSeq: 2, unreadCount: 1 })]);
+    feeds.absorbNewEntries();
+
+    expect(feeds.finished).toBe(false);
+    expect(feeds.currentEntry?.id).toBe(3);
+  });
+
+  it('読了後に空振りの同期が来ても、読んでいた位置は動かさない', () => {
+    // 座り直しを無条件にすると、5 分ごとの同期のたびに a で戻る位置がずれる
+    const feeds = useFeedsStore();
+    useEntriesStore().ingest([...entries(1, [1]), ...entries(2, [2])]);
+    feeds.setFeeds([feed(1, { unreadCount: 1 }), feed(2, { unreadCount: 1 })]);
+    feeds.enterFirstUnread();
+    feeds.nextEntry();
+    feeds.nextEntry();
+    expect(feeds.finished).toBe(true);
+    expect(feeds.currentFeed?.id).toBe(2);
+
+    feeds.absorbNewEntries();
+
+    expect(feeds.finished).toBe(true);
+    expect(feeds.currentFeed?.id).toBe(2);
+  });
+
   it('読了後に前の記事へ戻ると読了表示を解除する', () => {
     const feeds = useFeedsStore();
     useEntriesStore().ingest(entries(1, [1, 2]));

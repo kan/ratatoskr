@@ -1,5 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
-import { ENTRIES, entry, FEEDS, mockApi, syncResponse } from './fixtures';
+import {
+  type ApiRecorder,
+  ENTRIES,
+  entry,
+  feedsWith,
+  FEEDS,
+  mockApi,
+  syncResponse,
+} from './fixtures';
 
 /**
  * バックグラウンドでの自動更新と、タブのアイコンでの知らせ（issue #7）。
@@ -33,6 +41,19 @@ async function expireSession(page: Page, pattern = '**/api/sync*'): Promise<void
       headers: { location: 'https://kanf.cloudflareaccess.com/cdn-cgi/access/login/example' },
     }),
   );
+}
+
+/**
+ * 全て読み終えた状態にして開く。押す回数はフィードの本数に紐付くので 1 箇所に置く
+ * （朝刊 2 本 + 夕刊 1 本 + 未読 0 のフィード）
+ */
+async function readEverything(page: Page): Promise<ApiRecorder> {
+  const recorder = await mockApi(page);
+  await page.goto('/');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+  for (let i = 0; i < 5; i++) await page.keyboard.press('S');
+  await expect(page.getByTestId('finished')).toBeVisible();
+  return recorder;
 }
 
 const iconHrefs = (page: Page) =>
@@ -78,15 +99,14 @@ test('同期で届いた新着が、読んでいる場所を動かさずに増�
 test('全て読み終えた後に届いた新着へ、キーで辿り着ける', async ({ page }) => {
   // 読み切った画面ではカーソルがどのフィードにも居ない。同期で新着が届いたときに
   // 取り直さないと、アイコンは未読ありに変わるのに j も s も無反応になる
-  const recorder = await mockApi(page);
-  await page.goto('/');
-  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
-  for (let i = 0; i < 5; i++) await page.keyboard.press('S');
-  await expect(page.getByTestId('finished')).toBeVisible();
+  const recorder = await readEverything(page);
 
+  // **全フィードを返す。** 本番の GET /api/sync は一覧を全件返す（docs/API.md）。
+  // 1 本だけ返すと setFeeds が現在のフィードを見失い、「購読が消えたときの逃がし」
+  // 経路で座り直してしまう。読み終えた状態から座り直せるかを試せなくなる
   recorder.nextSync.push(
     syncResponse({
-      feeds: [{ ...FEEDS[0], readSeq: 0, unreadCount: 1 }],
+      feeds: feedsWith(1, { readSeq: 0, unreadCount: 1 }),
       newEntries: [entry(31, 1, '読み終えた後に届いた記事', '<p>新着</p>')],
       maxEntryId: 31,
     }),
@@ -97,6 +117,27 @@ test('全て読み終えた後に届いた新着へ、キーで辿り着ける',
 
   // 読み終えた画面から、届いた新着へ移っている
   await expect(page.getByTestId('entry-title')).toHaveText('読み終えた後に届いた記事');
+});
+
+test('読み終えた画面で r を押しても、届いた新着から読み始められる', async ({ page }) => {
+  // 記事が増える経路は差分同期だけではない。r（フィード単位の取り直し）でも
+  // 座り直せないと、「1 件の新着を取得した」と出たまま画面は動かない
+  await readEverything(page);
+
+  // 読み終えた時点のカーソルは夕刊（最後に読んだフィード）に残っている
+  await page.route('**/api/feeds/2/fetch', async (route) => {
+    await route.fulfill({
+      json: {
+        feed: { ...FEEDS[1], unreadCount: 1 },
+        entries: [entry(31, 2, 'r で届いた記事', '<p>新着</p>')],
+      },
+    });
+  });
+
+  await page.keyboard.press('r');
+
+  await expect(page.getByTestId('notice')).toHaveText('1 件の新着を取得した');
+  await expect(page.getByTestId('entry-title')).toHaveText('r で届いた記事');
 });
 
 test('同期でフィードの並びが組み替わらない', async ({ page }) => {

@@ -482,6 +482,26 @@ export const useFeedsStore = defineStore('feeds', () => {
   }
 
   /**
+   * 読み終えた後に未読が届いていたら、そこへ座り直す。**座り直したら真を返す。**
+   *
+   * **読み終えてもカーソルは最後のフィードに残る**（nextFeed は finished を立てるだけ）。
+   * つまり記事が増えたときの入口はいつも absorbNewEntries で、あちらは「いま読んでいる
+   * フィード」にしか足さない。座り直す道が無いと、未読数とタブのアイコンだけが増えて
+   * 画面は「全て読み終えた」から動かず、j も s も前方向にしか探さないので進めなくなる。
+   *
+   * **読めるものが無ければ動かさない。** 空振りのたびに座り直すと、読み終えた後に
+   * a で戻る位置（最後に読んでいたフィード）が新着を受け取るたびにずれる
+   */
+  function resumeIfUnread(): boolean {
+    if (!finished.value) return false;
+    const index = findFeed(0, 1, isReadable);
+    if (index === -1) return false;
+    // enterFeed が finished を下ろす。着地の規則は s / a と同じ経路に通す
+    enterFeed(index, 'first');
+    return true;
+  }
+
+  /**
    * 背景取得で後から届いた記事を、いま読んでいるフィードのリストに足す。
    *
    * bootstrap が同梱するのは 1 フィードあたり 50 件までなので、これをしないと
@@ -489,6 +509,11 @@ export const useFeedsStore = defineStore('feeds', () => {
    * 不変条件 1 の要（docs/DESIGN.md §4）。
    */
   function absorbNewEntries(): void {
+    // **読み終えた後に届いた分は、足す先ではなく座り直す先の話になる。** ここが
+    // 記事の増える唯一の入口（差分同期・r での取り直し・起動時の残り取得）なので、
+    // 規則はここに置く。呼ぶ側ごとに書くと、書き忘れた経路だけが黙って止まったままになる
+    if (resumeIfUnread()) return;
+
     const feed = currentFeed.value;
     if (feed === null) return;
 

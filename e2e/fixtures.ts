@@ -125,6 +125,17 @@ export function syncResponse(over: Partial<SyncResponse> = {}): SyncResponse {
   };
 }
 
+/**
+ * サーバが返す一覧（全件）の中から 1 本だけ差し替えたもの。
+ *
+ * **bootstrap も差分同期も feeds を全件返す**（docs/API.md）。1 本だけ返す形で
+ * モックすると、クライアントは「他の購読が消えた」と読んで別の経路に落ちるので、
+ * 検証したかったことを素通りしてしまう
+ */
+export function feedsWith(id: number, patch: Partial<Feed>): Feed[] {
+  return FEEDS.map((feed) => (feed.id === id ? { ...feed, ...patch } : feed));
+}
+
 export interface MockOptions {
   /** 初回起動時のヘルプを出したままにするか */
   showHelp?: boolean;
