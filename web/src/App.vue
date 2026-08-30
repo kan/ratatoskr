@@ -285,26 +285,72 @@ function pageUpToPrevEntry(): void {
   void nextTick().then(() => reader.value?.scrollToBottom());
 }
 
+/** リロードが走っている間。押しっぱなしで往復を積み上げさせない */
+const reloading = ref(false);
+
+/**
+ * リロードを押せるか。
+ *
+ * **起動の取得が走っている間は押させない。** その間は sync が叩かずに戻ってくるので
+ * （stores/session.ts）、押せてしまうと「叩けなかった」を全てセッション切れとして
+ * 知らせることになる。起動中は同じものを待っているだけなので、押す意味も無い
+ */
+const canReload = computed(() => !reloading.value && session.phase !== 'booting');
+
+/**
+ * 新着を確かめる（ヘッダと読み終えた画面のボタン）。
+ *
+ * **叩くのはサーバとの差分同期だけで、相手のサイトへは取りに行かない。**
+ * クロールは cron が 5 分ごとに回している（docs/DESIGN.md）。押すたびに全購読を
+ * 取りに行かせると、押してから数十秒動かない画面を見せることになる。
+ * 「いま出ていないだけで、もう手元に来ていないか」を確かめるための操作。
+ */
+function reload(event: Event): void {
+  releaseKeyFocus(event);
+  // ボタンは disabled になるが、その描画が届く前に 2 発目が来ることはある
+  if (!canReload.value) return;
+
+  reloading.value = true;
+  void notifyFetched(session.sync()).finally(() => {
+    reloading.value = false;
+  });
+}
+
+/**
+ * 取得の結果を知らせる。リロード（差分同期）と r（フィード単位の取り直し）で共通。
+ *
+ * どちらも押しても画面が変わらないことのある操作で、出す文言も同じなので 1 箇所に置く。
+ * 片方だけ直すと、同じことをする 2 つのボタンが違う言い方をするようになる。
+ *
+ * **失敗は握りつぶさない**（CLAUDE.md）。
+ */
+function notifyFetched(fetching: Promise<number | null>): Promise<void> {
+  notify('取得中…');
+  return fetching
+    .then((added) => {
+      // 叩けなかったときは黙って「新着は無かった」と言わない。押せるのは起動が
+      // 済んだ後だけなので（canReload）、ここに来る null はセッション切れだけ。
+      // 帯が出ていて、そちらにしか手立てが無い（stores/session.ts の sync）
+      if (added === null) notify('ログインし直すまで新しい記事は届かない');
+      else notify(added === 0 ? '新着は無かった' : `${added} 件の新着を取得した`);
+    })
+    .catch((err: unknown) => {
+      notify(`更新に失敗した: ${err instanceof Error ? err.message : String(err)}`);
+    });
+}
+
 /**
  * 手動更新（r）。ここだけはサーバの応答を待つが、待つのは取得の結果であって
  * 記事送りではない。押した直後の操作は妨げない（await を待たずに戻る）。
  *
- * 押しても画面が変わらないことがある操作なので、結果は必ず出す。
- * 失敗を黙って捨てない（CLAUDE.md）。
+ * こちらは**相手のサイトへ取りに行く**。手元に来ている分を確かめるだけの
+ * リロード（reload）とは別物で、対象もいま読んでいるフィード 1 本に限る。
  */
 function refreshCurrentFeed(): void {
   const id = feeds.currentFeed?.id;
   if (id === undefined) return;
 
-  notify('取得中…');
-  session
-    .refresh(id)
-    .then((added) => {
-      notify(added === 0 ? '新着は無かった' : `${added} 件の新着を取得した`);
-    })
-    .catch((err: unknown) => {
-      notify(`更新に失敗した: ${err instanceof Error ? err.message : String(err)}`);
-    });
+  void notifyFetched(session.refresh(id));
 }
 
 /**
@@ -541,6 +587,22 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
           {{ position }} {{ feedTitle }}
         </span>
         <!--
+          新着を確かめる。**テーマの左に置く。** どちらも読む操作ではないので、
+          右上に並べて読む場所から離す。**r（手動更新）とは別物で、こちらは
+          サーバとの差分同期だけを叩く**（相手のサイトへ取りに行くのはフィード単位の r）
+        -->
+        <button
+          type="button"
+          class="shrink-0 self-stretch px-3 text-base leading-none text-neutral-500 hover:text-neutral-900 disabled:text-neutral-300 dark:hover:text-neutral-100 dark:disabled:text-neutral-700"
+          data-testid="reload"
+          :disabled="!canReload"
+          title="新着を確かめる"
+          aria-label="新着を確かめる"
+          @click="reload"
+        >
+          ⟳
+        </button>
+        <!--
           テーマの切り替え。**画面の右上に置く。** 読む操作ではないので目立たせず、
           しかし探すときに迷わない場所に固定する（購読管理と同じ考え方）。
           出すのは**切り替えた先**の印で、いまの状態ではない（押して何になるかが要る）
@@ -567,7 +629,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
         class="flex h-full flex-col items-center justify-center gap-1 px-6 text-center"
         data-testid="finished"
       >
-        <p class="text-sm text-neutral-500">
+        <p class="text-sm text-neutral-500" data-testid="finished-label">
           {{
             feeds.folder === null
               ? '全て読み終えた'
@@ -577,6 +639,21 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
         <p v-if="feeds.unreadOutsideScope > 0" class="text-xs text-neutral-500">
           他のフォルダに未読が {{ feeds.unreadOutsideScope }} 件ある
         </p>
+        <!--
+          **読み終えた画面にも入口を置く。** ここは次にすることが「増えるのを待つ」しか
+          無い画面で、ヘッダの小さな印より、いま見ている場所に押すものがある方が早い。
+          タブに戻ってきたときは自分で確かめるので（stores/session.ts）、これは
+          戻らずにその場でもう一度確かめたいときのもの
+        -->
+        <button
+          type="button"
+          class="mt-2 rounded border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600 hover:text-neutral-900 disabled:text-neutral-400 dark:border-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-100 dark:disabled:text-neutral-600"
+          data-testid="finished-reload"
+          :disabled="!canReload"
+          @click="reload"
+        >
+          新着を確かめる
+        </button>
       </div>
       <div
         v-else-if="!feeds.started"

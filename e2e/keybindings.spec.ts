@@ -53,7 +53,9 @@ test('未読が無いフィードは s で飛ばす', async ({ page }) => {
   // ★1「既読済み」は一覧には出るが、移動先にはならない
   await expect(page.getByTestId('feed-3')).toBeVisible();
   await page.keyboard.press('s');
-  await expect(page.getByTestId('finished')).toHaveText('全て読み終えた');
+  // 文言そのものを見る（絞り込んでいれば「「開発」は全て読み終えた」になる）。
+  // 入れ物の方はリロードのボタンも抱えているので、そちらでは突き合わせられない
+  await expect(page.getByTestId('finished-label')).toHaveText('全て読み終えた');
 });
 
 test('Space は下端まではスクロールし、下端で次の記事へ進む', async ({ page }) => {

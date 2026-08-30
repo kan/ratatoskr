@@ -119,6 +119,56 @@ test('全て読み終えた後に届いた新着へ、キーで辿り着ける',
   await expect(page.getByTestId('entry-title')).toHaveText('読み終えた後に届いた記事');
 });
 
+test('ヘッダのリロードで、いま届いている分を取りに行く', async ({ page }) => {
+  // 定期ポーリングは 5 分間隔で、タブに戻ったときも間引きが効く。押せば待たずに済む
+  const recorder = await mockApi(page);
+  await page.goto('/');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+
+  recorder.nextSync.push(
+    syncResponse({
+      feeds: [{ ...FEEDS[0], unreadCount: 3 }],
+      newEntries: [entry(31, 1, 'リロードで届いた新着', '<p>新着</p>')],
+      maxEntryId: 31,
+    }),
+  );
+
+  await page.getByTestId('reload').click();
+
+  await expect.poll(() => recorder.syncCalls.length).toBe(1);
+  await expect(page.getByTestId('notice')).toHaveText('1 件の新着を取得した');
+  // 定期同期と同じ経路なので、読んでいる場所は動かない
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+  await expect(page.getByText('リロードで届いた新着')).toBeVisible();
+});
+
+test('新着が無ければ、押した結果としてそう出す', async ({ page }) => {
+  // 画面が何も変わらない操作なので、黙って終わると押せたのかどうかが分からない
+  await mockApi(page);
+  await page.goto('/');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+
+  await page.getByTestId('reload').click();
+
+  await expect(page.getByTestId('notice')).toHaveText('新着は無かった');
+});
+
+test('読み終えた画面のリロードから、届いた新着へそのまま入る', async ({ page }) => {
+  const recorder = await readEverything(page);
+
+  recorder.nextSync.push(
+    syncResponse({
+      feeds: feedsWith(1, { readSeq: 0, unreadCount: 1 }),
+      newEntries: [entry(31, 1, '押して届いた記事', '<p>新着</p>')],
+      maxEntryId: 31,
+    }),
+  );
+
+  await page.getByTestId('finished-reload').click();
+
+  await expect(page.getByTestId('entry-title')).toHaveText('押して届いた記事');
+});
+
 test('読み終えた画面で r を押しても、届いた新着から読み始められる', async ({ page }) => {
   // 記事が増える経路は差分同期だけではない。r（フィード単位の取り直し）でも
   // 座り直せないと、「1 件の新着を取得した」と出たまま画面は動かない
@@ -138,6 +188,24 @@ test('読み終えた画面で r を押しても、届いた新着から読み�
 
   await expect(page.getByTestId('notice')).toHaveText('1 件の新着を取得した');
   await expect(page.getByTestId('entry-title')).toHaveText('r で届いた記事');
+});
+
+test('読み終えていると、タブに戻ったときの間引きを詰める', async ({ page }) => {
+  const recorder = await readEverything(page);
+
+  await returnToTab(page);
+  await expect.poll(() => recorder.syncCalls.length).toBe(1);
+
+  // 続けて行き来しただけでは叩かない。往復が積み上がるのを避ける
+  await returnToTab(page);
+  await page.waitForTimeout(500);
+  expect(recorder.syncCalls).toHaveLength(1);
+
+  // 少し置けば叩く。読んでいる最中と同じ 30 秒を当てると、戻ってきても
+  // 「全て読み終えた」が出たままになる
+  await page.waitForTimeout(3000);
+  await returnToTab(page);
+  await expect.poll(() => recorder.syncCalls.length).toBe(2);
 });
 
 test('同期でフィードの並びが組み替わらない', async ({ page }) => {

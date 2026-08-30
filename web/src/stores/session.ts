@@ -244,8 +244,21 @@ export const useSessionStore = defineStore('session', () => {
    */
   const SYNC_MIN_GAP_MS = 30 * 1000;
 
-  /** 同期が走っている間は次を始めない。遅い回線で要求が積み上がらないように */
-  let syncing = false;
+  /**
+   * 読み終えた状態でタブに戻ったときは、この間隔まで詰めて叩く。
+   *
+   * 読むものが無いから離れたのであって、戻ってくる理由は「増えたか」を見ること以外に無い。
+   * 30 秒の方を当てると、少し覗いて戻った程度では確かめずに「全て読み終えた」が出たままになる。
+   * ゼロにしないのは、タブを行き来しただけで往復が積み上がるのを避けるため
+   */
+  const SYNC_MIN_GAP_FINISHED_MS = 3 * 1000;
+
+  /**
+   * 走っている同期。**重なった要求はこの 1 本に相乗りさせる。**
+   * 別に投げると同じ差分を 2 回当てることになり、遅い回線では要求が積み上がる。
+   * 手動更新（リロードボタン）が結果を待てるよう、真偽値ではなく約束そのものを持つ
+   */
+  let syncing: Promise<number | null> | null = null;
   let lastSyncAt = 0;
   let syncTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -319,29 +332,45 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
-   * サーバとの差分同期。**バックグラウンドでも回す**ので、失敗しても画面には出さない。
+   * サーバとの差分同期。定期ポーリング・タブ復帰・手動のリロードで共通の入口。
    *
    * 読んでいる最中に走るので、カーソルは動かさない。新着はいま見ているフィードの
    * 末尾に足されるだけで（absorbNewEntries）、読んでいる位置は変わらない。
+   * 読み終えていた場合だけは、届いた新着に座り直す（applyServerState）。
+   *
+   * @returns 届いた新着の件数。**叩かなかったときは null。** 押した側が
+   *   「新着は無かった」と「そもそも届かない」を区別できないと嘘の知らせになる
    */
-  async function sync(): Promise<void> {
+  function sync(): Promise<number | null> {
     // **signedOut は timer と別に見る。** 起動の取得で踏んだ場合、止める対象の
     // タイマはまだ張られていない（startSync は boot の末尾）
-    if (syncing || signedOut.value || phase.value === 'booting') return;
-    syncing = true;
-    try {
-      const body = await getSync({ entryCursor: entryCursor.value, since: syncedAt.value });
-      await applySync(body);
-    } catch (err) {
-      // 次の回で取り直せる。読んでいる最中に知らせても手立てが無い
-      // （セッション切れだけは例外で、onSessionExpired が別に受けている）
-      console.warn('差分同期に失敗', err);
-    } finally {
-      syncing = false;
+    if (signedOut.value || phase.value === 'booting') return Promise.resolve(null);
+    if (syncing !== null) return syncing;
+
+    const running = runSync().finally(() => {
+      syncing = null;
       // **失敗しても記録する。** 成功時だけにすると、繋がらない間はタブを行き来する
       // たびに毎回叩きに行くことになる（下の間引きが効かない）
       lastSyncAt = Date.now();
-    }
+    });
+    syncing = running;
+    return running;
+  }
+
+  /** @returns 届いた新着の件数 */
+  async function runSync(): Promise<number> {
+    const body = await getSync({ entryCursor: entryCursor.value, since: syncedAt.value });
+    await applySync(body);
+    return body.newEntries.length;
+  }
+
+  /**
+   * 自分で始める同期（定期ポーリングとタブ復帰）。**失敗は画面に出さない。**
+   * 次の回で取り直せるし、読んでいる最中に知らせても手立てが無い
+   * （セッション切れだけは例外で、onSessionExpired が別に受けている）
+   */
+  function syncInBackground(): void {
+    sync().catch((err: unknown) => console.warn('差分同期に失敗', err));
   }
 
   function applySync(body: SyncResponse): Promise<void> {
@@ -356,12 +385,15 @@ export const useSessionStore = defineStore('session', () => {
    * 戻ってきたときにも 1 回叩いて、隠れている間に間引かれた分を取り戻す。
    */
   function startSync(): void {
-    syncTimer = setInterval(() => void sync(), SYNC_INTERVAL_MS);
+    syncTimer = setInterval(syncInBackground, SYNC_INTERVAL_MS);
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState !== 'visible') return;
       if (signedOut.value) return;
-      if (Date.now() - lastSyncAt < SYNC_MIN_GAP_MS) return;
-      void sync();
+      // 読み終えていれば間隔を詰める。読むものが残っている間は、
+      // 戻ってきた目的が新着とは限らないので従来どおり間引く
+      const gap = feedsStore.finished ? SYNC_MIN_GAP_FINISHED_MS : SYNC_MIN_GAP_MS;
+      if (Date.now() - lastSyncAt < gap) return;
+      syncInBackground();
     });
   }
 
@@ -690,5 +722,6 @@ export const useSessionStore = defineStore('session', () => {
     refresh,
     reloadFeedEntries,
     restoreFromOpml,
+    sync,
   };
 });
