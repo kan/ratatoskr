@@ -314,7 +314,17 @@ function reload(event: Event): void {
   if (!canReload.value) return;
 
   reloading.value = true;
-  void notifyFetched(session.sync()).finally(() => {
+  // 読み終えた画面へ移すのは**新着が 1 件も無かったときだけ**（理由は
+  // stores/feeds.ts の finishIfNothingUnread）。届いた新着には座り直すが
+  // （applyServerState）、**座った記事はその場で既読になる**ので、届いた後に
+  // 未読の有無を見ると開いたばかりの記事を読み終えた扱いにしてしまう。
+  // null（セッション切れ）は、無いことを確かめていないので同じく動かさない
+  void notifyFetched(
+    session.sync().then((added) => {
+      if (added === 0) feeds.finishIfNothingUnread();
+      return added;
+    }),
+  ).finally(() => {
     reloading.value = false;
   });
 }

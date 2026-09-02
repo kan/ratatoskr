@@ -151,6 +151,29 @@ test('新着が無ければ、押した結果としてそう出す', async ({ pa
   await page.getByTestId('reload').click();
 
   await expect(page.getByTestId('notice')).toHaveText('新着は無かった');
+  // 未読が残っているので、読んでいる場所も一覧もそのまま
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+  await expect(page.getByTestId('finished')).toBeHidden();
+});
+
+test('最後の記事で止まっていても、新着が無ければ読み終えた画面へ移る', async ({ page }) => {
+  // 読み終えた扱いになるのは「読み終えた先へ送ろうとしたとき」なので、最後の記事を
+  // 出したまま手を止めると、未読 0 でも一覧と本文が残ってまだ読む途中に見える。
+  // リロードで新着が無いと分かった時点は、読むものが無いと確定した瞬間でもある
+  await mockApi(page);
+  await page.goto('/');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+
+  // 最後のフィードの最後の記事まで送る（この先へは送らない）
+  for (let i = 0; i < 2; i++) await page.keyboard.press('j');
+  await expect(page.getByTestId('entry-title')).toHaveText('夕刊の 1 本目');
+  await expect(page.getByTestId('entry-list-2')).toBeVisible();
+
+  await page.getByTestId('reload').click();
+
+  await expect(page.getByTestId('notice')).toHaveText('新着は無かった');
+  await expect(page.getByTestId('finished')).toBeVisible();
+  await expect(page.getByTestId('entry-list-2')).toBeHidden();
 });
 
 test('読み終えた画面のリロードから、届いた新着へそのまま入る', async ({ page }) => {

@@ -339,6 +339,45 @@ describe('フィード間の移動', () => {
     expect(feeds.currentEntry?.id).toBe(1);
   });
 
+  it('最後の記事で止まっていても、新着が無ければ読み終えた画面へ移る', () => {
+    // 最後の記事を出したまま手を止めると、未読 0 でも finished は立たない
+    // （立てるのは「送ろうとしたとき」）。リロードで新着が無いと確定した時点で移す
+    const feeds = useFeedsStore();
+    useEntriesStore().ingest(entries(1, [1, 2]));
+    feeds.setFeeds([feed(1, { unreadCount: 2 })]);
+    feeds.enterFirstUnread();
+    feeds.nextEntry();
+    expect(feeds.finished).toBe(false);
+    expect(feeds.feeds[0].unreadCount).toBe(0);
+
+    expect(feeds.finishIfNothingUnread()).toBe(true);
+    expect(feeds.finished).toBe(true);
+    // 左ペインの「いまここを読んでいる」印が消える（一覧も閉じる）
+    expect(feeds.readingFeed).toBeNull();
+    // カーソルは最後に読んでいたフィードに残す（k で読み返し、a で戻る先）
+    expect(feeds.currentFeed?.id).toBe(1);
+  });
+
+  it('未読が残っていれば、読み終えた画面へは移らない', () => {
+    const feeds = useFeedsStore();
+    useEntriesStore().ingest([...entries(1, [1]), ...entries(2, [2])]);
+    feeds.setFeeds([feed(1, { unreadCount: 1 }), feed(2, { unreadCount: 1 })]);
+    feeds.enterFirstUnread();
+
+    expect(feeds.finishIfNothingUnread()).toBe(false);
+    expect(feeds.finished).toBe(false);
+    expect(feeds.currentFeed?.id).toBe(1);
+  });
+
+  it('読み始めていなければ、読み終えた画面へは移らない', () => {
+    // 購読ゼロ。出ている画面がその説明をしていて、読み終えたと言える状態でもない
+    const feeds = useFeedsStore();
+    feeds.setFeeds([]);
+
+    expect(feeds.finishIfNothingUnread()).toBe(false);
+    expect(feeds.finished).toBe(false);
+  });
+
   it('未読数を手元の記事から数え直せる', () => {
     const feeds = useFeedsStore();
     useEntriesStore().ingest(entries(1, [1, 2, 3]));

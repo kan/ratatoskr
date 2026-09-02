@@ -513,6 +513,30 @@ export const useFeedsStore = defineStore('feeds', () => {
   }
 
   /**
+   * 読むものが残っていなければ「全て読み終えた」に移る。**移ったら真を返す。**
+   *
+   * **最後の記事を読んだだけでは読み終えたことにならない。** finished を立てるのは
+   * nextFeed、つまり読み終えた先へ**送ろうとしたとき**なので、最後の記事を出したまま
+   * 手を止めれば、未読が 0 でも一覧と本文はそのまま残る（まだ読む途中に見える）。
+   * 手動のリロードで新着が無かったと分かった時点は、その「送ろうとした」と同じ意味を
+   * 持つ——読むものはもう無いと確定した瞬間なので、ここで読み終えた画面へ移す。
+   *
+   * **自分で始める同期（定期ポーリング・タブ復帰）からは呼ばない。** 読んでいる最中に
+   * 画面が読み終えた形に変わると、まだ読んでいる記事が消える。押した人が居るときだけ。
+   *
+   * **カーソルは動かさない**（resumeIfUnread と同じ理由。`k` で読み返し、`a` で戻り、
+   * `r` で取り直す先は、最後に読んでいたフィードのままにする）。
+   */
+  function finishIfNothingUnread(): boolean {
+    // 読み始めていないとき（購読ゼロ・起動直後）は、出ている画面がそちらの説明を
+    // していて、読み終えたと言える状態でもない
+    if (finished.value || !started.value) return false;
+    if (findFeed(0, 1, isReadable) !== -1) return false;
+    finished.value = true;
+    return true;
+  }
+
+  /**
    * 背景取得で後から届いた記事を、いま読んでいるフィードのリストに足す。
    *
    * bootstrap が同梱するのは 1 フィードあたり 50 件までなので、これをしないと
@@ -813,6 +837,7 @@ export const useFeedsStore = defineStore('feeds', () => {
     enterFirstUnread,
     confirmLanding,
     absorbNewEntries,
+    finishIfNothingUnread,
     selectFeed,
     selectEntry,
     selectEntryIn,
