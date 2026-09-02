@@ -82,10 +82,41 @@ describe('POST /api/pins', () => {
     expect((await response.json()) as PinResponse).toMatchObject({ pin: { entryId: null } });
   });
 
-  it('title と url を検証する', async () => {
-    expect((await pin({ url: 'https://example.com/' })).status).toBe(400);
-    expect((await pin({ title: '  ', url: 'https://example.com/' })).status).toBe(400);
+  it('タイトルの無い記事は、本文の書き出しを見出しにして控える', async () => {
+    // Bluesky のプロフィール RSS のように title を配らないフィードの記事（issue #11）。
+    // 400 で断ると outbox が「送り直しても通らない」として落とすので、ピンが黙って消える
+    const feedId = await seedFeed(env.DB, 'https://untitled.example.com/feed');
+    const entryId = await seedEntry(env.DB, feedId, {
+      title: '',
+      body: '<p>今日はよく晴れている</p>',
+    });
+
+    const response = await pin({ entryId, title: '', url: 'https://untitled.example.com/1' });
+    expect(response.status).toBe(201);
+    expect((await response.json()) as PinResponse).toMatchObject({
+      pin: { title: '今日はよく晴れている' },
+    });
+  });
+
+  it('本文からも見出しを作れなければ、空のまま控える', async () => {
+    // 画像だけの投稿など。URL は控えてあるので開ける（一覧は URL を出す）
+    const feedId = await seedFeed(env.DB, 'https://imageonly.example.com/feed');
+    const entryId = await seedEntry(env.DB, feedId, { title: '', body: '<p><img src="x"></p>' });
+
+    const response = await pin({ entryId, title: '', url: 'https://imageonly.example.com/1' });
+    expect(response.status).toBe(201);
+    expect((await response.json()) as PinResponse).toMatchObject({ pin: { title: '' } });
+  });
+
+  it('指す記事が無ければ、見出しが空のままでも控える', async () => {
+    const response = await pin({ url: 'https://example.com/no-title' });
+    expect(response.status).toBe(201);
+    expect((await response.json()) as PinResponse).toMatchObject({ pin: { title: '' } });
+  });
+
+  it('url と、値の形を検証する', async () => {
     expect((await pin({ title: 'ピン' })).status).toBe(400);
+    expect((await pin({ title: 123, url: 'https://example.com/' })).status).toBe(400);
     expect((await pin({ title: 'ピン', url: 'javascript:alert(1)' })).status).toBe(400);
     expect((await pin({ title: 'ピン', url: 'https://example.com/', entryId: 0 })).status).toBe(
       400,

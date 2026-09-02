@@ -1,4 +1,6 @@
 import type { CreatePinRequest, PinResponse } from '../../shared/types';
+import { titleFromBody } from '../crawler/title';
+import { selectEntriesByIds } from '../db/entries';
 import { deletePin, insertPin } from '../db/pins';
 import { badRequest, readJsonBody } from '../lib/body';
 import { json } from '../lib/errors';
@@ -13,9 +15,19 @@ import { json } from '../lib/errors';
 /** 極端に長いタイトルで DB を膨らませない。表示にも使わない長さ */
 const MAX_TITLE_LENGTH = 500;
 
+/**
+ * 見出し。**空を断らない。**
+ *
+ * タイトルを配らないフィード（Bluesky のプロフィール RSS など）の記事は title が空で、
+ * 画面が「(無題)」を出しているだけ（web/src/components/EntryReader.vue）。ここで 400 を
+ * 返すと、outbox は 4xx を「送り直しても通らない」としてキューから落とす
+ * （web/src/stores/outbox.ts の isPermanent）ので、**ピンした本人には何も起きたように
+ * 見えないまま、リロードで消える**（issue #11）。
+ */
 function parseTitle(value: unknown): string {
-  if (typeof value !== 'string' || value.trim() === '') badRequest('title は必須');
-  return (value as string).trim().slice(0, MAX_TITLE_LENGTH);
+  if (value === undefined || value === null) return '';
+  if (typeof value !== 'string') return badRequest('title は文字列で送る');
+  return value.trim().slice(0, MAX_TITLE_LENGTH);
 }
 
 function parseUrl(value: unknown): string {
@@ -41,22 +53,34 @@ function parseEntryId(value: unknown): number | null {
   return value as number;
 }
 
+/**
+ * 見出しが空なら、記事の本文の書き出しで補う（M7 の「タイトルを配らないフィード」と
+ * 同じ規則。src/crawler/title.ts）。
+ *
+ * **ピンは記事より長生きする**ので、控える見出しは作れるうちに作っておく。記事が消えた
+ * 後に残るのが URL だけでは、一覧を見ても何をピンしたのか分からない。取りに行くのは
+ * 見出しが無いときだけなので、普段のピンに往復は増えない。
+ */
+async function fillTitle(db: D1Database, title: string, entryId: number | null): Promise<string> {
+  if (title !== '' || entryId === null) return title;
+
+  // 本文の採り方（全文が取れていればそちら）はクエリ層に任せる
+  const [entry] = await selectEntriesByIds(db, [entryId]);
+  return entry === undefined ? '' : await titleFromBody(entry.body);
+}
+
 export async function createPin(request: Request, env: Env): Promise<Response> {
   const body = await readJsonBody(request);
   if (typeof body !== 'object' || body === null) badRequest('ボディはオブジェクトで送る');
   const input = body as Partial<CreatePinRequest>;
 
+  const entryId = parseEntryId(input.entryId);
+  const url = parseUrl(input.url);
+  const title = await fillTitle(env.DB, parseTitle(input.title), entryId);
+
   // 記事が既に消えていることがある（オフラインでピンした後に購読を解除した等）。
   // その場合は参照だけ落として作る（クエリ層の副問い合わせが引き受ける）
-  const pin = await insertPin(
-    env.DB,
-    {
-      entryId: parseEntryId(input.entryId),
-      title: parseTitle(input.title),
-      url: parseUrl(input.url),
-    },
-    Math.floor(Date.now() / 1000),
-  );
+  const pin = await insertPin(env.DB, { entryId, title, url }, Math.floor(Date.now() / 1000));
 
   const responseBody: PinResponse = { pin };
   return json(responseBody, 201);

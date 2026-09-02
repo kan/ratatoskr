@@ -22,8 +22,8 @@ function entry(id: number, overrides: Partial<Entry> = {}): Entry {
   };
 }
 
-function pin(id: number, url: string): Pin {
-  return { id, entryId: null, title: 'サーバのピン', url, pinnedAt: 100 };
+function pin(id: number, url: string, overrides: Partial<Pin> = {}): Pin {
+  return { id, entryId: null, title: 'サーバのピン', url, pinnedAt: 100, ...overrides };
 }
 
 beforeEach(() => {
@@ -58,9 +58,21 @@ describe('ピン', () => {
   it('送信が通ったらサーバの id に差し替える', () => {
     const pins = usePinsStore();
     pins.add(entry(10), 200);
-    pins.confirm('https://example.com/10', 42);
+    pins.confirm('https://example.com/10', pin(42, 'https://example.com/10'));
 
     expect(pins.find('https://example.com/10')?.id).toBe(42);
+  });
+
+  it('タイトルの無い記事は、サーバが作った見出しを受け直す', () => {
+    // 空のまま置くと、次の bootstrap まで一覧に URL が並ぶ（issue #11）
+    const pins = usePinsStore();
+    pins.add(entry(10, { title: '' }), 200);
+    pins.confirm(
+      'https://example.com/10',
+      pin(42, 'https://example.com/10', { entryId: 10, title: '本文の書き出し' }),
+    );
+
+    expect(pins.find('https://example.com/10')?.title).toBe('本文の書き出し');
   });
 
   it('サーバの一覧で置き換えても、送信前のピンは消えない', () => {

@@ -202,10 +202,10 @@ export const useOutboxStore = defineStore('outbox', () => {
       } else if (item.kind === 'pin') {
         sends.push({
           keys: [item.key],
-          // 応答の id を手元に書き戻す。これが無いと、そのピンを外せない
+          // 応答の id と見出しを手元に書き戻す。id が無いとそのピンを外せない
           run: () =>
             postPin({ entryId: item.entryId, title: item.title, url: item.url }).then((body) => {
-              pinsStore.confirm(item.url, body.pin.id);
+              pinsStore.confirm(item.url, body.pin);
               // 送信中に外されていた。サーバには出来てしまったので、改めて外す
               if (cancelled.delete(item.url)) queueUnpin(body.pin.id, item.url);
             }),

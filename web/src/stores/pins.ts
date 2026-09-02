@@ -95,11 +95,18 @@ export const usePinsStore = defineStore('pins', () => {
     revision.value += 1;
   }
 
-  /** 送信が通った。サーバが振った id に差し替える */
-  function confirm(url: string, id: number): void {
+  /**
+   * 送信が通った。サーバが振った id と、サーバが控えた見出しに差し替える。
+   *
+   * 見出しまで受け直すのは、**タイトルを配らないフィードの記事では、サーバが本文の
+   * 書き出しから作った見出しが返ってくる**ため（src/api/pins.ts）。手元の空のままに
+   * すると、次に bootstrap を受けるまで一覧に URL が並ぶ。
+   */
+  function confirm(url: string, saved: Pin): void {
     const pin = find(url);
     if (pin === undefined) return;
-    pin.id = id;
+    pin.id = saved.id;
+    pin.title = saved.title;
     revision.value += 1;
   }
 

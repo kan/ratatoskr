@@ -197,6 +197,11 @@ export interface OpmlImportResponse {
  */
 export interface CreatePinRequest {
   entryId: number | null;
+  /**
+   * 見出し。**空でよい。** タイトルを配らないフィードの記事は title が空なので、
+   * ここで必須にすると、その記事をピンした瞬間に 400 になる（issue #11）。
+   * 空で届いたときはサーバが記事の本文から作る（src/api/pins.ts）
+   */
   title: string;
   url: string;
 }
