@@ -10,7 +10,7 @@ import { usePinsStore } from '@/stores/pins';
  */
 const pins = usePinsStore();
 
-defineEmits<{ close: []; remove: [pin: Pin] }>();
+defineEmits<{ close: []; openAll: []; remove: [pin: Pin] }>();
 
 /** ピンした時刻。日付だけで足りる（後で処理するための目印） */
 function pinnedOn(pin: Pin): string {
@@ -25,20 +25,48 @@ function pinnedOn(pin: Pin): string {
     @click.self="$emit('close')"
   >
     <div class="w-full max-w-2xl rounded bg-white p-5 text-sm shadow-lg dark:bg-neutral-900">
-      <div class="flex items-baseline justify-between">
+      <!--
+        操作はボタンで出す（issue #12）。**スマホには o も Esc も無い。**
+        キーの案内だけだと、狭い画面では開いた後に何もできない一覧になる
+        （背景を押せば閉じられるが、押して初めて分かる操作は道とは言えない）。
+        括弧の中にキーを残すのは、PC 側で覚える手掛かりを消さないため（購読管理と同じ）
+      -->
+      <div class="flex items-baseline justify-between gap-3">
         <h2 class="text-base font-bold">ピン（{{ pins.count }}）</h2>
-        <p class="text-xs text-neutral-500">o で全て開く / Esc・z で閉じる</p>
+        <span class="flex shrink-0 items-center gap-3 text-xs text-neutral-500">
+          <button
+            v-if="pins.count > 0"
+            type="button"
+            class="hover:underline"
+            data-testid="pin-open-all"
+            @click="$emit('openAll')"
+          >
+            全て開く（o）
+          </button>
+          <button
+            type="button"
+            class="hover:underline"
+            data-testid="pin-close"
+            @click="$emit('close')"
+          >
+            閉じる（Esc）
+          </button>
+        </span>
       </div>
 
       <p v-if="pins.count === 0" class="mt-4 text-xs text-neutral-500" data-testid="pin-empty">
         ピンした記事はまだない。読んでいる最中に p を押すと、ここに溜まる
       </p>
 
+      <!--
+        **行は狭い画面で厚くする（issue #12）。** マウスの数ピクセルと違って、指は
+        隣の行の「外す」を巻き込む。厚さを変えるだけで、並びも文言も PC と同じにする
+      -->
       <ul v-else class="mt-3">
         <li
           v-for="pin in pins.pins"
           :key="pin.url"
-          class="flex items-baseline gap-3 border-t border-neutral-200 py-1.5 dark:border-neutral-800"
+          class="flex items-baseline gap-3 border-t border-neutral-200 py-3 md:py-1.5 dark:border-neutral-800"
           :data-testid="`pin-${pin.entryId ?? 'x'}`"
         >
           <span class="shrink-0 text-xs text-neutral-500 tabular-nums">{{ pinnedOn(pin) }}</span>
@@ -52,7 +80,7 @@ function pinnedOn(pin: Pin): string {
           </a>
           <button
             type="button"
-            class="shrink-0 text-xs text-neutral-500 hover:underline"
+            class="shrink-0 py-2.5 pl-3 text-xs text-neutral-500 hover:underline md:py-1.5 md:pl-2"
             :data-testid="`pin-remove-${pin.entryId ?? 'x'}`"
             @click="$emit('remove', pin)"
           >

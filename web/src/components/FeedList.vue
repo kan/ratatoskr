@@ -46,6 +46,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   selectEntry: [feedId: number, entryId: number];
   manage: [];
+  /** ピン一覧を開く（issue #12。スマホには z が無い） */
+  pins: [];
   /** 引き出しを閉じる（狭い画面のみ） */
   close: [];
   /** 読んでいる最中に「もう要らない」と判断したフィードの解除（issue #2） */
@@ -155,7 +157,7 @@ watch(
     class="flex h-full flex-col overflow-hidden border-r border-neutral-300 dark:border-neutral-700"
   >
     <!--
-      購読管理への入口。キー（m）からも開ける（docs/UX.md のキー表）。
+      オーバーレイへの入口。キー（m / z）からも開ける（docs/UX.md のキー表）。
       **スクロールの外に置く。** 一覧は購読の数だけ伸びるので、中に入れると
       下まで読み進めたときに入口が画面の外へ消える
     -->
@@ -164,6 +166,22 @@ watch(
     >
       <span>Ratatoskr</span>
       <span class="flex items-center gap-3">
+        <!--
+          ピン一覧への入口（issue #12）。**キーの無いスマホでは、ここが唯一の道になる。**
+          読む操作ではないものを 1 箇所に集めたいので、購読管理の隣に置く
+          （記事画面に常時 1 つ足すと、その分だけ本文が狭くなる）。
+
+          件数は pinnedUrls から数える。ピンは url で一意なので（stores/pins.ts）、
+          数を別の prop で受け直しても同じ値にしかならない
+        -->
+        <button
+          type="button"
+          class="hover:underline"
+          data-testid="open-pins"
+          @click="$emit('pins')"
+        >
+          ピン{{ pinnedUrls.size > 0 ? `（${pinnedUrls.size}）` : '' }}
+        </button>
         <button
           type="button"
           class="hover:underline"

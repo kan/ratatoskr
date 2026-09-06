@@ -69,10 +69,13 @@ function selectEntryIn(feedId: number, entryId: number): void {
 
 /**
  * オーバーレイを開く。入口はキーとボタンの両方にあるので 1 箇所に集める。
- * 購読管理は狭い画面だと引き出しの裏に開くので、開く前に畳む
+ *
+ * **開く前に引き出しを畳む。対象は問わない。** 狭い画面の引き出しは不透明で、
+ * オーバーレイより手前に出る（引き出しが z-20、オーバーレイが z-10）。
+ * 畳まないと、どれを開いても開いたことに気付けない
  */
 function openOverlay(name: NonNullable<typeof activeOverlay.value>): void {
-  if (name === 'subscriptions') drawerOpen.value = false;
+  drawerOpen.value = false;
   activeOverlay.value = name;
 }
 
@@ -520,6 +523,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
       :folder="feeds.folder"
       @select-entry="selectEntryIn"
       @manage="openManager"
+      @pins="openOverlay('pins')"
       @unsubscribe="unsubscribeFeed"
       @close="drawerOpen = false"
       @select-folder="feeds.setFolder"
@@ -715,6 +719,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
     <PinList
       v-if="activeOverlay === 'pins'"
       @close="closeOverlay"
+      @open-all="openAllPins"
       @remove="(pin) => removePin(pin)"
     />
   </div>

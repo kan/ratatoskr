@@ -98,6 +98,25 @@ test('o でピンを新しいタブに開き、開けた分はピンから外す
   await expect(page.getByTestId('pin-empty')).toBeVisible();
 });
 
+/**
+ * キーを持たない画面のための入口（issue #12）。開いた後の始末は o のテストが
+ * 見ているので、ここは押せることと、開くものが無ければ出ないことだけを見る。
+ */
+test('ボタンからも全て開ける', async ({ page, context }) => {
+  await open(page);
+  await page.keyboard.press('p');
+
+  await page.keyboard.press('z');
+  const opened = context.waitForEvent('page');
+  await page.getByTestId('pin-open-all').click();
+  await opened;
+
+  // 空の一覧に「全て開く」は出さない（押しても何も起きないボタンになる）
+  await page.keyboard.press('z');
+  await expect(page.getByTestId('pin-empty')).toBeVisible();
+  await expect(page.getByTestId('pin-open-all')).toHaveCount(0);
+});
+
 test('ブラウザにブロックされた分はピンから消さない', async ({ page }) => {
   await open(page);
   await page.keyboard.press('p');

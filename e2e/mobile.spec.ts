@@ -137,6 +137,28 @@ test('引き出しを開いたまま m を押しても、購読管理が引き�
   await expect(page.getByTestId('feed-1')).toHaveCount(0);
 });
 
+/**
+ * ピン一覧の導線（issue #12）。キーの無いスマホでは、引き出しの中のボタンと
+ * 一覧の中のボタンだけが道になる。**開いた後に閉じられるところまで**を見る。
+ */
+test('引き出しからピン一覧を開き、ボタンで閉じられる', async ({ page }) => {
+  await open(page);
+  await page.getByTestId('bottom-pin').click();
+
+  await page.getByTestId('open-feed-list').click();
+  const entrance = page.getByTestId('open-pins');
+  await expect(entrance).toHaveText('ピン（1）');
+  await entrance.click();
+
+  await expect(page.getByTestId('pin-list')).toContainText('朝刊の 1 本目');
+  // 購読管理と同じく、引き出しの裏に開かせない
+  await expect(page.getByTestId('feed-1')).toHaveCount(0);
+
+  await page.getByTestId('pin-close').click();
+  await expect(page.getByTestId('pin-list')).toBeHidden();
+  await expect(title(page)).toHaveText('朝刊の 1 本目');
+});
+
 test('ボトムバーは境界でラベルだけが変わる', async ({ page }) => {
   await open(page);
   const next = page.getByTestId('bottom-next');
