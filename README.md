@@ -1,5 +1,7 @@
 # Ratatoskr
 
+[![CI](https://github.com/kan/ratatoskr/actions/workflows/ci.yml/badge.svg)](https://github.com/kan/ratatoskr/actions/workflows/ci.yml)
+
 個人用のセルフホスト型 RSS リーダー。Cloudflare Workers + D1 の上で動き、PC とスマートフォンから同じ購読状態を共有する。
 
 目標は一つだけで、**livedoor Reader / Fastladder の「流れるように読める」操作感を Web で再現すること**。キーを押してから次の記事が出るまでの遅延がゼロであることを、機能の豊富さや見た目より優先する。
@@ -76,9 +78,21 @@ Service Token なら対話・非対話を問わない。
 | `pnpm dev`              | 開発サーバ                         |
 | `pnpm build`            | web をビルドして `web/dist` に出力 |
 | `pnpm test`             | Vitest（workerd 上で実行）         |
+| `pnpm test:e2e`         | Playwright（キーバインドの確認）   |
 | `pnpm typecheck`        | `tsc` + `vue-tsc`                  |
 | `pnpm lint`             | ESLint + Prettier                  |
 | `pnpm db:console "SQL"` | ローカル D1 に SQL を投げる        |
+
+### CI とセキュリティ
+
+`main` への push と、あらゆる PR（Dependabot のものを含む）で、`.github/workflows/ci.yml` が上の
+`lint` / `typecheck` / `test` / `test:e2e` を回す。**Cloudflare の資格情報は要らない**
+（理由は `vitest.config.ts` と `playwright.config.ts` のコメント）。
+
+依存の更新は Dependabot が週 1 で PR にする（`.github/dependabot.yml`）。minor と patch は
+1 本にまとめ、TypeScript の major だけは除外している（vue-tsc が TS 7 に未対応）。
+
+脆弱性の報告先と、何を脆弱性として扱うかは [SECURITY.md](SECURITY.md) を参照。
 
 ## デプロイ
 
