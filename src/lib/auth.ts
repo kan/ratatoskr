@@ -13,7 +13,7 @@ export interface AuthEnv {
   ACCESS_AUD: string;
   /**
    * ローカル開発用のバイパス。`pnpm dev` が --var で渡す（package.json）。
-   * wrangler.jsonc の secrets.required に載せていないので、デプロイには含まれない。
+   * wrangler.jsonc の vars に載せていないので、デプロイには含まれない。
    * 万一本番に紛れ込んでも効かないよう、localhost からの要求にしか適用しない
    */
   ACCESS_DEV_BYPASS?: string;

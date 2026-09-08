@@ -49,16 +49,22 @@
     "enabled": true
   },
 
-  // Cloudflare Access の検証に使う 2 つは vars に置かない。どちらもアカウント固有の値なので
-  // **secret として入れる**（`wrangler secret put ACCESS_AUD`）。
-  //   - vars に書くと、公開リポジトリに自分のチーム名とアプリ ID が残る
-  //   - vars はデプロイのたびに設定ファイルで上書きされるが、secret は消えない
+  // Cloudflare Access の検証に使う 2 つ。**ここには名前だけ置き、値は空にしておく。**
+  // どちらもアカウント固有の値なので、公開リポジトリに自分のチーム名とアプリ ID を残さない。
+  // 実際の値は database_id と同じ手口で、デプロイ時に scripts/deploy-config.mjs が
+  // .prod.vars（git 管理外）から wrangler.deploy.json へ差し込む。
   //
-  // ここに名前だけ挙げておくと、Env の型がこの宣言から作られ（.dev.vars の中身に
-  // 依存しなくなる）、ローカルで足りないときは wrangler が警告する。
-  // ローカルの値は .dev.vars（git 管理外）に置く。README「デプロイ」を参照
-  "secrets": {
-    "required": ["ACCESS_TEAM_DOMAIN", "ACCESS_AUD"]
+  // **secret ではなく vars なのは、デプロイのたびに必ず渡す運用だから。** secret は
+  // 「渡さなければ前の版から引き継ぐ」仕組みで、Worker がまだ無い初回デプロイでは
+  // 引き継ぎ元が無く止まる。毎回渡すなら secret を選ぶ利点（消えない）は得られず、
+  // 初回が詰む欠点だけが残る。
+  //
+  // 名前をここに置くと Env の型がこの宣言から作られる（.dev.vars の中身に依存しない）。
+  // 値が空なので `wrangler types` には --strict-vars=false が要る（package.json）。
+  // ローカルの値は .dev.vars（git 管理外）に置くと、こちらを上書きする
+  "vars": {
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": ""
   },
 
   "dev": {
