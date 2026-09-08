@@ -1,0 +1,40 @@
+version: 2
+
+updates:
+  # pnpm workspace（ルートと web/）は 1 つの設定でまとめて見る。Dependabot は
+  # ルートの package.json と pnpm-lock.yaml からワークスペースを辿るので、
+  # web/ を別エントリにすると同じ更新が二重に上がる
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      time: '09:00'
+      timezone: Asia/Tokyo
+    commit-message:
+      prefix: deps
+    groups:
+      # 個人用なので、minor と patch は 1 本の PR にまとめる。1 依存 1 PR にすると
+      # 週に十数本届いて、結局まとめて閉じるだけになる
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # TypeScript を 5 系に留める理由は CLAUDE.md「依存バージョンの制約」が正本。
+      # vue-tsc が TS 7 に対応したら、あちらと合わせてここも外す
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      time: '09:00'
+      timezone: Asia/Tokyo
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns:
+          - '*'
