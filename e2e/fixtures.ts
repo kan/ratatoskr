@@ -44,6 +44,13 @@ function feed(id: number, title: string, rate: number, unreadCount: number): Fee
   };
 }
 
+/**
+ * 取り込んだ時刻（`storedAt`）は**その場で決める**。固定の日付にすると、実時間が
+ * そこから保持期間（RETENTION_DAYS）を越えた日を境に、起動のたびに手元の間引きが
+ * 走るテストへ静かに変わる。間引きは読み終えた記事を IndexedDB から消すので、
+ * 再読み込みを挟むテストが日付次第で落ちるようになる。
+ * 間引きそのものを見るテストは、必要な日付を自分で組み立てている（persistence.spec.ts）
+ */
 export function entry(id: number, feedId: number, title: string, body: string): Entry {
   return {
     id,
@@ -53,7 +60,7 @@ export function entry(id: number, feedId: number, title: string, body: string): 
     author: 'kan',
     body,
     publishedAt: 1786000000,
-    storedAt: 1786000000,
+    storedAt: Math.floor(Date.now() / 1000),
   };
 }
 

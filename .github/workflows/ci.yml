@@ -53,8 +53,8 @@ jobs:
       # 入れると数分持っていかれるので chromium だけにする
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
-      # 落ちた回だけでなく、やり直して緑になった回のトレースも持ち帰る。
-      # retries: 1 で拾い直した不安定さは job が成功するので、failure() だと何も残らない
+      # 落ちた回のトレース（playwright.config.ts の retain-on-failure）を持ち帰る。
+      # ランナーごと消えるので、ここで拾わないと CI でだけ落ちる回を追えない
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
