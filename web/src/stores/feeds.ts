@@ -554,8 +554,12 @@ export const useFeedsStore = defineStore('feeds', () => {
 
     const stored = new Map(entriesStore.of(feed.id).map((entry) => [entry.id, entry]));
     const known = new Set(currentEntries.value.map((entry) => entry.id));
+    // 床は「読み返しでない限り既読の記事を混ぜない」ための線引きだが、**u で未読に
+    // 戻した記事は床より前にある**（例外は必ずウォーターマークの内側に立つ）。
+    // id の大小だけで切ると、手元に本体が無い状態でその記事に座ったとき、後から
+    // 届いても載らず、未読 1 件なのに何も出せない画面のまま止まる
     const additions = [...stored.values()].filter(
-      (entry) => entry.id > entryFloor.value && !known.has(entry.id),
+      (entry) => entriesStore.isUnread(entry.id, entryFloor.value) && !known.has(entry.id),
     );
     // 本文が差し替わった記事も載せ替える（全文取得。M7）。貯蔵庫は同じ id を
     // 新しいオブジェクトで置き換えるので、同一性が変わったかどうかで見分けられる。

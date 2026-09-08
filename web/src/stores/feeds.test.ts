@@ -238,6 +238,26 @@ describe('既読ウォーターマーク', () => {
     feeds.absorbNewEntries();
     expect(feeds.currentEntries.map((e) => e.id)).toEqual([11]);
   });
+
+  it('未読に戻した記事は、本体が後から届けば既読より前でもリストに載る', () => {
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+
+    // 手元の控えに本体が無い状態で始まる。u を押した後に保持期間の間引きが走ると、
+    // 記事は IndexedDB から消えるのに例外（entryStates）だけが残ってこうなる
+    entriesStore.ingest(entries(1, [11]));
+    entriesStore.restoreForcedUnread([12]);
+    feeds.setFeeds([feed(1, { readSeq: 12, unreadCount: 1 })]);
+    feeds.enterFirstUnread();
+    // 未読が 1 件あることは分かっているが、出せる記事がまだ無い
+    expect(feeds.currentFeed?.id).toBe(1);
+    expect(feeds.entryCount).toBe(0);
+
+    // bootstrap で本体が届く。既読より前でも、例外の記事は未読なので出せなければならない
+    entriesStore.ingest(entries(1, [12]));
+    feeds.absorbNewEntries();
+    expect(feeds.currentEntries.map((e) => e.id)).toEqual([12]);
+  });
 });
 
 describe('フィード間の移動', () => {
