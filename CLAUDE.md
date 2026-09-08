@@ -60,7 +60,7 @@ pnpm install
 
 pnpm dev                # wrangler dev。Vite の HMR 込みでローカル起動
 pnpm build              # web をビルドして Worker にバンドル
-pnpm deploy             # 本番デプロイ
+pnpm deploy             # 本番デプロイ（migrations を当ててから上げる）
 
 pnpm db:migrate         # ローカル D1 にマイグレーション適用
 pnpm db:migrate:remote  # 本番 D1 に適用
@@ -83,26 +83,25 @@ M0 の実装で判明した、環境まわりの制約と手順。
 ```bash
 pnpm install       # esbuild / workerd の postinstall 許可は pnpm-workspace.yaml にコミット済み
 pnpm db:migrate    # .wrangler/ は未コミット。クローン直後のローカル D1 は空
-cp .dev.vars.example .dev.vars   # Access の secret を埋める（後述）
+cp .dev.vars.example .dev.vars   # Access の値を埋める（後述）
 cp .env.example .env             # デプロイ後は Workers AI の接続にも要る（後述）
 pnpm build                       # web/dist が無いと wrangler dev が起動しない（後述）
 pnpm dev
 ```
 
-`.dev.vars` は git 管理外なので、クローン直後は雛形から作る。**ここに書けるのは
-`wrangler.jsonc` の `secrets.required` に宣言した名前だけで、宣言の無い名前は
-書いても Worker に注入されない**（黙って `undefined` になる）。
+`.dev.vars` は git 管理外なので、クローン直後は雛形から作る。ここに書いた値は
+`wrangler.jsonc` の `vars` を上書きする。
 
-Access の検証を飛ばす `ACCESS_DEV_BYPASS` を `secrets.required` に載せていないのは、
+Access の検証を飛ばす `ACCESS_DEV_BYPASS` を `vars` に載せていないのは、
 デプロイに含めたくないため。**あれは `pnpm dev` が `--var` で渡している**
 （`package.json`）。渡らないと `/api/*` が全て 401 になる。バイパスは
 **localhost 宛の要求にしか効かない**ので、デプロイ先に紛れ込んでも認証が
 素通りすることはない（`src/lib/auth.ts`）。
 
 **アカウント固有の値は追跡させない**（このリポジトリは公開）。`wrangler.jsonc` には
-D1 の `database_id` も Access の値も書かない。全て `.prod.vars`（git 管理外）に置き、
-`scripts/deploy-config.mjs` が設定（`wrangler.deploy.json`）と secret
-（`.wrangler/deploy-secrets.env`）を組み立てて `pnpm deploy` が渡す。手順は README の
+D1 の `database_id` も Access の値も書かない（`vars` には名前だけ置き、値は空）。
+全て `.prod.vars`（git 管理外）に置き、`scripts/deploy-config.mjs` が値を差し込んだ
+`wrangler.deploy.json` を組み立てて `pnpm deploy` がそれを使う。手順は README の
 「デプロイ」を参照。
 
 Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCES で失敗する場合は
@@ -112,7 +111,7 @@ Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCE
 
 - **TypeScript は 5.9 に固定している。** vue-tsc 3.3.10 が TS 7 に未対応で、上げると
   `pnpm typecheck` が `ERR_PACKAGE_PATH_NOT_EXPORTED` で落ちる。vue-tsc の対応後に上げる
-- `@cloudflare/vitest-pool-workers` 0.21 は `defineWorkersConfig` ではなく
+- `@cloudflare/vitest-pool-workers` は 0.21 以降、`defineWorkersConfig` ではなく
   `cloudflareTest` プラグイン方式。`env` は `cloudflare:test` ではなく
   `cloudflare:workers` から import する
 - テストから Worker の `fetch` を直接呼ぶときは `Request` ではなく `IncomingRequest`
@@ -138,7 +137,7 @@ Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCE
   入っているので、また別の空 DB が開く。ローカル作業は常に既定の `wrangler.jsonc`。
   `wrangler.deploy.json` は `--remote` 用（`pnpm db:migrate:remote` と `pnpm deploy`）
 - **本番のデータを手元に持ってくる**なら
-  `wrangler d1 export ratatoskr --remote -c wrangler.deploy.json --no-schema` で抜き、
+  `wrangler d1 export DB --remote -c wrangler.deploy.json --no-schema` で抜き、
   `INSERT INTO "feeds"` / `"entries"` の行だけを流し込む（`d1_migrations` と
   `sqlite_sequence` はローカルの方が正しい）。`wrangler d1 execute --file` は本文の長い
   記事で `SQLITE_TOOBIG` になるので、`.wrangler/state/v3/d1/<hash>.sqlite` へ
@@ -157,11 +156,18 @@ Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCE
   `vitest.config.ts` の `remoteBindings: false` で無効にしてあるので、テストから実際に
   呼ぶことはできない（`src/crawler/choose.test.ts` のように差し替えて呼ぶ）
 - **`wrangler.jsonc` にアカウント固有の値を書かない。** デプロイ時に
-  `scripts/deploy-config.mjs` が `.prod.vars` から D1 の `database_id` を差し込んだ設定と、
-  secret の一覧を書き出す（Access の 2 つ。名前は `secrets.required` が正で、`Env` の型も
-  そこから生成される）。**secret を毎回渡すのは、Worker を消しても `pnpm deploy` 1 つで
-  戻せるようにするため**（宣言だけして渡さないと、引き継ぎ元が無い初回デプロイが
-  `no previous version exists` で止まる）
+  `scripts/deploy-config.mjs` が `.prod.vars` から D1 の `database_id` と `vars` の中身を
+  差し込んだ設定を書き出す（Access の 2 つ。名前は `wrangler.jsonc` の `vars` が正で、
+  `Env` の型もそこから生成される。値が空なので `cf-typegen` には `--strict-vars=false` が要る）。
+  **secret ではなく vars なのは、デプロイのたびに必ず渡す運用だから**（secret は渡さなければ
+  前の版から引き継ぐ仕組みで、Worker がまだ無い初回デプロイは引き継ぎ元が無くて止まる）
+- **デプロイの経路は 2 つある。** 手元（`.prod.vars`）と、README の Deploy to Cloudflare
+  ボタン。両対応のための決めごと（設定の id を拾う・vars は空でも必ず渡す・
+  マイグレーションを `deploy` に含める・D1 はバインディング名 `DB` で指す）は
+  **`scripts/deploy-config.mjs` の冒頭コメントが正本**。触るときは先にあれを読む
+- **ボタン経由の経路は実際に押して確かめていない。** 別の Cloudflare アカウントが要るため。
+  wrangler の実装と公式ドキュメントから組み立てた想定なので、初めて誰かが押したときは
+  ビルドログを見ること
 
 ## 絶対に守るアーキテクチャ上の不変条件
 
