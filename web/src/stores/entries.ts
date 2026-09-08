@@ -96,6 +96,18 @@ export const useEntriesStore = defineStore('entries', () => {
     return byFeed[feedId] ?? [];
   }
 
+  /**
+   * id から記事を引く。**未読例外を立てた記事を手元へ書き戻すときにしか使わない**ので、
+   * 索引は持たずに走査する（例外はほぼ常にゼロ件で、記事送りの経路にも乗らない）
+   */
+  function find(entryId: number): Entry | null {
+    for (const list of Object.values(byFeed)) {
+      const found = list.find((entry) => entry.id === entryId);
+      if (found !== undefined) return found;
+    }
+    return null;
+  }
+
   function unreadOf(feedId: number, readSeq: number): Entry[] {
     return of(feedId).filter((entry) => isUnread(entry.id, readSeq));
   }
@@ -134,6 +146,7 @@ export const useEntriesStore = defineStore('entries', () => {
     unreadRevision,
     ingest,
     of,
+    find,
     isUnread,
     setForcedUnread,
     clearForcedUnreadIn,

@@ -623,6 +623,12 @@ export const useSessionStore = defineStore('session', () => {
       if (saved.has(entryId)) continue;
       saved.add(entryId);
       trackLocalWrite(putEntryState(entryId));
+      // **記事の本体も置き直す。** 間引き（pruneStoredEntries）は既読の記事を消す
+      // 対象を起動時に一度だけ決めるので、その後に u を押した記事は手元から消えたまま
+      // 例外だけが残る。次の起動は「未読 1 件なのに出せる記事が無い」状態で始まり、
+      // 繋がらなければサーバから取り直すこともできない
+      const entry = entriesStore.find(entryId);
+      if (entry !== null) trackLocalWrite(saveEntries([entry]));
       outbox.queueUnread(entryId, true);
     }
     // 削除しながら回るので複製を辿る

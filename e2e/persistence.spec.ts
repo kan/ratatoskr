@@ -157,6 +157,65 @@ test('他の端末で読み終えたフィードからは始めない', async ({
   await expect(page.getByTestId('feed-1')).not.toContainText('(');
 });
 
+/**
+ * 間引きは「消してよい記事」を起動時に一度だけ決める。**その後に u を押した記事は、
+ * 手元から消えたまま例外だけが残る。** 次の起動は「未読 1 件なのに出せる記事が無い」
+ * 状態で始まり、繋がらなければ取り直すこともできない。
+ * u を押した時点で本体を置き直していることを、繋がらない起動で確かめる。
+ */
+test('間引きの後に未読へ戻した記事も、繋がらない次の起動で読める', async ({ page }) => {
+  await mockApi(page);
+  const now = Math.floor(Date.now() / 1000);
+  const day = 86_400;
+
+  // 保持期間を過ぎた記事だけを持つフィード。読んだ端から間引きの対象になる
+  const feed = { ...FEEDS[0], id: 1, readSeq: 0, unreadCount: 2 };
+  const entries = ENTRIES.filter((entry) => entry.feedId === 1).map((entry) => ({
+    ...entry,
+    storedAt: now - 40 * day,
+  }));
+  await page.route('**/api/bootstrap*', (route) =>
+    route.fulfill({
+      json: {
+        serverTime: now,
+        schemaVersion: SCHEMA_VERSION,
+        feeds: [feed],
+        entries,
+        pins: [],
+        maxEntryId: 12,
+      },
+    }),
+  );
+  await page.route('**/api/entries*', (route) =>
+    route.fulfill({ json: { entries: [], nextSinceId: null, hasMore: false } }),
+  );
+
+  await page.goto('/');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+  await page.keyboard.press('j');
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 2 本目');
+  await expect.poll(() => storedReadSeq(page, 1)).toBe(12);
+
+  // 2 本とも読み終えた状態で起動し直すと、間引きが両方を手元から消す。
+  // 間引きの正しさは上のテストが見ていて、ここは前提が整ったことの確認
+  await page.reload();
+  await expect(page.getByTestId('finished')).toBeVisible();
+  await expect.poll(() => storedEntryIds(page)).toEqual([]);
+
+  // 読み返しに戻って、2 本目を未読に戻す
+  await page.getByTestId('feed-1').click();
+  await page.getByTestId('entry-12').click();
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 2 本目');
+  await page.keyboard.press('u');
+  // 例外を立てた記事は手元に戻っている
+  await expect.poll(() => storedEntryIds(page)).toEqual([12]);
+
+  // 繋がらない状態で起動しても、その記事から読める
+  await page.route('**/api/**', (route) => route.abort('internetdisconnected'));
+  await page.reload();
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 2 本目', { timeout: 15_000 });
+});
+
 /** IndexedDB に残っている記事の id */
 async function storedEntryIds(page: Page): Promise<number[]> {
   return page.evaluate(async () => {
