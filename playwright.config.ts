@@ -8,16 +8,21 @@ export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
-  retries: 0,
+  // 手元では 0（落ちたらその場で直す）。CI では下げた workers でも起動待ちで落ちる回が
+  // 残る（アプリ側の起動レースで、テストランナーの設定では消しきれない）。実装の壊れと
+  // 見分けが付かなくなるのを避けるため、CI でだけ 1 回やり直す
+  retries: process.env.CI ? 1 : 0,
   // 1 つの dev サーバを全ワーカーで共有しているので、並列度を上げても速くならず、
   // 起動待ち（IndexedDB の読み出し + bootstrap）が詰まって落ちる。CPU 数任せにしない。
   //
   // **本数が増えたら下げる。** issue #7 で 5 本足したところ 4 では 3 回に 1 回ほど
-  // 起動待ちで落ちるようになった（落ちる先は毎回違う）。3 なら安定する
-  workers: 3,
+  // 起動待ちで落ちるようになった（落ちる先は毎回違う）。3 なら安定する。
+  // GitHub のランナーは 2 コアなので、そこでは 1 段下げる
+  workers: process.env.CI ? 2 : 3,
   reporter: 'list',
   use: {
-    // retries が 0 なので on-first-retry では何も残らない。落ちた回のトレースを残す
+    // 手元は retries が 0 で on-first-retry だと何も残らない。落ちた回のトレースを残す
+    // （CI ではやり直して緑になった回のトレースも残るので、不安定さを追える）
     trace: 'retain-on-failure',
   },
   projects: [

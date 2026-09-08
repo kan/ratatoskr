@@ -1,0 +1,64 @@
+name: CI
+
+# PR 運用はしていない（main へ直接 push する）が、Dependabot は PR で来るので
+# pull_request も拾う。ここが緑にならない更新は取り込まない、という使い方をする
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 読むだけで足りる。既定（リポジトリの設定次第では書き込み可）に任せず、明示的に絞る
+permissions:
+  contents: read
+
+# 打ち切るのは PR だけ。main は直接 push する運用なので、続けて 2 回 push すると
+# 1 つ目のコミットが緑とも赤とも付かないまま残り、後から追うときに手掛かりが消える
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: lint / typecheck / test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      # pnpm のバージョンは package.json の packageManager から読む。ここに書くと
+      # 手元と CI で二重管理になり、上げたときに --frozen-lockfile だけが食い違う
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      # Cloudflare の資格情報も .dev.vars も要らない。理由は vitest.config.ts のコメント
+      - run: pnpm test
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # playwright.config.ts の 2 つの project はどちらも Desktop Chrome。全ブラウザを
+      # 入れると数分持っていかれるので chromium だけにする
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      # 落ちた回だけでなく、やり直して緑になった回のトレースも持ち帰る。
+      # retries: 1 で拾い直した不安定さは job が成功するので、failure() だと何も残らない
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-traces
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
