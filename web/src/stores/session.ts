@@ -210,7 +210,8 @@ export const useSessionStore = defineStore('session', () => {
     feedsStore.confirmLanding(serverReadSeq);
 
     // **サーバの未読数をそのまま信じない。** u で未読に戻した記事はサーバが知らず、
-    // 保持期間で手元から消した記事はサーバにまだある。どちらも手元で数え直す。
+    // 保持期間で手元から消した記事はサーバにまだある。どちらも手元で数え直す
+    // （数え直した結果は左ペインの並びにも効く。規則は recountUnread の側）。
     //
     // 起動時は記事の取り直し（fillRemaining）が終わってから boot が呼ぶので、ここでは触らない。
     // 全記事の走査で 5 分に 1 度 1.5ms 前後。記事送りの経路には乗らない

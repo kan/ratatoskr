@@ -209,14 +209,32 @@ export const useFeedsStore = defineStore('feeds', () => {
   }
 
   /**
-   * 読む順序に並べ直す。現在位置は id で引き継ぐ（並びが変わっても同じフィードに乗せる）。
-   * 並べ直すのはユーザが明示的に順序を変えたときだけで、読み進めただけでは動かさない。
+   * `from` から後ろだけを読む順序に並べ直す（`from` が 0 なら全体）。
+   *
+   * **渡してよいのは 0 か「カーソルの次」だけ。** それ以外を渡すと、カーソルの居る
+   * 位置が動くのに feedIndex を直さないので、読んでいるフィードが入れ替わる。
+   */
+  function resortFrom(from: number): void {
+    const tail = feeds.value.slice(from);
+    const sorted = sortByReadingOrder(tail);
+    // 並びが変わらないなら配列を作り替えない（左ペインの再描画を誘発しないため）
+    if (sorted.every((feed, index) => feed === tail[index])) return;
+
+    const currentId = currentFeed.value?.id ?? null;
+    feeds.value = from === 0 ? sorted : [...feeds.value.slice(0, from), ...sorted];
+    // 全体を並べ替えたときだけ現在位置を引き継ぐ（並びが変わっても同じフィードに乗せる）。
+    // 後ろだけを並べ替えたときはカーソルより手前が動いていないので、探し直す必要が無い
+    if (from === 0 && currentId !== null) {
+      feedIndex.value = feeds.value.findIndex((feed) => feed.id === currentId);
+    }
+  }
+
+  /**
+   * 左ペイン全体を読む順序に並べ直す。現在位置は id で引き継ぐ。
+   * 全体を並べ直すのはユーザが明示的に順序を変えたときだけで、読み進めただけでは動かさない。
    */
   function resortKeepingCursor(): void {
-    const currentId = currentFeed.value?.id ?? null;
-    feeds.value = sortByReadingOrder(feeds.value);
-    if (currentId === null) return;
-    feedIndex.value = feeds.value.findIndex((feed) => feed.id === currentId);
+    resortFrom(0);
   }
 
   /**
@@ -321,12 +339,24 @@ export const useFeedsStore = defineStore('feeds', () => {
   }
 
   /**
-   * 未読数を手元の記事から数え直す。
+   * 未読数を手元の記事から数え直し、**その結果を並びに反映する**。
    * 背景取得が終わって「未読記事を全て持っている」状態になってから呼ぶこと。
    * 途中で呼ぶと、まだ届いていない記事の分だけ未読数が少なく出る。
+   *
+   * 数え直しと並べ直しを 1 つにしてあるのは、未読数が並び順に効くため。片方だけ走る
+   * 経路を作ると、左ペインの数字は変わったのに並びは古いまま、という状態になる。
+   *
+   * **並べ直すのはカーソルより後ろだけ**（docs/DESIGN.md §316）。読み進めると現在の
+   * フィードの未読数は減るので、全体を並べ替えると後ろに居た未読フィードがカーソルより
+   * 前へ移り、前方向にしか進まない `s` がそれを飛ばす。これから読む範囲だけなら
+   * 前へ移りようがない。読み終えているときは全体を並べ直す（カーソルは最後に読んで
+   * いたフィードに残るが、次に座る先は resumeIfUnread が先頭から探し直すので、
+   * 前後の区別に意味が無い）。
    */
   function recountUnread(): void {
     for (const feed of feeds.value) syncUnreadCount(feed);
+    // 読み終えている・まだ読み始めていない（feedIndex が -1）なら全体
+    resortFrom(finished.value ? 0 : feedIndex.value + 1);
   }
 
   /**

@@ -419,6 +419,60 @@ describe('読む順序', () => {
     ];
     expect(sortByReadingOrder(stored).map((f) => f.id)).toEqual([11, 9, 2, 5]);
   });
+
+  it('同期で未読数が変わったら、これから読む範囲を並べ直す', () => {
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    entriesStore.ingest([...entries(1, [1, 2]), ...entries(2, [3]), ...entries(3, [4])]);
+    feeds.setFeeds([feed(1), feed(2), feed(3), feed(4)]);
+    feeds.recountUnread();
+    feeds.enterFirstUnread();
+    expect(feeds.currentFeed?.id).toBe(1);
+
+    // 同期で新着が届いた。未読数は 3 > 4 > 2 の順になる
+    entriesStore.ingest([...entries(3, [5, 6, 7, 8]), ...entries(4, [9, 10])]);
+    feeds.recountUnread();
+
+    expect(feeds.feeds.map((f) => f.id)).toEqual([1, 3, 4, 2]);
+    // カーソルは読んでいたフィードから動かない
+    expect(feeds.currentFeed?.id).toBe(1);
+  });
+
+  it('読んでいるフィードとその手前は動かさない（s が未読を飛ばさないため）', () => {
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    entriesStore.ingest([...entries(1, [1, 2, 3]), ...entries(2, [4, 5, 6]), ...entries(3, [7])]);
+    feeds.setFeeds([feed(1), feed(2), feed(3)]);
+    feeds.recountUnread();
+    feeds.enterFirstUnread();
+    // 1 本目を読み終えて 2 本目へ。未読数は 1 < 3 になり、全体を並べ替えると
+    // フィード 3 が読んでいるフィードより前へ移る
+    feeds.readAllAndNext();
+    expect(feeds.currentFeed?.id).toBe(2);
+
+    entriesStore.ingest(entries(3, [8, 9]));
+    feeds.recountUnread();
+
+    expect(feeds.feeds.map((f) => f.id)).toEqual([1, 2, 3]);
+  });
+
+  it('読み終えていれば全体を並べ直す', () => {
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    entriesStore.ingest(entries(1, [1]));
+    feeds.setFeeds([feed(1), feed(2)]);
+    feeds.recountUnread();
+    feeds.enterFirstUnread();
+    expect(feeds.finishIfNothingUnread()).toBe(true);
+
+    // 読み終えた後に届いた新着。カーソルの前後を問わず並べ直す
+    entriesStore.ingest([...entries(1, [2]), ...entries(2, [3, 4, 5])]);
+    feeds.recountUnread();
+
+    expect(feeds.feeds.map((f) => f.id)).toEqual([2, 1]);
+    // カーソルは最後に読んでいたフィードに残る（a で戻る先）
+    expect(feeds.currentFeed?.id).toBe(1);
+  });
 });
 
 describe('未読に戻す（u）', () => {
