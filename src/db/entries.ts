@@ -168,6 +168,11 @@ const BATCH_SIZE = 50;
  * 記事を追加する。既に取り込み済みのものは (feed_id, guid_hash) の UNIQUE 制約に
  * 当たって黙って捨てられる。
  *
+ * **guid が違っても、同じフィードに URL とタイトルが同じ記事があれば入れない。**
+ * guid だけを付け替えて同じ記事を配り直すフィードがあるため。URL だけで
+ * 照合しない理由は docs/DESIGN.md §3。同じ batch の中で先に入った行も見えるので、
+ * 1 回の取得に同じ記事が 2 つ並んでいても 1 件になる。
+ *
  * **配列の順序がそのまま id の採番順になる。** id は読む順序と未読判定の両方を
  * 担うので、呼び出し側は古い記事から順に並べて渡すこと（CLAUDE.md の不変条件 1）。
  *
@@ -183,7 +188,10 @@ export async function insertEntries(
   const statement = db.prepare(
     `INSERT OR IGNORE INTO entries
        (feed_id, guid_hash, url, title, author, body, published_at, stored_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
+      WHERE NOT EXISTS (
+              SELECT 1 FROM entries WHERE feed_id = ?1 AND url = ?3 AND title = ?4
+            )`,
   );
 
   let inserted = 0;

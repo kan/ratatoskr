@@ -191,6 +191,46 @@ describe('crawl', () => {
     expect(entries.map((e) => e.title)).toEqual(['古い記事', '新しい記事', 'もっと新しい記事']);
   });
 
+  it('guid だけが付け替わった記事は、同じ URL とタイトルなら入れ直さない', async () => {
+    // BBC Japanese の guid 末尾の #N（issue #18）
+    const id = await seedFeed(env.DB, 'https://revision.example.com/feed.xml');
+    const crawlRevision = (revision: number, title: string) =>
+      crawl(env, {
+        now: NOW + revision * 3600,
+        feedIds: [id],
+        fetchImpl: stubFetch(() =>
+          xmlResponse(
+            rss2Xml
+              .replace('tag:example.com,2026:post-2', `https://example.com/posts/2#${revision}`)
+              .replace('<title>新しい記事</title>', `<title>${title}</title>`),
+          ),
+        ).fetch,
+      });
+
+    await crawlRevision(0, '新しい記事');
+    expect((await crawlRevision(1, '新しい記事')).inserted).toBe(0);
+    // 見出しが書き換わった続報は、未読として出す
+    expect((await crawlRevision(2, '新しい記事（続報）')).inserted).toBe(1);
+    const entries = await getEntryRows(env.DB, id);
+    expect(entries.map((e) => e.title)).toEqual(['古い記事', '新しい記事', '新しい記事（続報）']);
+  });
+
+  it('URL が同じでもタイトルが違う記事は、別の記事として入れる', async () => {
+    // 全ての記事がトップページにリンクするフィード（docs/DESIGN.md §3）
+    const xml = rss2Xml.replaceAll(
+      /<link>https:\/\/example\.com\/posts\/\d<\/link>/g,
+      '<link>https://example.com/</link>',
+    );
+    const id = await seedFeed(env.DB, 'https://same-link.example.com/feed.xml');
+    const summary = await crawl(env, {
+      now: NOW,
+      feedIds: [id],
+      fetchImpl: stubFetch(() => xmlResponse(xml)).fetch,
+    });
+
+    expect(summary.inserted).toBe(2);
+  });
+
   it('条件付き GET を送り、304 なら間隔を伸ばす', async () => {
     const id = await seedFeed(env.DB, 'https://cond.example.com/feed.xml', {
       etag: 'W/"v1"',
