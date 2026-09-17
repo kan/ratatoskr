@@ -15,6 +15,7 @@ import {
   pageUrlOf,
   scanCandidates,
 } from './extract';
+import { fetchNhkArticles, nhkArticleId } from './nhk';
 import { bodiesCollapsed, repeatedSignatures } from './repeat';
 import { sanitizeWithin } from './sanitize';
 import {
@@ -114,23 +115,48 @@ export async function fillFullText(
 
   // **どう採るかは記事ごとに決まる。** Bluesky の投稿は記事ページを見ても本文が
   // 入っていない（SPA）ので API から組み立てる（src/crawler/bluesky.ts）。
+  // NHK ONE の記事ページは閲覧用のトークンが無いとリードで切れるので、
+  // トークンを取って記事の JSON から組み立てる（src/crawler/nhk.ts）。
   // バッチ全体で振り分けると、1 件でも別ホストの記事が混ざった回に、残り全部が
   // 「候補の出ないページを引くだけ」に戻る
-  const posts: BlueskyTarget[] = [];
+  //
+  // API から採る経路は、セレクタも長さでの足切りも要らない。API が返した本文が
+  // その記事の全てで、比べる相手がいない
+  const posts: (ApiTarget & { ref: BlueskyPostRef })[] = [];
+  const news: ApiTarget[] = [];
   const articles: FullTextTarget[] = [];
   for (const target of targets) {
     const ref = blueskyPostRef(target.url);
-    if (ref === null) articles.push(target);
-    else posts.push({ target, ref });
+    if (ref !== null) {
+      posts.push({ target, key: ref.rkey, ref });
+      continue;
+    }
+    const nhkId = nhkArticleId(target.url);
+    if (nhkId !== null) news.push({ target, key: nhkId });
+    else articles.push(target);
   }
 
-  // 記事ページを引くために確保した枠のうち、Bluesky に回る分は返す。API 側は
-  // 10 件を 1〜2 回で取るので、自分で要る分だけ確保し直す。返さないと、この
-  // フィードが cron 1 回の全文取得の枠（20 件）を握ったまま数回しか使わない
-  releaseBudget(budget, posts.length);
+  // 記事ページを引くために確保した枠のうち、API から採る分は返す。Bluesky は
+  // 10 件を 1〜2 回で取り、NHK ONE はトークンの取得が先に要るので、どちらも自分で
+  // 要る分だけ確保し直す。返さないと、このフィードが cron 1 回の全文取得の枠
+  // （20 件）を握ったまま数回しか使わない
+  releaseBudget(budget, posts.length + news.length);
 
   const outcomes = [
-    await fillFromBluesky(posts, options),
+    outcomeFromApi(
+      posts,
+      await fetchBlueskyPosts(
+        posts.map((post) => post.ref),
+        options,
+      ),
+    ),
+    outcomeFromApi(
+      news,
+      await fetchNhkArticles(
+        news.map((item) => item.key),
+        options,
+      ),
+    ),
     await fillFromArticlePages(db, feed, articles, options),
   ];
 
@@ -236,39 +262,36 @@ async function fillFromArticlePages(
 }
 
 /**
- * Bluesky の投稿を API から採る。
+ * API から採った結果を記事へ戻す。
  *
- * セレクタは要らない（記事ページを見ないので、覚える場所が無い）。長さでの足切りも
- * しない——API が返した投稿がその投稿の全てなので、比べる相手がいない。
+ * **印を付けるのは `missing`（確かに無かった）だけ。** どちらにも載らなかった記事は
+ * 取りに行けなかった（API が落ちている・予算が届かなかった）ので、次の機会に回す。
+ * 印は取り直しを永久に止めるので、この規則は経路ごとに書き分けない
  */
-async function fillFromBluesky(
-  posts: BlueskyTarget[],
-  options: FullTextOptions,
-): Promise<FillOutcome> {
-  if (posts.length === 0) return { updates: [], filled: [] };
-
-  const { bodies, missing } = await fetchBlueskyPosts(
-    posts.map((post) => post.ref),
-    options,
-  );
-
+function outcomeFromApi(items: readonly ApiTarget[], fetched: ApiBodies): FillOutcome {
   const outcome: FillOutcome = { updates: [], filled: [] };
-  for (const { target, ref } of posts) {
-    const fullBody = bodies.get(ref.rkey);
+  for (const { target, key } of items) {
+    const fullBody = fetched.bodies.get(key);
     if (fullBody !== undefined) {
       outcome.updates.push({ id: target.id, fullBody });
       outcome.filled.push(target.id);
-    } else if (missing.has(ref.rkey)) {
-      // 消された・非公開の投稿。取り直しても結果は変わらない
+    } else if (fetched.missing.has(key)) {
       outcome.updates.push({ id: target.id, fullBody: '' });
     }
   }
   return outcome;
 }
 
-interface BlueskyTarget {
+/** API の経路が返す形（`BlueskyPosts` と `NhkArticles`。欄の意味はそれぞれのコメント） */
+interface ApiBodies {
+  bodies: ReadonlyMap<string, string>;
+  missing: ReadonlySet<string>;
+}
+
+interface ApiTarget {
   target: FullTextTarget;
-  ref: BlueskyPostRef;
+  /** API の結果を引く鍵（Bluesky は rkey、NHK ONE は記事 id） */
+  key: string;
 }
 
 /** 「取りに行ったが採らなかった」印（migrations/0003_full_text.sql） */

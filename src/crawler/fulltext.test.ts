@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { selectEntriesByIds } from '../db/entries';
 import { selectCrawlTargetsByIds } from '../db/feeds';
+import { nhkArticle, stubNhk } from '../test/nhk';
 import { getEntryRows, getFeedRow, resetDb, seedEntry, seedFeed, setReadSeq } from '../test/seed';
 import type { FetchBudget } from './fetch';
 import { fillFullText, looksSummaryOnly } from './fulltext';
@@ -618,6 +619,44 @@ describe('fillFullText', () => {
     expect(rows.find((row) => row.url === 'https://example.com/a')!.full_body).toContain(
       'これは記事ページにしか無い本文です',
     );
+  });
+
+  it('NHK ONE の記事は記事ページを取りに行かず、トークンを取って JSON から埋める', async () => {
+    // 記事ページの本文は、閲覧用のトークンが無いとリードで切れる
+    const feedId = await seedFeed(env.DB, 'https://news.web.nhk/n-data/conf/na/rss/cat0.xml', {
+      fullText: 1,
+    });
+    await seedEntry(env.DB, feedId, {
+      url: 'https://news.web.nhk/newsweb/na/nd-1',
+      body: SUMMARY,
+    });
+    await seedEntry(env.DB, feedId, {
+      url: 'https://news.web.nhk/newsweb/na/nd-gone',
+      body: SUMMARY,
+    });
+
+    const stub = stubNhk({ 'nd-1': nhkArticle('リードの文', '記事の本文') });
+    const budget: FetchBudget = { remaining: 10 };
+
+    const result = await fillFullText(env.DB, await targetOf(feedId), {
+      fetchImpl: stub.impl,
+      ai: undefined,
+      budget,
+    });
+
+    expect(result.filled).toHaveLength(1);
+    // 記事ページは 1 枚も引かない
+    expect(stub.calls.some((url) => url.startsWith('https://news.web.nhk/newsweb/'))).toBe(false);
+    // 要求はトークンの 3 回と記事の 2 回。記事ページ用に確保した枠は返し、要る分だけ使う
+    expect(stub.calls).toHaveLength(5);
+    expect(budget.remaining).toBe(5);
+
+    const rows = await getEntryRows(env.DB, feedId);
+    const filled = rows.find((row) => row.url?.endsWith('/nd-1'))!.full_body;
+    expect(filled).toContain('<p>リードの文</p><p>記事の本文</p>');
+    // 消えた記事には印を残す
+    expect(rows.find((row) => row.url?.endsWith('/nd-gone'))!.full_body).toBe('');
+    expect((await getFeedRow(env.DB, feedId)).full_text_selector).toBeNull();
   });
 
   it('Bluesky の API が落ちている回に、記事へ印を残さない', async () => {
