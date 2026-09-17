@@ -15,6 +15,7 @@
  * 記事ページを 1 枚ずつ引くより相手のサーバにも優しい。
  */
 
+import { asArray, asNumber, asObject, asString } from '../lib/json';
 import { fetchJson, releaseBudget, reserveBudget, type FetchBudget } from './fetch';
 import { escapeHtml, sanitizeHtml } from './sanitize';
 
@@ -391,22 +392,4 @@ function isContinuation(byte: number | undefined): boolean {
  */
 function escapeText(text: string): string {
   return escapeHtml(text).replaceAll('\n', '<br>');
-}
-
-function asObject(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === 'string' ? value : null;
-}
-
-function asNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isInteger(value) ? value : null;
 }
