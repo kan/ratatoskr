@@ -3,3 +3,8 @@ packages:
 allowBuilds:
   esbuild: true
   workerd: true
+# @cloudflare/vitest-pool-workers 0.22.0 が miniflare を完全一致で固定しており、その先の
+# sharp 0.35.2 が libheif の脆弱性（GHSA-rgj7-g3m4-5g8c）に当たる。dependabot では上げられない
+# ので、修正版へ寄せる。pool-workers が 0.35.4 以上の miniflare を引くようになったら外す
+overrides:
+  'sharp@<0.35.4': '0.35.4'
