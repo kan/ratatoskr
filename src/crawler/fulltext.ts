@@ -15,18 +15,11 @@ import {
   pageUrlOf,
   scanCandidates,
 } from './extract';
+import { fetchIdolmasterArticles, idolmasterArticlePath } from './idolmaster';
 import { fetchNhkArticles, nhkArticleId } from './nhk';
 import { bodiesCollapsed, repeatedSignatures } from './repeat';
 import { sanitizeWithin } from './sanitize';
-import {
-  describeNetworkError,
-  readBoundedText,
-  releaseBudget,
-  reserveBudget,
-  TIMEOUT_MS,
-  USER_AGENT,
-  type FetchBudget,
-} from './fetch';
+import { fetchArticlePage, releaseBudget, reserveBudget, type FetchBudget } from './fetch';
 
 /**
  * 要約しか配信しないフィードの本文を、記事ページから取ってくる（M7）。
@@ -60,8 +53,6 @@ const CONCURRENCY = 2;
  * 初めて外枠が分かるので（src/crawler/repeat.ts）、1 ページで打ち切ると信号が無い
  */
 const MAX_SELECTOR_TRIALS = 3;
-
-const ACCEPT = 'text/html, application/xhtml+xml;q=0.9, */*;q=0.5';
 
 export interface FullTextOptions {
   fetchImpl: typeof fetch;
@@ -117,6 +108,8 @@ export async function fillFullText(
   // 入っていない（SPA）ので API から組み立てる（src/crawler/bluesky.ts）。
   // NHK ONE の記事ページは閲覧用のトークンが無いとリードで切れるので、
   // トークンを取って記事の JSON から組み立てる（src/crawler/nhk.ts）。
+  // アイドルマスター公式ニュースの記事ページは、埋め込み JSON に本文の HTML が
+  // まるごと入っているので、採点せずにそこを採る（src/crawler/idolmaster.ts）。
   // バッチ全体で振り分けると、1 件でも別ホストの記事が混ざった回に、残り全部が
   // 「候補の出ないページを引くだけ」に戻る
   //
@@ -124,6 +117,7 @@ export async function fillFullText(
   // その記事の全てで、比べる相手がいない
   const posts: (ApiTarget & { ref: BlueskyPostRef })[] = [];
   const news: ApiTarget[] = [];
+  const official: ApiTarget[] = [];
   const articles: FullTextTarget[] = [];
   for (const target of targets) {
     const ref = blueskyPostRef(target.url);
@@ -132,7 +126,12 @@ export async function fillFullText(
       continue;
     }
     const nhkId = nhkArticleId(target.url);
-    if (nhkId !== null) news.push({ target, key: nhkId });
+    if (nhkId !== null) {
+      news.push({ target, key: nhkId });
+      continue;
+    }
+    const officialPath = idolmasterArticlePath(target.url);
+    if (officialPath !== null) official.push({ target, key: officialPath });
     else articles.push(target);
   }
 
@@ -140,7 +139,17 @@ export async function fillFullText(
   // 10 件を 1〜2 回で取り、NHK ONE はトークンの取得が先に要るので、どちらも自分で
   // 要る分だけ確保し直す。返さないと、このフィードが cron 1 回の全文取得の枠
   // （20 件）を握ったまま数回しか使わない
+  //
+  // **公式ニュースの分は返さない。** 記事 1 件に 1 リクエストで、確保した枠の
+  // 使い方が記事ページと同じなので返す理由が無い。いったん返すと、Bluesky と NHK を
+  // 待つ間に並列の別フィードに取られ、この回は 1 件も取りに行けないことがある
   releaseBudget(budget, posts.length + news.length);
+  const officialArticles = await fetchIdolmasterArticles(
+    official.map((item) => item.key),
+    options.fetchImpl,
+  );
+  // 途中で打ち切った回（一時的な失敗）に取りに行かなかった分だけ返す
+  releaseBudget(budget, official.length - officialArticles.attempted);
 
   const outcomes = [
     outcomeFromApi(
@@ -157,6 +166,7 @@ export async function fillFullText(
         options,
       ),
     ),
+    outcomeFromApi(official, officialArticles),
     await fillFromArticlePages(db, feed, articles, options),
   ];
 
@@ -282,7 +292,10 @@ function outcomeFromApi(items: readonly ApiTarget[], fetched: ApiBodies): FillOu
   return outcome;
 }
 
-/** API の経路が返す形（`BlueskyPosts` と `NhkArticles`。欄の意味はそれぞれのコメント） */
+/**
+ * API の経路が返す形（`BlueskyPosts`、`NhkArticles`、`IdolmasterArticles`。
+ * 欄の意味はそれぞれのコメント）
+ */
 interface ApiBodies {
   bodies: ReadonlyMap<string, string>;
   missing: ReadonlySet<string>;
@@ -290,7 +303,7 @@ interface ApiBodies {
 
 interface ApiTarget {
   target: FullTextTarget;
-  /** API の結果を引く鍵（Bluesky は rkey、NHK ONE は記事 id） */
+  /** API の結果を引く鍵（Bluesky は rkey、NHK ONE は記事 id、公式ニュースは記事のパス） */
   key: string;
 }
 
@@ -341,7 +354,7 @@ async function fetchArticles(
   for (let i = 0; i < urls.length; i += CONCURRENCY) {
     const chunk = urls.slice(i, i + CONCURRENCY);
     const results = await Promise.allSettled(
-      chunk.map(async (url) => ({ url, outcome: await fetchArticle(url, fetchImpl) })),
+      chunk.map(async (url) => ({ url, outcome: await fetchArticlePage(url, fetchImpl) })),
     );
     for (const result of results) {
       if (result.status !== 'fulfilled') continue;
@@ -355,37 +368,6 @@ async function fetchArticles(
     }
   }
   return { pages, gone };
-}
-
-type ArticleOutcome =
-  | { kind: 'ok'; html: string }
-  /** 記事ページが消えている。取り直しても結果は変わらない */
-  | { kind: 'gone' }
-  /** 一時的な失敗。次の機会に回す */
-  | { kind: 'retry' };
-
-async function fetchArticle(url: string, fetchImpl: typeof fetch): Promise<ArticleOutcome> {
-  // 条件付き GET は使わない。記事ページは 1 度しか取りに行かないので、
-  // etag を覚えておく先も、覚えておく意味も無い
-  let response: Response;
-  try {
-    response = await fetchImpl(url, {
-      headers: { 'user-agent': USER_AGENT, accept: ACCEPT },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (err) {
-    // 記事 1 本が取れなくてもフィードの取得は成功している。
-    // feeds.last_error に書くとフィード自体が壊れているように見えるので書かない
-    console.warn('全文の取得に失敗', url, describeNetworkError(err).message);
-    return { kind: 'retry' };
-  }
-  // 404 / 410 は何度引いても同じ。それ以外（5xx や 429）は時間を置けば直りうる
-  if (response.status === 404 || response.status === 410) return { kind: 'gone' };
-  if (!response.ok) return { kind: 'retry' };
-
-  const read = await readBoundedText(response);
-  return read.kind === 'ok' ? { kind: 'ok', html: read.body } : { kind: 'retry' };
 }
 
 /**

@@ -6,6 +6,7 @@ import {
   USER_AGENT,
 } from './fetch';
 import { parseFeed } from './parse';
+import { knownSource } from './source';
 
 /**
  * フィードの自動検出（docs/API.md の POST /api/feeds）。
@@ -91,6 +92,9 @@ export async function discoverFeed(
   url: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Discovery> {
+  const known = knownAt(url);
+  if (known !== null) return { ...known, viaAncestor: false };
+
   const first = await discoverAt(url, fetchImpl, AbortSignal.timeout(TIMEOUT_MS));
   // **遡るのは「取れたが候補が 0 件」のときだけ。** 404 や接続の失敗は、
   // 何が起きたかをそのまま返す方が直しようがある
@@ -109,6 +113,10 @@ export async function discoverFeed(
   // 遡ると短縮サービスのトップページを叩きに行くことになる
   for (const parent of ancestors(first.pageUrl)) {
     if (seen.has(parent)) continue;
+    // 記事の URL を貼られて、遡った先が既知のソースの一覧だった
+    const knownParent = knownAt(parent);
+    if (knownParent !== null) return { ...knownParent, viaAncestor: true };
+
     const found = await discoverAt(parent, fetchImpl, deadline);
     if (seen.has(found.pageUrl)) continue;
     seen.add(found.pageUrl);
@@ -119,6 +127,20 @@ export async function discoverFeed(
     if (hit) return { ...found, viaAncestor: true };
   }
   return { ...first, viaAncestor: false };
+}
+
+/**
+ * RSS を出していないが取り込み方を知っているサイト（src/crawler/source.ts）なら、
+ * 取りに行かずにフィードとして返す。取っても `<link rel="alternate">` は無く、
+ * 候補無しになるだけ
+ */
+function knownAt(url: string): Attempt | null {
+  const known = knownSource(url);
+  if (known === null) return null;
+  return {
+    result: { kind: 'feed', url: known.url, title: known.title, siteUrl: known.url },
+    pageUrl: url,
+  };
 }
 
 /**

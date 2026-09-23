@@ -1,0 +1,67 @@
+{
+  "statusCode": 200,
+  "data": {
+    "apiStatus": true,
+    "total_count": 11561,
+    "start": 0,
+    "limit": 3,
+    "count": 3,
+    "time": 0,
+    "article_list": [
+      {
+        "_id": "23423",
+        "path": "01_19820",
+        "title": "【SideM】フレグランスブランドAnidealと大丸コラボ第1弾メンバーのコラボレーション香水が登場！",
+        "startdate": 1789009200,
+        "updated": 1789009202,
+        "dspdate": "2026/09/10 12:00",
+        "thumbnail": "/idolmaster/jp/article/1002/2026/09/OG3lKeg0aYQPkQnWwVuEuys12U2vf69W.jpeg?_=15f33c454175435ccdd147c45ad6b356",
+        "brand": [{ "name": "SideM", "code": "SIDEM" }],
+        "categories": {
+          "name": "News",
+          "subcategory": [
+            { "name": "グッズ", "code": "GOODS" },
+            { "name": "コラボ・キャンペーン", "code": "COLLABO-CAMP" }
+          ],
+          "code": "NEWS"
+        },
+        "memberflg": "0",
+        "url": "https://idolmaster-official.jp/news/01_19820.html"
+      },
+      {
+        "_id": "23405",
+        "path": "01_19812",
+        "title": "【学マス】#明日までギリギリ100連無料 QUOカードプレゼントキャンペーン開催中！",
+        "startdate": 1789030800,
+        "updated": 1789030802,
+        "dspdate": "2026/09/10 00:00",
+        "thumbnail": "/idolmaster/jp/article/1008/2026/09/2Nu4D65z0Du8K2JcEblFyiU9wzdmAG07.jpeg?_=15f33c454175435ccdd147c45ad6b356",
+        "brand": [{ "name": "学園アイドルマスター", "code": "GAKUEN" }],
+        "categories": {
+          "name": "News",
+          "subcategory": [{ "name": "その他", "code": "OTHER" }],
+          "code": "NEWS"
+        },
+        "memberflg": "0",
+        "url": "https://idolmaster-official.jp/news/01_19812.html"
+      },
+      {
+        "_id": "23000",
+        "path": "01_19485",
+        "title": "【ログイン限定】「No 1 feel alone」衣装設定 公開！",
+        "startdate": 1787304600,
+        "updated": 1787304602,
+        "dspdate": "2026/08/21 18:30",
+        "thumbnail": "/idolmaster/jp/article/020/2026/07/qZrJKftrA5GVQDd42zaDAl4iA5zIjIjF.jpeg?_=15f33c454175435ccdd147c45ad6b356",
+        "brand": [{ "name": "シャイニーカラーズ", "code": "SHINYCOLORS" }],
+        "categories": {
+          "name": "News",
+          "subcategory": [{ "name": "ゲーム", "code": "GAME" }],
+          "code": "NEWS"
+        },
+        "memberflg": "1",
+        "url": "https://idolmaster-official.jp/news/01_19485.html"
+      }
+    ]
+  }
+}

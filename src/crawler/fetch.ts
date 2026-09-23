@@ -183,6 +183,48 @@ function describeHttpStatus(response: Response): { message: string; reason: Feed
   return { message, reason: 'other' };
 }
 
+export type ArticlePageOutcome =
+  | { kind: 'ok'; html: string }
+  /** 記事ページが消えている。取り直しても結果は変わらない */
+  | { kind: 'gone' }
+  /** 一時的な失敗。次の機会に回す */
+  | { kind: 'retry' };
+
+const ARTICLE_ACCEPT = 'text/html, application/xhtml+xml;q=0.9, */*;q=0.5';
+
+/**
+ * 記事ページを 1 枚取る（全文取得。src/crawler/fulltext.ts と src/crawler/idolmaster.ts）。
+ *
+ * 取得の作法（名乗り、打ち切り、ステータスの分け方、大きさの上限）を 1 か所に置く。
+ * 片方だけ変えると、同じ記事ページの取得なのに経路によって振る舞いがずれる
+ */
+export async function fetchArticlePage(
+  url: string,
+  fetchImpl: typeof fetch,
+): Promise<ArticlePageOutcome> {
+  // 条件付き GET は使わない。記事ページは 1 度しか取りに行かないので、
+  // etag を覚えておく先も、覚えておく意味も無い
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      headers: { 'user-agent': USER_AGENT, accept: ARTICLE_ACCEPT },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (err) {
+    // 記事 1 本が取れなくてもフィードの取得は成功している。
+    // feeds.last_error に書くとフィード自体が壊れているように見えるので書かない
+    console.warn('全文の取得に失敗', url, describeNetworkError(err).message);
+    return { kind: 'retry' };
+  }
+  // 404 / 410 は何度引いても同じ。それ以外（5xx や 429）は時間を置けば直りうる
+  if (response.status === 404 || response.status === 410) return { kind: 'gone' };
+  if (!response.ok) return { kind: 'retry' };
+
+  const read = await readBoundedText(response);
+  return read.kind === 'ok' ? { kind: 'ok', html: read.body } : { kind: 'retry' };
+}
+
 export async function fetchFeed(
   target: FetchTarget,
   fetchImpl: typeof fetch = fetch,

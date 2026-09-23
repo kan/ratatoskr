@@ -53,6 +53,32 @@ async function candidates(head: string): Promise<{ url: string; title: string | 
 }
 
 describe('discoverFeed', () => {
+  it('RSS を出さないが取り込み方を知っているサイトは、取りに行かずに受け付ける', async () => {
+    const { asked, impl } = recording();
+    const found = await discoverFeed('https://asobiticket2.asobistore.jp/booths/', impl);
+    expect(found.result).toEqual({
+      kind: 'feed',
+      url: 'https://asobiticket2.asobistore.jp/booths',
+      title: 'アソビチケット 受付中のチケット',
+      siteUrl: 'https://asobiticket2.asobistore.jp/booths',
+    });
+    expect(found.viaAncestor).toBe(false);
+    expect(asked).toEqual([]);
+  });
+
+  it('記事の URL を貼られ、遡った先が既知のサイトなら、それを候補にする', async () => {
+    const { asked, impl } = recording();
+    const found = await discoverFeed('https://idolmaster-official.jp/news/01_19877.html', impl);
+    expect(found.result).toMatchObject({
+      kind: 'feed',
+      url: 'https://idolmaster-official.jp/news',
+    });
+    // 貼られた場所と違うので、確認を挟ませる
+    expect(found.viaAncestor).toBe(true);
+    // 記事ページは見るが、一覧のページは取りに行かない
+    expect(asked).toEqual(['https://idolmaster-official.jp/news/01_19877.html']);
+  });
+
   it('フィードそのものを渡されたらそれを使う', async () => {
     const found = await discoverFeed('https://example.com/feed', stub(FEED_XML, 'application/xml'));
     expect(found.result).toMatchObject({

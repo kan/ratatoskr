@@ -24,10 +24,15 @@ export function intervalAfterUpdate(): number {
   return INITIAL_INTERVAL;
 }
 
-/** 新着が無かった場合。相手のサーバに通う頻度を落としていく */
-export function intervalAfterNoUpdate(current: number): number {
+/**
+ * 新着が無かった場合。相手のサーバに通う頻度を落としていく。
+ *
+ * @param max 延ばす上限。ソースによっては 6 時間も待てない（先着の発売を知るのが
+ *   遅れる。src/crawler/asobiticket.ts）
+ */
+export function intervalAfterNoUpdate(current: number, max = MAX_INTERVAL): number {
   const grown = Math.floor(current * INTERVAL_GROWTH);
-  return Math.min(Math.max(grown, INITIAL_INTERVAL), MAX_INTERVAL);
+  return Math.min(Math.max(grown, INITIAL_INTERVAL), max);
 }
 
 /** 失敗時の待ち時間。failures は今回の失敗を含めた連続失敗回数（1 始まり） */

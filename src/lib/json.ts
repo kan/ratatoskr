@@ -6,6 +6,15 @@
  * 「無かった」と同じ扱いで先へ進める。
  */
 
+/** 文字列を JSON として読む。壊れていれば null（「無かった」と同じ扱いにする） */
+export function parseJson(body: string): unknown {
+  try {
+    return JSON.parse(body);
+  } catch {
+    return null;
+  }
+}
+
 export function asObject(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)

@@ -1,0 +1,122 @@
+{
+  "data": [
+    {
+      "id": "7d0c5a4e-1f2b-4c3d-9e8f-0a1b2c3d4e5f",
+      "type": "reception",
+      "attributes": {
+        "name": "一般発売（先着）",
+        "status": "public",
+        "entry_type": "fcfs",
+        "entry_period_status": "before_entry_period",
+        "entry_period_starts_at": "2026-10-10T12:00:00.000+09:00",
+        "entry_period_ends_at": "2026-10-20T23:59:59.999+09:00",
+        "result_announcement_scheduled_at": null,
+        "top_body": "<p>先着順での受付となります。</p>",
+        "main_body": ""
+      },
+      "relationships": {
+        "tour": { "data": { "id": "sidem-producer-meeting", "type": "tour" } },
+        "cover_image": { "data": null }
+      }
+    },
+    {
+      "id": "c8ebec95-7950-4db1-8177-05e72fe230d2",
+      "type": "reception",
+      "attributes": {
+        "name": "アソビストアプレミアム会員先行",
+        "status": "public",
+        "entry_type": "lottery",
+        "entry_period_status": "within_entry_period",
+        "entry_period_starts_at": "2026-09-16T12:00:00.000+09:00",
+        "entry_period_ends_at": "2026-09-27T23:59:59.999+09:00",
+        "result_announcement_scheduled_at": "2026-10-08T13:00:00.000+09:00",
+        "top_body": "<p style=\"margin-top: 0px;\"><span style=\"color: rgb(230, 0, 0);\">こちらは「アソビストアプレミアム会員」限定の受付となります。</span></p><script>alert(1)</script>",
+        "main_body": ""
+      },
+      "relationships": {
+        "tour": { "data": { "id": "cinderellagirls-15th-orchestra", "type": "tour" } },
+        "cover_image": {
+          "data": { "id": "263b6c69-b183-4d09-ae76-b4eda9351f8f", "type": "image" }
+        }
+      }
+    },
+    {
+      "id": "32c81b97-dca0-4bf4-a52e-fbb237dc806d",
+      "type": "reception",
+      "attributes": {
+        "name": "一般発売（先着）",
+        "status": "public",
+        "entry_type": "fcfs",
+        "entry_period_status": "within_entry_period",
+        "entry_period_starts_at": "2026-09-11T12:00:00.000+09:00",
+        "entry_period_ends_at": "2026-09-26T17:00:59.999+09:00",
+        "result_announcement_scheduled_at": null,
+        "top_body": "<p>チケットのお申し込みには『バンダイナムコID』が必要です。</p>",
+        "main_body": ""
+      },
+      "relationships": {
+        "tour": { "data": { "id": "zerokyori-no2", "type": "tour" } },
+        "cover_image": { "data": null }
+      }
+    },
+    {
+      "id": "a521dfd3-87d6-4a39-9842-d3bdfd33fff7",
+      "type": "reception",
+      "attributes": {
+        "name": "一般受付（抽選）",
+        "status": "public",
+        "entry_type": "lottery",
+        "entry_period_status": "after_entry_period",
+        "entry_period_starts_at": "2026-09-10T13:00:00.000+09:00",
+        "entry_period_ends_at": "2026-09-15T23:59:59.999+09:00",
+        "result_announcement_scheduled_at": "2026-09-22T13:00:00.000+09:00",
+        "top_body": "<p>物販整理券の抽選受付です。</p>",
+        "main_body": ""
+      },
+      "relationships": {
+        "tour": { "data": { "id": "shinycolors-mastershowpiece-goods", "type": "tour" } },
+        "cover_image": { "data": null }
+      }
+    }
+  ],
+  "included": [
+    {
+      "id": "sidem-producer-meeting",
+      "type": "tour",
+      "attributes": { "name": "THE IDOLM@STER SideM PRODUCER MEETING ～AJewelholIc!!!～" },
+      "relationships": { "booth": { "data": { "id": "sidem-261226", "type": "booth" } } }
+    },
+    {
+      "id": "cinderellagirls-15th-orchestra",
+      "type": "tour",
+      "attributes": {
+        "name": "THE IDOLM@STER CINDERELLA GIRLS 15th ANNIVERSARY ORCHESTRA CONCERT ～ シンデレラの演奏会 ～"
+      },
+      "relationships": { "booth": { "data": { "id": "cinderellagirls-270111", "type": "booth" } } }
+    },
+    {
+      "id": "zerokyori-no2",
+      "type": "tour",
+      "attributes": { "name": "ゼロキョリコネクト No.2 ～インディーゲーム編～ Supported by xeen" },
+      "relationships": { "booth": { "data": { "id": "zerokyori-260926", "type": "booth" } } }
+    },
+    {
+      "id": "shinycolors-mastershowpiece-goods",
+      "type": "tour",
+      "attributes": { "name": "【物販整理券】283 PRODUCTION Solo Live Collection ーMaster ShowPieceー" },
+      "relationships": { "booth": { "data": { "id": "shinycolors-260926", "type": "booth" } } }
+    },
+    {
+      "id": "263b6c69-b183-4d09-ae76-b4eda9351f8f",
+      "type": "image",
+      "attributes": {
+        "reading_urls": {
+          "original": "https://media.app.t-riple.com/public/cloudfront/images/asobi-ticket/263b6c69-b183-4d09-ae76-b4eda9351f8f.png.nop",
+          "small": "https://media.app.t-riple.com/public/cloudfront/images/asobi-ticket/263b6c69-b183-4d09-ae76-b4eda9351f8f.png.150",
+          "medium": "https://media.app.t-riple.com/public/cloudfront/images/asobi-ticket/263b6c69-b183-4d09-ae76-b4eda9351f8f.png.800",
+          "large": "https://media.app.t-riple.com/public/cloudfront/images/asobi-ticket/263b6c69-b183-4d09-ae76-b4eda9351f8f.png.1200"
+        }
+      }
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import { nhkArticle, stubNhk } from '../test/nhk';
 import { getEntryRows, getFeedRow, resetDb, seedEntry, seedFeed, setReadSeq } from '../test/seed';
 import type { FetchBudget } from './fetch';
 import { fillFullText, looksSummaryOnly } from './fulltext';
+import idolmasterArticleHtml from './__fixtures__/idolmaster-article.html?raw';
 
 /**
  * 記事ページからの本文取得（M7）。
@@ -656,6 +657,43 @@ describe('fillFullText', () => {
     expect(filled).toContain('<p>リードの文</p><p>記事の本文</p>');
     // 消えた記事には印を残す
     expect(rows.find((row) => row.url?.endsWith('/nd-gone'))!.full_body).toBe('');
+    expect((await getFeedRow(env.DB, feedId)).full_text_selector).toBeNull();
+  });
+
+  it('公式ニュースの記事は採点せず、記事ページの埋め込み JSON から埋める', async () => {
+    const feedId = await seedFeed(env.DB, 'https://idolmaster-official.jp/news', { fullText: 1 });
+    await seedEntry(env.DB, feedId, {
+      url: 'https://idolmaster-official.jp/news/01_19877',
+      body: SUMMARY,
+    });
+    await seedEntry(env.DB, feedId, {
+      url: 'https://idolmaster-official.jp/news/01_1',
+      body: SUMMARY,
+    });
+
+    const stub = stubFetch({
+      'https://idolmaster-official.jp/news/01_19877': idolmasterArticleHtml,
+    });
+    const budget: FetchBudget = { remaining: 10 };
+
+    const result = await fillFullText(env.DB, await targetOf(feedId), {
+      fetchImpl: stub.impl,
+      // 採点の経路に入れば呼ばれる。呼ばれたら本文が変わるので気付ける
+      ai: stubAi(99),
+      budget,
+    });
+
+    expect(result.filled).toHaveLength(1);
+    // 記事 1 件に 1 回ずつ。使った 2 件ぶんだけ減る
+    expect(stub.calls).toHaveLength(2);
+    expect(budget.remaining).toBe(8);
+
+    const rows = await getEntryRows(env.DB, feedId);
+    expect(rows.find((row) => row.url?.endsWith('/01_19877'))!.full_body).toContain(
+      'プロデューサーさん、こんばんは！',
+    );
+    // 消えた記事には印を残す
+    expect(rows.find((row) => row.url?.endsWith('/01_1'))!.full_body).toBe('');
     expect((await getFeedRow(env.DB, feedId)).full_text_selector).toBeNull();
   });
 

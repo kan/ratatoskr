@@ -2,6 +2,8 @@ import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import { crawl } from './index';
 import { getEntryRows, getFeedRow, seedFeed } from '../test/seed';
+import asobiReceptionsJson from './__fixtures__/asobiticket-receptions.json?raw';
+import idolmasterNewsJson from './__fixtures__/idolmaster-news.json?raw';
 import rss2Xml from './__fixtures__/rss2.xml?raw';
 
 const NOW = Math.floor(Date.parse('2026-08-05T00:00:00Z') / 1000);
@@ -342,5 +344,73 @@ describe('crawl', () => {
 
     expect(stub.calls.some((call) => call.url.includes('disabled'))).toBe(false);
     expect((await getFeedRow(env.DB, id)).last_fetched_at).toBeNull();
+  });
+});
+
+/**
+ * RSS を出していないサイト（src/crawler/source.ts）。取得とパースの部分だけが
+ * 差し替わり、サニタイズや採番は RSS と同じ経路を通ることを見る
+ */
+describe('crawl（RSS を出さないサイト）', () => {
+  function jsonResponse(body: string, headers: Record<string, string> = {}): Response {
+    return new Response(body, {
+      status: 200,
+      headers: { 'content-type': 'application/json', ...headers },
+    });
+  }
+
+  it('公式ニュースは、一覧の並びによらず公開順に採番する', async () => {
+    const id = await seedFeed(env.DB, 'https://idolmaster-official.jp/news');
+    const stub = stubFetch(({ url }) =>
+      url.includes('/Token/get')
+        ? jsonResponse(JSON.stringify({ data: { token: 't' } }))
+        : jsonResponse(idolmasterNewsJson),
+    );
+
+    const summary = await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+    expect(summary).toMatchObject({ checked: 1, inserted: 3, failed: 0 });
+
+    const entries = await getEntryRows(env.DB, id);
+    expect(entries.map((entry) => entry.url)).toEqual([
+      'https://idolmaster-official.jp/news/01_19485',
+      'https://idolmaster-official.jp/news/01_19820',
+      'https://idolmaster-official.jp/news/01_19812',
+    ]);
+    expect((await getFeedRow(env.DB, id)).title).toBe('アイドルマスター公式 ニュース');
+  });
+
+  it('アソビチケットは受付中のものを取り込み、受付の案内をサニタイズする', async () => {
+    const id = await seedFeed(env.DB, 'https://asobiticket2.asobistore.jp/booths');
+    const stub = stubFetch(() => jsonResponse(asobiReceptionsJson, { etag: 'W/"v1"' }));
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+
+    expect(stub.calls.map((call) => call.url)).toEqual([
+      'https://asobi-ticket.api.app.t-riple.com/api/v1/public/receptions',
+    ]);
+    const entries = await getEntryRows(env.DB, id);
+    expect(entries.map((entry) => entry.url)).toEqual([
+      'https://asobiticket2.asobistore.jp/receptions/32c81b97-dca0-4bf4-a52e-fbb237dc806d',
+      'https://asobiticket2.asobistore.jp/receptions/c8ebec95-7950-4db1-8177-05e72fe230d2',
+    ]);
+    // フィクスチャの受付の案内には <script> を仕込んである
+    expect(entries[1].body).toContain('限定の受付となります。');
+    expect(entries[1].body).not.toContain('<script');
+    expect((await getFeedRow(env.DB, id)).etag).toBe('W/"v1"');
+  });
+
+  it('アソビチケットは、更新が無くても取得の間隔を 1 時間より延ばさない', async () => {
+    const id = await seedFeed(env.DB, 'https://asobiticket2.asobistore.jp/booths', {
+      etag: 'W/"v1"',
+      fetchInterval: 3600,
+    });
+    const stub = stubFetch(() => new Response(null, { status: 304 }));
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+
+    expect(stub.calls[0].headers.get('if-none-match')).toBe('W/"v1"');
+    const feed = await getFeedRow(env.DB, id);
+    expect(feed.fetch_interval).toBe(3600);
+    expect(feed.next_fetch_at).toBe(NOW + 3600);
   });
 });

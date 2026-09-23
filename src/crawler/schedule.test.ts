@@ -24,6 +24,11 @@ describe('取得間隔の適応制御', () => {
     for (let i = 0; i < 50; i += 1) interval = intervalAfterNoUpdate(interval);
     expect(interval).toBe(MAX_INTERVAL);
   });
+
+  it('上限を渡されたら、そこで頭打ちにする', () => {
+    expect(intervalAfterNoUpdate(INITIAL_INTERVAL, INITIAL_INTERVAL)).toBe(INITIAL_INTERVAL);
+    expect(intervalAfterNoUpdate(MAX_INTERVAL, 7200)).toBe(7200);
+  });
 });
 
 describe('失敗バックオフ', () => {

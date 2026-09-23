@@ -9,13 +9,12 @@ import {
   type CrawlTarget,
 } from '../db/feeds';
 import { insertEntries, selectKnownGuidHashes, type NewEntry } from '../db/entries';
-import { errorMessage } from '../lib/errors';
 import { sha256Hex } from '../lib/hash';
 import { mayHaveTweetEmbed, resolveTweetEmbeds } from './embed';
-import { fetchFeed, type FetchBudget } from './fetch';
+import type { FetchBudget } from './fetch';
 import { fillFullText, looksSummaryOnly, type FullTextOptions } from './fulltext';
-import { parseFeed } from './parse';
 import { sanitizeHtml } from './sanitize';
+import { sourceFor } from './source';
 import { titleFromBody } from './title';
 import {
   backoffAfterFailure,
@@ -142,7 +141,8 @@ async function crawlFeed(
   now: number,
   options: FullTextOptions,
 ): Promise<FeedResult> {
-  const outcome = await fetchFeed(target, options.fetchImpl);
+  const source = sourceFor(target.url);
+  const outcome = await source.fetch(target, options.fetchImpl, now);
 
   if (outcome.kind === 'error') {
     await recordFailure(db, target, now, outcome.message, outcome.reason);
@@ -150,7 +150,7 @@ async function crawlFeed(
   }
 
   if (outcome.kind === 'notModified' || outcome.kind === 'unchanged') {
-    const fetchInterval = intervalAfterNoUpdate(target.fetchInterval);
+    const fetchInterval = intervalAfterNoUpdate(target.fetchInterval, source.maxInterval);
     await markFetchUnchanged(db, {
       id: target.id,
       now,
@@ -163,14 +163,7 @@ async function crawlFeed(
     return { inserted: 0, failed: false, filled };
   }
 
-  let parsed;
-  try {
-    parsed = parseFeed(outcome.body, now);
-  } catch (err) {
-    // 取れてはいるがフィードではない。URL の付け替えでしか直らないので分けて記録する
-    await recordFailure(db, target, now, errorMessage(err), 'not_a_feed');
-    return { inserted: 0, failed: true, filled: [] };
-  }
+  const parsed = outcome.feed;
 
   // フィードは新しい記事から並べるのが通例。逆順に入れて、古い記事ほど小さい
   // id を持つようにする。id の並びがそのまま読む順序になる（CLAUDE.md 不変条件 1）
@@ -198,7 +191,9 @@ async function crawlFeed(
   const inserted = await insertEntries(db, rows, now);
 
   const fetchInterval =
-    inserted > 0 ? intervalAfterUpdate() : intervalAfterNoUpdate(target.fetchInterval);
+    inserted > 0
+      ? intervalAfterUpdate()
+      : intervalAfterNoUpdate(target.fetchInterval, source.maxInterval);
   await markFetchSuccess(db, {
     id: target.id,
     now,
