@@ -227,12 +227,13 @@ export interface FullTextTarget {
 }
 
 /**
- * 全文をまだ取りに行っていない未読記事を、**読む順（id 昇順）**に返す。
+ * 全文をまだ取りに行っていない未読記事を、**新しい順（id 降順）**に返す。
  *
  * 未読に絞るのは、読まないと決めた記事のために相手のサーバへ取りに行かないため。
- * 読む順なのは、上限で打ち切られたときに埋まるのが「これから最初に読む分」に
- * なるようにするため。新しい順にすると、未読 30 件のフィードで最初に埋まるのが
- * 最後に読む 10 件になり、設定を入れた直後の見え方がちょうど逆になる。
+ *
+ * **読む順（id 昇順）とは逆にしてある。** 上限で打ち切られるほど積み残しがあるときは、
+ * 古い記事より新しい記事の全文の方が読む価値が高い（docs/DESIGN.md §5「要約フィードの
+ * 全文取得」）。
  *
  * full_body が '' の記事は「取りに行ったが採らなかった」ので二度と拾わない
  * （migrations/0003_full_text.sql）。
@@ -252,7 +253,7 @@ export async function selectMissingFullText(
          ${UNREAD_JOIN}
         WHERE e.feed_id = ? AND e.full_body IS NULL AND e.url IS NOT NULL
           AND ${UNREAD_PREDICATE}
-        ORDER BY e.id
+        ORDER BY e.id DESC
         LIMIT ?`,
     )
     .bind(feedId, limit)

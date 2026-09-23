@@ -453,7 +453,7 @@ describe('fillFullText', () => {
     expect(budget.remaining).toBe(9);
   });
 
-  it('読む順（id 昇順）から埋める', async () => {
+  it('新しい記事（id の大きい方）から埋める', async () => {
     const feedId = await seedFeed(env.DB, 'https://example.com/feed', { fullText: 1 });
     const pages: Record<string, string> = {};
     const ids: number[] = [];
@@ -470,8 +470,8 @@ describe('fillFullText', () => {
       budget: { remaining: 2 },
     });
 
-    // 最初に読む 2 件が埋まる。新しい順にすると、最後に読む分から埋まってしまう
-    expect(result.filled).toEqual(ids.slice(0, 2));
+    // 積み残しがあるときは新しい 2 件が埋まる。古い記事は全文を読む価値が減っている
+    expect(result.filled).toEqual(ids.slice(2).reverse());
   });
 
   it('採らなかった記事を毎クロール取り直さない', async () => {
