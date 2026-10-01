@@ -1,7 +1,8 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import { crawl } from './index';
-import { getEntryRows, getFeedRow, seedFeed } from '../test/seed';
+import { purgeExpiredEntries } from '../retention';
+import { getEntryRows, getFeedRow, seedFeed, setReadSeq } from '../test/seed';
 import asobiReceptionsJson from './__fixtures__/asobiticket-receptions.json?raw';
 import idolmasterNewsJson from './__fixtures__/idolmaster-news.json?raw';
 import rss2Xml from './__fixtures__/rss2.xml?raw';
@@ -191,6 +192,32 @@ describe('crawl', () => {
     expect(summary.inserted).toBe(1);
     const entries = await getEntryRows(env.DB, id);
     expect(entries.map((e) => e.title)).toEqual(['古い記事', '新しい記事', 'もっと新しい記事']);
+  });
+
+  it('保持期間で消えた記事は、フィードがまだ配っていても入れ直さない', async () => {
+    // 直近 N 件を期間によらず配るフィード。読んで消えた記事が新しい id で入り直すと、
+    // 新着が出るたびに過去の記事が未読に戻る
+    const id = await seedFeed(env.DB, 'https://evergreen.example.com/feed.xml');
+    await crawl(env, {
+      now: NOW,
+      feedIds: [id],
+      fetchImpl: stubFetch(() => xmlResponse(rss2Xml)).fetch,
+    });
+    const read = await getEntryRows(env.DB, id);
+    await setReadSeq(env.DB, id, read[read.length - 1].id);
+
+    const later = NOW + 40 * 86_400;
+    expect(await purgeExpiredEntries(env, { now: later })).toEqual({ deleted: 2, done: true });
+
+    const summary = await crawl(env, {
+      now: later,
+      feedIds: [id],
+      fetchImpl: stubFetch(() => xmlResponse(rss2WithExtraItem())).fetch,
+    });
+
+    expect(summary.inserted).toBe(1);
+    const entries = await getEntryRows(env.DB, id);
+    expect(entries.map((e) => e.title)).toEqual(['もっと新しい記事']);
   });
 
   it('guid だけが付け替わった記事は、同じ URL とタイトルなら入れ直さない', async () => {

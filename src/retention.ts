@@ -51,7 +51,7 @@ export async function purgeExpiredEntries(
   let deleted = 0;
   while (deleted < maxPerRun) {
     const limit = Math.min(CHUNK, maxPerRun - deleted);
-    const removed = await deleteExpiredEntries(env.DB, before, limit);
+    const removed = await deleteExpiredEntries(env.DB, before, limit, now);
     deleted += removed;
     // 取れた件数が上限に届かなければ、対象は尽きている
     if (removed < limit) return { deleted, done: true };

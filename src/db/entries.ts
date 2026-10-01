@@ -48,22 +48,26 @@ const ENTRY_COLUMNS = `e.id, e.feed_id, e.url, e.title, e.author,
  *   ピンそのものは title / url を持っているので、記事が消えても壊れない
  * - entry_states は ON DELETE CASCADE、pins.entry_id は ON DELETE SET NULL で追随する
  *
+ * **消す記事の (feed_id, guid_hash) を entry_tombstones に残す。** 残さないと、フィードが
+ * まだ配っている記事は次の取得で入り直し、新しい id で未読に戻る
+ * （migrations/0005_entry_tombstones.sql）。印を残す文と消す文は同じ対象を選ぶ必要が
+ * あるので、1 つの batch（= 1 トランザクション）に入れる。印の側は entries にも feeds にも
+ * 書かないので、2 文目が選ぶ行は 1 文目と変わらない。
+ *
  * **一度に消す件数を必ず区切る。** D1 には長時間トランザクションが無く、初回は数万行が
  * 対象になり得るため（呼び出し側が刻んで回す。src/retention.ts）。
  *
  * @param before stored_at がこの時刻より前のものを対象にする
+ * @param now 印に残す削除時刻
  * @returns 実際に消した件数
  */
 export async function deleteExpiredEntries(
   db: D1Database,
   before: number,
   limit: number,
+  now: number,
 ): Promise<number> {
-  const { meta } = await db
-    .prepare(
-      `DELETE FROM entries
-        WHERE id IN (
-          SELECT e.id
+  const expired = `SELECT e.id
             FROM entries e
             JOIN feeds f ON f.id = e.feed_id
             ${UNREAD_JOIN}
@@ -71,11 +75,18 @@ export async function deleteExpiredEntries(
              AND NOT (${UNREAD_PREDICATE})
              AND NOT EXISTS (SELECT 1 FROM pins p WHERE p.entry_id = e.id)
            ORDER BY e.id
-           LIMIT ?)`,
-    )
-    .bind(before, limit)
-    .run();
-  return meta.changes ?? 0;
+           LIMIT ?`;
+
+  const [, deleted] = await db.batch([
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO entry_tombstones (feed_id, guid_hash, deleted_at)
+         SELECT feed_id, guid_hash, ? FROM entries WHERE id IN (${expired})`,
+      )
+      .bind(now, before, limit),
+    db.prepare(`DELETE FROM entries WHERE id IN (${expired})`).bind(before, limit),
+  ]);
+  return deleted.meta.changes ?? 0;
 }
 
 export interface EntryQuery {
@@ -173,6 +184,9 @@ const BATCH_SIZE = 50;
  * 照合しない理由は docs/DESIGN.md §3。同じ batch の中で先に入った行も見えるので、
  * 1 回の取得に同じ記事が 2 つ並んでいても 1 件になる。
  *
+ * **保持期間で消した記事も入れない**（entry_tombstones）。フィードが配り続けている限り、
+ * 読んで消えた記事が未読として戻ってくるため。
+ *
  * **配列の順序がそのまま id の採番順になる。** id は読む順序と未読判定の両方を
  * 担うので、呼び出し側は古い記事から順に並べて渡すこと（CLAUDE.md の不変条件 1）。
  *
@@ -191,6 +205,9 @@ export async function insertEntries(
      SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
       WHERE NOT EXISTS (
               SELECT 1 FROM entries WHERE feed_id = ?1 AND url = ?3 AND title = ?4
+            )
+        AND NOT EXISTS (
+              SELECT 1 FROM entry_tombstones WHERE feed_id = ?1 AND guid_hash = ?2
             )`,
   );
 
@@ -326,6 +343,9 @@ export const CLEAR_FULL_BODIES = 'UPDATE entries SET full_body = NULL WHERE feed
  * 要るのは**新しい記事にだけ外部への問い合わせをしたい**ため（埋め込みの解決。
  * src/crawler/embed.ts）。フィードは毎回全件を配るので、これが無いと更新のたびに
  * 既知の記事のぶんまで X へ問い合わせることになる。
+ *
+ * **保持期間で消した記事（entry_tombstones）も取り込み済みに数える。** どのみち
+ * 入れない記事なので、数えないと消えた後は更新のたびに問い合わせ続ける。
  */
 export async function selectKnownGuidHashes(
   db: D1Database,
@@ -337,11 +357,15 @@ export async function selectKnownGuidHashes(
   const known = new Set<string>();
   for (let i = 0; i < guidHashes.length; i += BATCH_SIZE) {
     const chunk = guidHashes.slice(i, i + BATCH_SIZE);
-    const placeholders = chunk.map(() => '?').join(', ');
+    // 同じ値を 2 つの表に当てるので番号付きで書く（並べ直すと束縛の数が倍になる）
+    const placeholders = chunk.map((_, index) => `?${index + 2}`).join(', ');
     const { results } = await db
       .prepare(
         `SELECT guid_hash FROM entries
-          WHERE feed_id = ? AND guid_hash IN (${placeholders})`,
+          WHERE feed_id = ?1 AND guid_hash IN (${placeholders})
+         UNION ALL
+         SELECT guid_hash FROM entry_tombstones
+          WHERE feed_id = ?1 AND guid_hash IN (${placeholders})`,
       )
       .bind(feedId, ...chunk)
       .all<{ guid_hash: string }>();

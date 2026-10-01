@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
+import { deleteFeed } from './db/feeds';
 import { purgeExpiredEntries } from './retention';
 import {
   getEntryRows,
@@ -26,6 +27,19 @@ const RECENT = NOW - 10 * DAY;
 
 async function idsOf(feedId: number): Promise<number[]> {
   return (await getEntryRows(env.DB, feedId)).map((row) => row.id);
+}
+
+interface TombstoneRow {
+  feed_id: number;
+  guid_hash: string;
+  deleted_at: number;
+}
+
+async function tombstones(): Promise<TombstoneRow[]> {
+  const { results } = await env.DB.prepare(
+    'SELECT feed_id, guid_hash, deleted_at FROM entry_tombstones ORDER BY guid_hash',
+  ).all<TombstoneRow>();
+  return results;
 }
 
 describe('purgeExpiredEntries', () => {
@@ -98,6 +112,31 @@ describe('purgeExpiredEntries', () => {
       n: number;
     }>();
     expect(left?.n).toBe(0);
+  });
+
+  it('消した記事にだけ印を残す', async () => {
+    const feedId = await seedFeed(env.DB, 'https://example.com/feed.xml');
+    await seedEntry(env.DB, feedId, { storedAt: OLD, guidHash: 'gone' });
+    const kept = await seedEntry(env.DB, feedId, { storedAt: RECENT, guidHash: 'kept' });
+    await setReadSeq(env.DB, feedId, kept);
+
+    await purgeExpiredEntries(env, { now: NOW });
+
+    // 印が無いと、フィードがまだ配っている記事は次の取得で未読として入り直す
+    // （入り直さないことは src/crawler/crawl.test.ts で見る）
+    expect(await tombstones()).toEqual([{ feed_id: feedId, guid_hash: 'gone', deleted_at: NOW }]);
+  });
+
+  it('購読を解除すると印も消える', async () => {
+    const feedId = await seedFeed(env.DB, 'https://example.com/feed.xml');
+    const entryId = await seedEntry(env.DB, feedId, { storedAt: OLD });
+    await setReadSeq(env.DB, feedId, entryId);
+    await purgeExpiredEntries(env, { now: NOW });
+
+    // 購読し直したときは、配られている記事を最初から取り込む
+    await deleteFeed(env.DB, feedId);
+
+    expect(await tombstones()).toEqual([]);
   });
 
   it('1 回の実行で消す件数を区切り、消し残しがあることを返す', async () => {

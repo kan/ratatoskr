@@ -259,7 +259,10 @@ export async function updateFeedSettings(
   return (result.meta.changes ?? 0) > 0;
 }
 
-/** 記事は CASCADE で消える。ピンは非正規化してあるので残る（docs/DESIGN.md） */
+/**
+ * 記事と、保持期間で消した記事の印（entry_tombstones）は CASCADE で消える。
+ * ピンは非正規化してあるので残る（docs/DESIGN.md）
+ */
 export async function deleteFeed(db: D1Database, id: number): Promise<boolean> {
   const result = await db.prepare('DELETE FROM feeds WHERE id = ?').bind(id).run();
   return (result.meta.changes ?? 0) > 0;
