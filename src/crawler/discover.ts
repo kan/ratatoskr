@@ -96,6 +96,23 @@ export async function discoverFeed(
   if (known !== null) return { ...known, viaAncestor: false };
 
   const first = await discoverAt(url, fetchImpl, AbortSignal.timeout(TIMEOUT_MS));
+
+  // **取りに行った URL 自身が候補に入っていたら、候補として返さない。** そのページが
+  // 「ここがフィード」と指している URL から、フィードではなくそのページが返っている。
+  // 会員限定のブログは、未ログインの要求をフィードの URL ごと案内ページへ転送し、
+  // 案内ページは同じ `<link rel="alternate">` を載せている。候補として返すと、
+  // どれを選んでも同じ選択肢に戻るだけで、購読できない理由が伝わらない
+  const redirected = first.pageUrl === url ? '' : `（転送先: ${first.pageUrl}）`;
+  const notAFeed: Discovery = {
+    result: {
+      kind: 'error',
+      message: `フィードの URL からフィードではなく HTML のページが返った${redirected}。ログインが必要なサイトの可能性がある`,
+    },
+    pageUrl: first.pageUrl,
+    viaAncestor: false,
+  };
+  if (recommends(first.result, url)) return notAFeed;
+
   // **遡るのは「取れたが候補が 0 件」のときだけ。** 404 や接続の失敗は、
   // 何が起きたかをそのまま返す方が直しようがある
   if (first.result.kind !== 'candidates' || first.result.candidates.length > 0) {
@@ -122,11 +139,26 @@ export async function discoverFeed(
     seen.add(found.pageUrl);
 
     const { result } = found;
+    // 案内ページ自身はフィードを載せておらず、上の階層のページが載せている形。
+    // 遡った先で同じ URL を勧められても、選べばまたここへ戻ってくる
+    if (recommends(result, url)) return notAFeed;
     const hit =
       result.kind === 'feed' || (result.kind === 'candidates' && result.candidates.length > 0);
     if (hit) return { ...found, viaAncestor: true };
   }
   return { ...first, viaAncestor: false };
+}
+
+/**
+ * 取りに行った URL 自身を、候補として勧めているか。
+ *
+ * **完全一致で見る。www や http/https の違いを同じとみなさない。** 画面が送り返すのは
+ * 候補の URL そのものなので、選んだ URL は必ず一致する。手で入れた URL が表記違いで
+ * 外れても、候補を選んだ次の回に当たる。緩めると、`http://` を貼られて `https://` の
+ * 正しいフィードを勧めている普通のサイトを、誤って失敗にする
+ */
+function recommends(result: DiscoverResult, url: string): boolean {
+  return result.kind === 'candidates' && result.candidates.some((c) => c.url === url);
 }
 
 /**

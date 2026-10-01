@@ -286,6 +286,44 @@ describe('discoverFeed', () => {
     ]);
   });
 
+  it('フィードの URL が、同じ URL を勧めるページへ転送されたら候補にしない', async () => {
+    // 会員限定のブログ。未ログインの要求をフィードの URL ごと案内ページへ転送し、
+    // 案内ページは同じフィードを載せている。候補として返すと堂々巡りになる
+    const gate = 'https://members.example.com/access/';
+    const links =
+      '<link rel="alternate" type="application/rss+xml" href="https://members.example.com/feed/">' +
+      '<link rel="alternate" type="application/atom+xml" href="https://members.example.com/feed/atom/">';
+    const { impl } = recording(
+      {
+        'https://members.example.com/': links,
+        'https://members.example.com/feed/atom/': links,
+      },
+      { 'https://members.example.com/feed/atom/': gate },
+    );
+
+    const found = await discoverFeed('https://members.example.com/feed/atom/', impl);
+    expect(found.result).toMatchObject({ kind: 'error', message: expect.stringContaining(gate) });
+
+    // サイトの URL を貼った段では、まだ分からないので候補を返す
+    const top = await discoverFeed('https://members.example.com/', impl);
+    expect(top.result).toMatchObject({ kind: 'candidates' });
+  });
+
+  it('遡った先で同じ URL を勧められても候補にしない', async () => {
+    // 案内ページ自身はフィードを載せておらず、トップページが載せている形
+    const feed = 'https://members.example.com/feed/';
+    const { impl } = recording(
+      {
+        'https://members.example.com/': `<link rel="alternate" type="application/rss+xml" href="${feed}">`,
+      },
+      { [feed]: 'https://members.example.com/login/' },
+    );
+
+    const found = await discoverFeed(feed, impl);
+    expect(found.result).toMatchObject({ kind: 'error' });
+    expect(found.viaAncestor).toBe(false);
+  });
+
   it('取得に失敗したときは遡らない', async () => {
     // 何が起きたかをそのまま返す方が直しようがある
     const asked: string[] = [];
