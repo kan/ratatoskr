@@ -79,17 +79,6 @@ describe('asobiTicket', () => {
     );
   });
 
-  it('受付の始まりが保持期間より前のものは、受付中でも入れない', async () => {
-    // 読んだ記事は 30 日で消える。入れ直すと、同じ受付が未読として届き直す
-    const later = Math.floor(Date.parse('2026-10-14T00:00:00+09:00') / 1000);
-    const outcome = await asobiTicket.fetch(TARGET, stub(receptions).impl, later);
-    if (outcome.kind !== 'fetched') throw new Error(`取れていない: ${outcome.kind}`);
-    // 09-16 開始は 28 日前なので残り、09-11 開始は 33 日前なので落ちる
-    expect(outcome.feed.items.map((item) => item.guid)).toEqual([
-      'c8ebec95-7950-4db1-8177-05e72fe230d2',
-    ]);
-  });
-
   it('WAF に弾かれた（403）ときは、フィードが消えた扱いにしない', async () => {
     const outcome = await asobiTicket.fetch(
       TARGET,

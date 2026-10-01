@@ -15,7 +15,6 @@
  *   なるので、変化の無い回は本文を読まない
  */
 
-import { RETENTION_DAYS } from '../../shared/types';
 import { asArray, asObject, asString, parseJson } from '../lib/json';
 import { apiChanged, notFetched, withFeed } from './api-feed';
 import { parseDate } from './date';
@@ -108,13 +107,6 @@ function toItem(
   }
   if (attributes.entry_period_status !== 'within_entry_period') return null;
 
-  // **受付が始まって保持期間を過ぎたものは入れない。** 受付期間が保持期間より長いと、
-  // 読んで消えた記事が、まだ受付中なので次の取得で新着として入り直す（src/retention.ts
-  // は既読の記事を取り込みから 30 日で消す）。取り込みは受付の始まった後なので、
-  // 始まりが保持期間より前なら、手元の記事も消えている可能性がある
-  const startsAt = parseDate(attributes.entry_period_starts_at, now);
-  if (startsAt !== null && startsAt < now - RETENTION_DAYS * 86_400) return null;
-
   const name = asString(attributes.name) ?? '';
   const tour = asString(asObject(related(reception, 'tour', included)?.attributes)?.name);
   return {
@@ -123,7 +115,7 @@ function toItem(
     title: tour === null ? name : `${tour} ／ ${name}`,
     author: null,
     body: renderBody(reception, attributes, included, now),
-    publishedAt: startsAt,
+    publishedAt: parseDate(attributes.entry_period_starts_at, now),
   };
 }
 
