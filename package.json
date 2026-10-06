@@ -23,19 +23,19 @@
     "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.63.0",
-    "@types/node": "^26.6.1",
+    "@types/node": "^26.6.4",
     "concurrently": "^10.0.5",
-    "eslint": "^10.11.0",
+    "eslint": "^10.12.0",
     "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-vue": "^10.11.0",
-    "globals": "^17.12.0",
-    "prettier": "^3.9.8",
+    "eslint-plugin-vue": "^10.11.1",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.9",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.70.0",
+    "typescript-eslint": "^8.71.0",
     "vitest": "^4.1.11",
-    "wrangler": "^4.135.0"
+    "wrangler": "^4.147.0"
   },
   "dependencies": {
-    "fast-xml-parser": "^5.11.1"
+    "fast-xml-parser": "^5.11.2"
   }
 }
