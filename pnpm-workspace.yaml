@@ -6,5 +6,10 @@ allowBuilds:
 # @cloudflare/vitest-pool-workers 0.22.0 が miniflare を完全一致で固定しており、その先の
 # sharp 0.35.2 が libheif の脆弱性（GHSA-rgj7-g3m4-5g8c）に当たる。dependabot では上げられない
 # ので、修正版へ寄せる。pool-workers が 0.35.4 以上の miniflare を引くようになったら外す
+#
+# undici も同じ経路（pool-workers 0.22.0 → miniflare 5.20260815 が 7.29.0 に完全一致で固定）で
+# 7.29.1 未満に留まる（GHSA-w293-vg96-wgc3 ほか）。pool-workers が 7.29.1 以上の miniflare を
+# 引くようになったら外す
 overrides:
   'sharp@<0.35.4': '0.35.4'
+  'undici@>=7.0.0 <7.29.1': '7.29.1'
