@@ -27,6 +27,7 @@ export interface Feed {
   disabled: boolean;
   fullText: boolean;          // 記事ページから本文を取ってくるか（M7）
   fullTextSuggested: boolean; // 要約しか配信していないと見えた（勧めるだけ）
+  nsfw: boolean;              // 表示を有効にした端末でしか出さない（issue #23）
 }
 
 export interface Entry {
@@ -50,8 +51,12 @@ export interface Pin {
   title: string;
   url: string;
   pinnedAt: number;
+  nsfw: boolean;         // ピンを立てた時点のフィードの印を写したもの（issue #23）
 }
 ```
+
+`nsfw` は**絞り込みの条件ではない。** どの読み取り API も、印の有無に関わらず全件を返す。
+出すかどうかは端末ごとの設定で、クライアントが決める（`docs/DESIGN.md` §6「NSFW」）。
 
 ## 読み取り
 
@@ -170,12 +175,14 @@ export interface Pin {
 ### `POST /api/pins`
 
 ```jsonc
-{ "entryId": 123, "title": "...", "url": "https://..." }
+{ "entryId": 123, "title": "...", "url": "https://...", "nsfw": false }
 ```
 
 `url` は必須。`title` と `url` は、記事が保持期間を過ぎて削除されてもピンが生き残るよう非正規化して保存する。
 
 **`title` は空でよい。** タイトルを配らないフィード（Bluesky のプロフィール RSS）の記事は題を持たないので、必須にするとその記事だけピンできない——しかもクライアントは 400 を「送り直しても通らない」として捨てるため、画面には出たままリロードで消える。空で届いたときは、記事がまだあれば**本文の書き出しを見出しにして控える**（「タイトルを配らないフィード」と同じ規則）。記事が既に無ければ空のまま控え、一覧は URL を出す。
+
+**`nsfw` はサーバが記事のフィードから写す。** 要求の `nsfw`（省けば `false`）は、記事から引けないときの控えで、記事が残っていれば使わない。記事が既に無いときは、同じ `url` のピンが持っていた印と要求の `nsfw` のどちらかが立っていれば立てる。記事が消えた後の送り直しや、クライアントの手元にしか残っていない記事のピンで、隠すはずのピンを表に出さないため。
 
 同一 URL への重複追加は `INSERT OR REPLACE` で吸収する（冪等）。
 
@@ -203,7 +210,9 @@ export interface Pin {
 
 ### `PATCH /api/feeds/:id`
 
-`rate`、`folder`、`title`、`disabled`、`fullText` を更新する。`title` はフィードの提供する値を上書きするユーザ指定値。
+`rate`、`folder`、`title`、`disabled`、`fullText`、`nsfw` を更新する。`title` はフィードの提供する値を上書きするユーザ指定値。
+
+`nsfw` を変えると、**そのフィードの記事を指すピンの `nsfw` も同じ値に揃える**（1 つの batch）。記事が保持期間で消えたピンは、どのフィードの記事だったかを引けないので動かさない。
 
 `fullText` は「記事ページから本文を取ってくるか」。**既定は false で、決めるのはユーザ。** 相手のサーバに記事の数だけ取りに行く動作なので、こちらが勝手に始めない。クロール時に要約しか配信していないと見えたフィードは `fullTextSuggested` が立ち、購読管理画面がそれを勧める。
 
@@ -225,7 +234,7 @@ export interface Pin {
 
 ### `GET /api/opml`
 
-`Content-Type: text/x-opml` で購読リストを返す。フォルダは `<outline>` の入れ子で表現し、レートは `ratatoskr:rate` 属性として出力する（他のリーダーからは無視される）。
+`Content-Type: text/x-opml` で購読リストを返す。フォルダは `<outline>` の入れ子で表現し、レートは `ratatoskr:rate` 属性として出力する（他のリーダーからは無視される）。NSFW の印が付いたフィードには `ratatoskr:nsfw="1"` を付け、取り込み時に戻す。
 
 ### `POST /api/opml`
 
