@@ -23,6 +23,12 @@ export const THEME_KEY = 'ratatoskr.theme';
  */
 export const NSFW_KEY = 'ratatoskr.nsfw';
 
+/**
+ * 外部ブックマークの送り先（issue #22）。URL のひな形で、**既定（はてなブックマーク）の
+ * ままなら値を持たない。** 既定を後から変えたときに、変えていない端末も付いてくる
+ */
+export const BOOKMARK_KEY = 'ratatoskr.bookmark-template';
+
 export function readPref(key: string): string | null {
   try {
     return localStorage.getItem(key);

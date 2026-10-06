@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import type { Feed, FeedErrorKind } from '@shared/types';
 import { REPOSITORY_URL } from '@shared/types';
+import { bookmarkTemplate, DEFAULT_BOOKMARK_TEMPLATE, saveBookmarkTemplate } from '@/lib/bookmark';
 import { bookmarkletFor } from '@/lib/bookmarklet';
 import { confirmUnsubscribe, isStalled, UNCATEGORIZED } from '@/lib/subscriptions';
 import { sortByReadingOrder, useFeedsStore } from '@/stores/feeds';
@@ -295,6 +296,33 @@ function toggleNsfw(feed: Feed): Promise<void> {
       message.value = 'NSFW にした。この端末では隠しているので、一覧からも外した';
     }
   });
+}
+
+/** 設定欄に出す送り先。既定のままなら空（placeholder が既定を見せる） */
+function savedBookmarkTarget(): string {
+  const template = bookmarkTemplate();
+  return template === DEFAULT_BOOKMARK_TEMPLATE ? '' : template;
+}
+
+const bookmarkTarget = ref(savedBookmarkTarget());
+
+/**
+ * 外部ブックマークの送り先を変える（issue #22）。使えないひな形は覚えず、
+ * 入力欄を元に戻す。残すと、保存できなかった文字列が保存済みに見える（改名と同じ）
+ */
+function changeBookmarkTarget(input: HTMLInputElement): void {
+  error.value = null;
+  message.value = null;
+  const result = saveBookmarkTemplate(input.value);
+  if (result === 'saved') {
+    message.value = 'ブックマーク先を変えた';
+  } else if (result === 'invalid') {
+    error.value = 'ブックマーク先は {url} を含む http / https の URL で指定する';
+  } else {
+    error.value = 'ブックマーク先を覚えられなかった（この端末は設定を保存できない）';
+  }
+  bookmarkTarget.value = savedBookmarkTarget();
+  input.value = bookmarkTarget.value;
 }
 
 function refresh(feed: Feed): Promise<void> {
@@ -632,6 +660,24 @@ async function onOpmlSelected(event: Event): Promise<void> {
             @change="nsfw.setVisible(($event.target as HTMLInputElement).checked)"
           />
           この端末で NSFW を表示
+        </label>
+        <!--
+          外部ブックマークの送り先（issue #22）。これも端末ごとの設定。既定の
+          ままなら空欄にして、ひな形は placeholder で見せる（変えていないことが分かる）
+        -->
+        <label
+          class="flex items-center gap-1"
+          title="b とピン一覧の「ブクマ」が開く URL。{url} と {title} が記事のものに差し替わる。空欄なら、はてなブックマーク"
+        >
+          ブックマーク先
+          <input
+            type="url"
+            :value="bookmarkTarget"
+            :placeholder="DEFAULT_BOOKMARK_TEMPLATE"
+            class="w-56 rounded border border-neutral-300 px-2 py-0.5 dark:border-neutral-700 dark:bg-neutral-800"
+            data-testid="bookmark-template"
+            @change="changeBookmarkTarget($event.target as HTMLInputElement)"
+          />
         </label>
         <a
           :href="REPOSITORY_URL"

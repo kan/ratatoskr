@@ -10,7 +10,7 @@ import { usePinsStore } from '@/stores/pins';
  */
 const pins = usePinsStore();
 
-defineEmits<{ close: []; openAll: []; remove: [pin: Pin] }>();
+defineEmits<{ close: []; openAll: []; remove: [pin: Pin]; bookmark: [pin: Pin] }>();
 
 /** ピンした時刻。日付だけで足りる（後で処理するための目印） */
 function pinnedOn(pin: Pin): string {
@@ -78,6 +78,20 @@ function pinnedOn(pin: Pin): string {
           >
             {{ pin.title || pin.url }}
           </a>
+          <!--
+            外部ブックマークへ送る（issue #22）。**キーは割り当てない。** 行を選ぶ
+            カーソルがこの一覧には無いので、どの行に効くキーなのかを決められない。
+            文言を短くしてあるのは、狭い画面で見出しの幅を残すため
+          -->
+          <button
+            type="button"
+            class="shrink-0 py-2.5 pl-3 text-xs text-neutral-500 hover:underline md:py-1.5 md:pl-2"
+            title="外部ブックマークの投稿画面を新しいタブで開き、このピンを外す"
+            :data-testid="`pin-bookmark-${pin.entryId ?? 'x'}`"
+            @click="$emit('bookmark', pin)"
+          >
+            ブクマ
+          </button>
           <button
             type="button"
             class="shrink-0 py-2.5 pl-3 text-xs text-neutral-500 hover:underline md:py-1.5 md:pl-2"

@@ -24,6 +24,7 @@ export type Action =
   | 'pageDown'
   | 'pageUp'
   | 'openOriginal'
+  | 'bookmarkEntry'
   | 'toggleHelp'
   | 'openSubscriptions'
   | 'unsubscribeFeed'
@@ -98,6 +99,13 @@ export const KEYMAP: readonly KeyBinding[] = [
     label: 'v',
     action: 'openOriginal',
     description: '元記事を新しいタブで開く',
+    group: 'read',
+  },
+  {
+    key: 'b',
+    label: 'b',
+    action: 'bookmarkEntry',
+    description: 'この記事を外部ブックマークに送る（投稿画面を新しいタブで開く）',
     group: 'read',
   },
   {

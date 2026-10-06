@@ -7,6 +7,7 @@ import { confirmUnsubscribe, folderLabel, isStalled } from '@/lib/subscriptions'
 import HelpOverlay from '@/components/HelpOverlay.vue';
 import PinList from '@/components/PinList.vue';
 import SubscriptionManager from '@/components/SubscriptionManager.vue';
+import { bookmarkTemplate, bookmarkUrl } from '@/lib/bookmark';
 import { pendingSubscription } from '@/lib/bookmarklet';
 import { showUnread } from '@/lib/favicon';
 import { isTextInput, releaseKeyFocus, resolveBinding, type KeyBinding } from '@/lib/keymap';
@@ -262,6 +263,9 @@ function handle(binding: KeyBinding): boolean {
     case 'openOriginal':
       openOriginal();
       break;
+    case 'bookmarkEntry':
+      bookmarkCurrentEntry();
+      break;
     case 'toggleHelp':
       openOverlay('help');
       break;
@@ -467,6 +471,42 @@ function openTab(url: string): boolean {
 function openOriginal(): void {
   const url = feeds.currentEntry?.url;
   if (url) window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+/**
+ * 外部ブックマークの投稿画面を新しいタブで開く（issue #22）。
+ *
+ * @returns 開けたか。**開けなかったときは知らせまで済ませる。** 黙っていると、
+ *   押したのに何も起きないようにしか見えない
+ */
+function openBookmark(url: string, title: string): boolean {
+  const target = bookmarkUrl(bookmarkTemplate(), url, title);
+  if (target === null) {
+    notify('この記事の URL はブックマークに送れない');
+    return false;
+  }
+  if (!openTab(target)) {
+    notify('ブラウザにブロックされた（ポップアップを許可すると開ける）');
+    return false;
+  }
+  return true;
+}
+
+/** 読んでいる記事を送る（b）。記事は切り替えない。ピンにも既読にも触らない */
+function bookmarkCurrentEntry(): void {
+  const entry = feeds.currentEntry;
+  if (entry === null) return;
+  // URL を配らないフィードの記事。黙って戻ると、押したのに何も起きないように見える
+  if (entry.url === null) notify('この記事には URL が無いので、ブックマークに送れない');
+  else openBookmark(entry.url, entry.title);
+}
+
+/**
+ * ピンを送る（ピン一覧の各行）。**開けたときだけピンから外す。** o と同じく
+ * 「後で処理する」を消化したということで、開けなかった分は控えのまま残す
+ */
+function bookmarkPin(pin: Pin): void {
+  if (openBookmark(pin.url, pin.title)) removePin(pin);
 }
 
 function onKeydown(event: KeyboardEvent): void {
@@ -723,6 +763,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
       @close="closeOverlay"
       @open-all="openAllPins"
       @remove="(pin) => removePin(pin)"
+      @bookmark="(pin) => bookmarkPin(pin)"
     />
   </div>
 </template>
