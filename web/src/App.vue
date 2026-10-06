@@ -161,7 +161,7 @@ const currentPinned = computed(() => {
  * 引き出しの中なので、開くまで気付けない。**入口に印だけ出す。**
  * 読む場所は邪魔せず、しかし放っておくと記事が増えないままになるのを防ぐ
  */
-const stalledCount = computed(() => feeds.feeds.filter(isStalled).length);
+const stalledCount = computed(() => feeds.shownFeeds.filter(isStalled).length);
 
 /**
  * 境界にいるか（docs/UX.md「境界でのボタン変化」）。ボタンの位置は動かさず、
@@ -398,15 +398,16 @@ function togglePin(): void {
   const entry = feeds.currentEntry;
   if (entry === null || entry.url === null) return;
 
-  const existing = pins.find(entry.url);
+  // 外すのは見えているピンだけ。隠しているピン（issue #23）は立て直す側に回る
+  const existing = pins.findShown(entry.url);
   if (existing !== undefined) {
     removePin(existing);
     return;
   }
 
-  const added = pins.add(entry, Math.floor(Date.now() / 1000));
+  const added = pins.add(entry, Math.floor(Date.now() / 1000), feeds.currentFeed?.nsfw ?? false);
   if (added === null) return;
-  outbox.queuePin(added.entryId, added.title, added.url);
+  outbox.queuePin(added.entryId, added.title, added.url, added.nsfw);
   notify('ピンした');
 }
 
@@ -423,7 +424,8 @@ function removePin(pin: Pin): void {
  * 「後で処理する」控えが取り返しなく失われる。
  */
 function openAllPins(): void {
-  const opening = [...pins.pins];
+  // 一覧に出ているものだけ。隠しているピン（issue #23）まで開かない
+  const opening = [...pins.shown];
   const blocked: Pin[] = [];
 
   for (const pin of opening) {
@@ -516,7 +518,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
       :current-feed-id="feeds.readingFeed?.id ?? null"
       :current-entry-id="feeds.readingFeed === null ? null : (feeds.currentEntry?.id ?? null)"
       :entries-of="feeds.entriesFor"
-      :pinned-urls="pins.urls"
+      :pinned-urls="pins.shownUrls"
       :compact="compact"
       :stalled-count="stalledCount"
       :folders="feeds.folders"

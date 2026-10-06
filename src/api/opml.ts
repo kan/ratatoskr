@@ -25,11 +25,20 @@ function escapeXml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function outline(title: string, url: string, siteUrl: string | null, rate: number): string {
+function outline(
+  title: string,
+  url: string,
+  siteUrl: string | null,
+  rate: number,
+  nsfw: boolean,
+): string {
   const html = siteUrl === null ? '' : ` htmlUrl="${escapeXml(siteUrl)}"`;
+  // NSFW の印（issue #23）も持ち出す。落とすと、書き出した OPML から戻したときに
+  // 隠していたフィードが全て表に出る。付いていないフィードには属性ごと出さない
+  const hidden = nsfw ? ' ratatoskr:nsfw="1"' : '';
   return (
     `<outline type="rss" text="${escapeXml(title)}" title="${escapeXml(title)}"` +
-    ` xmlUrl="${escapeXml(url)}"${html} ratatoskr:rate="${rate}" />`
+    ` xmlUrl="${escapeXml(url)}"${html} ratatoskr:rate="${rate}"${hidden} />`
   );
 }
 
@@ -41,7 +50,13 @@ export async function exportOpml(env: Env): Promise<Response> {
   for (const feed of feeds) {
     const lines = byFolder.get(feed.folder) ?? [];
     lines.push(
-      outline(feed.title === '' ? feed.url : feed.title, feed.url, feed.siteUrl, feed.rate),
+      outline(
+        feed.title === '' ? feed.url : feed.title,
+        feed.url,
+        feed.siteUrl,
+        feed.rate,
+        feed.nsfw,
+      ),
     );
     byFolder.set(feed.folder, lines);
   }
@@ -81,6 +96,7 @@ interface ImportTarget {
   siteUrl: string | null;
   rate: number;
   folder: string;
+  nsfw: boolean;
 }
 
 /**
@@ -102,6 +118,7 @@ function collectOutlines(node: unknown, folder: string, found: ImportTarget[]): 
         siteUrl: attr(child, 'htmlUrl'),
         rate: normalizeRate(attr(child, 'rate')),
         folder,
+        nsfw: attr(child, 'nsfw') === '1',
       });
       continue;
     }
@@ -171,6 +188,7 @@ export async function importOpml(request: Request, env: Env): Promise<Response> 
       title: target.title,
       rate: target.rate,
       folder: target.folder,
+      nsfw: target.nsfw,
     });
   }
 

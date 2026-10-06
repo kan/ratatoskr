@@ -17,6 +17,12 @@ export const HELP_SEEN_KEY = 'ratatoskr.help-seen';
  */
 export const THEME_KEY = 'ratatoskr.theme';
 
+/**
+ * この端末で NSFW のフィードを出すか（issue #23）。**出さないのが既定で、値を持たない**
+ * （キーが無い状態）。新しい端末は何もしなくても隠れる
+ */
+export const NSFW_KEY = 'ratatoskr.nsfw';
+
 export function readPref(key: string): string | null {
   try {
     return localStorage.getItem(key);

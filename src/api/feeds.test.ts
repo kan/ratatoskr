@@ -1,14 +1,15 @@
 import { env } from 'cloudflare:workers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
+  BootstrapResponse,
   CreateFeedResponse,
   FeedCandidatesResponse,
   FeedResponse,
   FetchFeedResponse,
 } from '../../shared/types';
 import { markFullTextSuggested, selectFeedById } from '../db/feeds';
-import { apiSend } from '../test/request';
-import { getEntryRows, getFeedRow, seedEntry, seedFeed } from '../test/seed';
+import { apiJson, apiSend } from '../test/request';
+import { getEntryRows, getFeedRow, seedEntry, seedFeed, seedPin } from '../test/seed';
 
 /**
  * 購読管理。フィードの自動検出と初回クロールが絡むので、外向きの fetch は
@@ -208,6 +209,52 @@ describe('PATCH /api/feeds/:id', () => {
     const id = await seedFeed(env.DB, 'https://bad.example.com/feed');
     expect((await apiSend('PATCH', `/api/feeds/${id}`, { rate: 0 })).status).toBe(400);
     expect((await apiSend('PATCH', `/api/feeds/${id}`, { title: '' })).status).toBe(400);
+  });
+});
+
+/**
+ * NSFW の印（issue #23）。隠すのは画面側なので、サーバで見るのは印が保存されて
+ * 配られることと、ピンに写した印が追随することだけ。
+ */
+describe('PATCH /api/feeds/:id の nsfw', () => {
+  it('既定は false で、付けた印はそのまま配られる', async () => {
+    const id = await seedFeed(env.DB, 'https://nsfw.example.com/feed');
+    expect((await selectFeedById(env.DB, id))?.nsfw).toBe(false);
+
+    const response = await apiSend('PATCH', `/api/feeds/${id}`, { nsfw: true });
+    expect(((await response.json()) as FeedResponse).feed.nsfw).toBe(true);
+
+    // 他の項目だけを変えても外れない
+    await apiSend('PATCH', `/api/feeds/${id}`, { rate: 5 });
+    expect((await selectFeedById(env.DB, id))?.nsfw).toBe(true);
+  });
+
+  it('そのフィードの記事に立てたピンにも印を写し、外せば戻す', async () => {
+    const id = await seedFeed(env.DB, 'https://nsfw-pin.example.com/feed');
+    const other = await seedFeed(env.DB, 'https://sfw-pin.example.com/feed');
+    const entryId = await seedEntry(env.DB, id);
+    const otherEntryId = await seedEntry(env.DB, other);
+    await seedPin(env.DB, 'https://nsfw-pin.example.com/1', 'ピン', entryId);
+    await seedPin(env.DB, 'https://sfw-pin.example.com/1', 'ピン', otherEntryId);
+
+    const nsfwOf = async (): Promise<Record<string, boolean>> => {
+      const { pins } = await apiJson<BootstrapResponse>('/api/bootstrap');
+      return Object.fromEntries(pins.map((pin) => [pin.url, pin.nsfw]));
+    };
+
+    await apiSend('PATCH', `/api/feeds/${id}`, { nsfw: true });
+    expect(await nsfwOf()).toMatchObject({
+      'https://nsfw-pin.example.com/1': true,
+      'https://sfw-pin.example.com/1': false,
+    });
+
+    await apiSend('PATCH', `/api/feeds/${id}`, { nsfw: false });
+    expect(await nsfwOf()).toMatchObject({ 'https://nsfw-pin.example.com/1': false });
+  });
+
+  it('真偽値以外は 400', async () => {
+    const id = await seedFeed(env.DB, 'https://nsfw-bad.example.com/feed');
+    expect((await apiSend('PATCH', `/api/feeds/${id}`, { nsfw: 1 })).status).toBe(400);
   });
 });
 

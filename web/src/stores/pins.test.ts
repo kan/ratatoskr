@@ -1,6 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Entry, Pin } from '@shared/types';
+import { useNsfwStore } from './nsfw';
 import { usePinsStore } from './pins';
 
 /**
@@ -23,7 +24,15 @@ function entry(id: number, overrides: Partial<Entry> = {}): Entry {
 }
 
 function pin(id: number, url: string, overrides: Partial<Pin> = {}): Pin {
-  return { id, entryId: null, title: 'サーバのピン', url, pinnedAt: 100, ...overrides };
+  return {
+    id,
+    entryId: null,
+    title: 'サーバのピン',
+    url,
+    pinnedAt: 100,
+    nsfw: false,
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
@@ -106,9 +115,7 @@ describe('ピン', () => {
   it('復元した未送信のピンと、仮 id が衝突しない', () => {
     const pins = usePinsStore();
     // 前回の起動で付けたまま送れていないピン（仮 id は負のまま保存されている）
-    pins.setPins([
-      { id: -1, entryId: 5, title: '前回のピン', url: 'https://example.com/5', pinnedAt: 1 },
-    ]);
+    pins.setPins([pin(-1, 'https://example.com/5', { entryId: 5, title: '前回のピン' })]);
     pins.add(entry(10), 200);
 
     const ids = pins.pins.map((p) => p.id);
@@ -126,5 +133,67 @@ describe('ピン', () => {
     expect(pins.pins[0].url).toBe('https://example.com/');
     // 正規化前の URL で引いても見つかる
     expect(pins.has('https://example.com')).toBe(true);
+  });
+});
+
+describe('NSFW のピンを隠す（issue #23）', () => {
+  it('既定では一覧にも件数にも出さないが、重複の判定には残す', () => {
+    const pins = usePinsStore();
+    pins.setPins([
+      pin(1, 'https://example.com/hidden', { nsfw: true }),
+      pin(2, 'https://example.com/shown'),
+    ]);
+
+    expect(pins.shown.map((p) => p.url)).toEqual(['https://example.com/shown']);
+    expect(pins.count).toBe(1);
+    expect([...pins.shownUrls]).toEqual(['https://example.com/shown']);
+    // 手元の記事の間引きは、隠しているピンの記事も残す
+    expect(pins.urls.has('https://example.com/hidden')).toBe(true);
+
+    useNsfwStore().setVisible(true);
+    expect(pins.count).toBe(2);
+  });
+
+  it('隠しているピンと同じ URL の記事では、外さずに立て直す', () => {
+    // 同じ URL を NSFW のフィードと普通のフィードの両方が配っている場合
+    const pins = usePinsStore();
+    pins.setPins([pin(1, 'https://example.com/10', { nsfw: true })]);
+
+    // 画面からは立っていないように見える。外す対象にもならない
+    expect(pins.has('https://example.com/10')).toBe(false);
+    expect(pins.findShown('https://example.com/10')).toBeUndefined();
+
+    const added = pins.add(entry(10), 200, false);
+    expect(added?.nsfw).toBe(false);
+    // 二重には持たない
+    expect(pins.pins).toHaveLength(1);
+    expect(pins.count).toBe(1);
+  });
+
+  it('NSFW のフィードで立てたピンは、送信が通る前から隠れる', () => {
+    useNsfwStore().setVisible(true);
+    const pins = usePinsStore();
+    pins.add(entry(10), 200, true);
+    expect(pins.count).toBe(1);
+
+    useNsfwStore().setVisible(false);
+    expect(pins.count).toBe(0);
+  });
+
+  it('フィードの印を変えたら、その記事に立てたピンにも当てる', () => {
+    const pins = usePinsStore();
+    pins.setPins([
+      pin(1, 'https://example.com/10', { entryId: 10 }),
+      pin(2, 'https://example.com/20', { entryId: 20 }),
+      // 記事が消えたピンは、どのフィードのものだったか分からないので動かさない
+      pin(3, 'https://example.com/gone'),
+    ]);
+    const before = pins.revision;
+
+    pins.setNsfwByEntries(new Set([10]), true);
+
+    expect(pins.shown.map((p) => p.id)).toEqual([2, 3]);
+    // 手元への書き戻しが走るように、変わったことを伝える
+    expect(pins.revision).toBeGreaterThan(before);
   });
 });

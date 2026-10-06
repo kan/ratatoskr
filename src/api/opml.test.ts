@@ -71,6 +71,20 @@ describe('GET /api/opml', () => {
     expect(xml).toContain('ratatoskr:rate="4"');
     expect(xml).toContain('xmlUrl="https://round.example.com/feed"');
   });
+
+  it('NSFW の印も往復する。付いていないフィードには属性を出さない（issue #23）', async () => {
+    await importOpml(`<?xml version="1.0"?>
+<opml version="2.0" xmlns:ratatoskr="https://github.com/kan/ratatoskr">
+  <body>
+    <outline type="rss" text="隠す" xmlUrl="https://hidden.example.com/feed" ratatoskr:nsfw="1" />
+    <outline type="rss" text="出す" xmlUrl="https://shown.example.com/feed" />
+  </body>
+</opml>`);
+
+    const xml = await (await apiGet('/api/opml')).text();
+    expect(xml).toMatch(/text="隠す"[^>]*ratatoskr:nsfw="1"/);
+    expect(xml).not.toMatch(/text="出す"[^>]*ratatoskr:nsfw/);
+  });
 });
 
 describe('POST /api/opml', () => {

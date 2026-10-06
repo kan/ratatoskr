@@ -521,6 +521,16 @@ export const useSessionStore = defineStore('session', () => {
   async function editFeed(id: number, params: UpdateFeedRequest): Promise<void> {
     const { feed } = await updateFeed(id, params);
     feedsStore.upsertFeed(feed);
+    if (params.nsfw !== undefined) {
+      // 印はピンにも写してある（issue #23）。**手元で分かる分は先に当てる。**
+      // 下の同期は、始まっていた別の同期に相乗りすると変更前の印を持ち帰るので、
+      // それだけに任せると、隠したフィードのピンが次の定期同期まで一覧に残る
+      const entryIds = new Set(entriesStore.of(id).map((entry) => entry.id));
+      pinsStore.setNsfwByEntries(entryIds, feed.nsfw);
+      // **手元に無い記事のピンは、ここからは辿れない**（既読の記事は起動時に全件は
+      // 落とさない）。サーバは全てのピンを直しているので、定期同期を待たずに取りに行く
+      syncInBackground();
+    }
     await putFeeds([feed]);
   }
 

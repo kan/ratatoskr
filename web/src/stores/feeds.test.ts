@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Entry, Feed } from '@shared/types';
 import { useEntriesStore } from './entries';
 import { sortByReadingOrder, useFeedsStore } from './feeds';
+import { useNsfwStore } from './nsfw';
 
 /**
  * 既読ウォーターマークのテスト（CLAUDE.md のテスト方針で必須とされている箇所）。
@@ -28,6 +29,7 @@ function feed(id: number, overrides: Partial<Feed> = {}): Feed {
     disabled: false,
     fullText: false,
     fullTextSuggested: false,
+    nsfw: false,
     ...overrides,
   };
 }
@@ -898,6 +900,122 @@ describe('フォルダでの絞り込み（issue #3）', () => {
       feed(4, { folder: '開発' }),
     ]);
     expect(feeds.folders).toEqual(['News', '開発', '']);
+  });
+});
+
+describe('NSFW のフィードを隠す（issue #23）', () => {
+  /** レート順に 1 → 2 → 3。2 だけが NSFW */
+  function withNsfw() {
+    const feeds = useFeedsStore();
+    useEntriesStore().ingest([
+      imageEntry(1, 1),
+      imageEntry(2, 1),
+      imageEntry(3, 2),
+      imageEntry(4, 3),
+    ]);
+    feeds.setFeeds([
+      feed(1, { rate: 5, folder: '開発', unreadCount: 2 }),
+      feed(2, { rate: 3, folder: '夜', unreadCount: 1, nsfw: true }),
+      feed(3, { rate: 1, folder: '開発', unreadCount: 1 }),
+    ]);
+    feeds.enterFirstUnread();
+    return feeds;
+  }
+
+  it('既定では一覧にも、未読数にも、フォルダ名にも出さない', () => {
+    const feeds = withNsfw();
+
+    expect(feeds.visibleFeeds.map((f) => f.id)).toEqual([1, 3]);
+    // フィード 1 は先頭の記事を表示済みなので残り 1、フィード 3 が 1
+    expect(feeds.totalUnread).toBe(2);
+    expect(feeds.folders).toEqual(['開発']);
+    // 隠していても、同期と書き戻しのために全件は持っている
+    expect(feeds.feeds.map((f) => f.id)).toEqual([1, 2, 3]);
+  });
+
+  it('s / a は隠したフィードを飛ばし、先読みもしない', () => {
+    const feeds = withNsfw();
+    expect(feeds.prefetchUrls).toEqual([2, 4].map((id) => `https://img.example.com/${id}.jpg`));
+
+    feeds.nextFeed();
+    expect(feeds.currentFeed?.id).toBe(3);
+    feeds.prevFeed();
+    expect(feeds.currentFeed?.id).toBe(1);
+    // 一度も表示していないので、既読は進んでいない
+    expect(feeds.feeds[1].readSeq).toBe(0);
+  });
+
+  it('隠したフィードしか残っていなければ、読み終えたことにする', () => {
+    const feeds = withNsfw();
+    feeds.nextFeed();
+    feeds.nextFeed();
+
+    expect(feeds.finished).toBe(true);
+    expect(feeds.unreadOutsideScope).toBe(0);
+  });
+
+  it('表示を有効にした端末では、他のフィードと同じに扱う', () => {
+    useNsfwStore().setVisible(true);
+    const feeds = withNsfw();
+
+    expect(feeds.visibleFeeds.map((f) => f.id)).toEqual([1, 2, 3]);
+    expect(feeds.folders).toEqual(['開発', '夜']);
+    feeds.nextFeed();
+    expect(feeds.currentFeed?.id).toBe(2);
+  });
+
+  it('読んでいる最中に表示を切ると、見えている範囲の先頭の未読へ逃がす', () => {
+    useNsfwStore().setVisible(true);
+    const feeds = withNsfw();
+    feeds.nextFeed();
+    expect(feeds.currentFeed?.id).toBe(2);
+
+    // フィード 1 には 2 本目が未読で残っている
+    useNsfwStore().setVisible(false);
+    expect(feeds.currentFeed?.id).toBe(1);
+    expect(feeds.currentEntry?.id).toBe(2);
+  });
+
+  it('読み終えた後に表示を入れると、隠れていた未読に座る', () => {
+    const feeds = withNsfw();
+    // フィード 1 を最後まで読んでおく（残すと、そちらが先頭の未読になる）
+    feeds.nextEntry();
+    feeds.nextFeed();
+    feeds.nextFeed();
+    expect(feeds.finished).toBe(true);
+
+    useNsfwStore().setVisible(true);
+    expect(feeds.currentFeed?.id).toBe(2);
+    expect(feeds.finished).toBe(false);
+  });
+
+  it('読んでいるフィードに印が付いたら、次の未読へ逃がす（購読管理・他の端末）', () => {
+    const feeds = withNsfw();
+    expect(feeds.currentFeed?.id).toBe(1);
+
+    // 購読管理で付けた
+    feeds.upsertFeed(feed(1, { rate: 5, folder: '開発', nsfw: true }));
+    expect(feeds.currentFeed?.id).toBe(3);
+
+    // 他の端末で付けたものが同期で届いた
+    feeds.setFeeds(
+      feeds.feeds.map((f) => (f.id === 3 ? { ...f, nsfw: true } : f)),
+      { keepOrder: true },
+    );
+    expect(feeds.currentFeed).toBeNull();
+    expect(feeds.visibleFeeds).toEqual([]);
+  });
+
+  it('絞っていたフォルダが隠れたら、絞り込みも外す', async () => {
+    useNsfwStore().setVisible(true);
+    const feeds = withNsfw();
+    feeds.setFolder('夜');
+    expect(feeds.currentFeed?.id).toBe(2);
+
+    useNsfwStore().setVisible(false);
+    await nextTick();
+    expect(feeds.folder).toBeNull();
+    expect(feeds.currentFeed?.id).toBe(1);
   });
 });
 

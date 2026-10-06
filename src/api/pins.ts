@@ -53,6 +53,13 @@ function parseEntryId(value: unknown): number | null {
   return value as number;
 }
 
+/** 省けば false。古い版の画面や、送信待ちのまま残っていた要求には付いていない */
+function parseNsfw(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value !== 'boolean') return badRequest('nsfw は真偽値で送る');
+  return value;
+}
+
 /**
  * 見出しが空なら、記事の本文の書き出しで補う（M7 の「タイトルを配らないフィード」と
  * 同じ規則。src/crawler/title.ts）。
@@ -80,7 +87,8 @@ export async function createPin(request: Request, env: Env): Promise<Response> {
 
   // 記事が既に消えていることがある（オフラインでピンした後に購読を解除した等）。
   // その場合は参照だけ落として作る（クエリ層の副問い合わせが引き受ける）
-  const pin = await insertPin(env.DB, { entryId, title, url }, Math.floor(Date.now() / 1000));
+  const nsfw = parseNsfw(input.nsfw);
+  const pin = await insertPin(env.DB, { entryId, title, url, nsfw }, Math.floor(Date.now() / 1000));
 
   const responseBody: PinResponse = { pin };
   return json(responseBody, 201);

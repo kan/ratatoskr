@@ -76,6 +76,65 @@ describe('POST /api/pins', () => {
     expect((await response.json()) as PinResponse).toMatchObject({ pin: { entryId: null } });
   });
 
+  it('NSFW のフィードの記事に立てたピンには、同じ印が付く（issue #23）', async () => {
+    const feedId = await seedFeed(env.DB, 'https://nsfw.example.com/feed');
+    const plainId = await seedFeed(env.DB, 'https://plain.example.com/feed');
+    await apiSend('PATCH', `/api/feeds/${feedId}`, { nsfw: true });
+
+    const hidden = await pin({
+      entryId: await seedEntry(env.DB, feedId),
+      title: '隠すピン',
+      url: 'https://nsfw.example.com/1',
+    });
+    const shown = await pin({
+      entryId: await seedEntry(env.DB, plainId),
+      title: '出すピン',
+      url: 'https://plain.example.com/1',
+    });
+
+    expect(((await hidden.json()) as PinResponse).pin.nsfw).toBe(true);
+    expect(((await shown.json()) as PinResponse).pin.nsfw).toBe(false);
+  });
+
+  it('記事が消えた後に同じ URL を送り直しても、印は外れない', async () => {
+    const feedId = await seedFeed(env.DB, 'https://nsfw-gone.example.com/feed');
+    await apiSend('PATCH', `/api/feeds/${feedId}`, { nsfw: true });
+    const entryId = await seedEntry(env.DB, feedId);
+    const params = { entryId, title: '隠すピン', url: 'https://nsfw-gone.example.com/1' };
+    await pin(params);
+
+    // 記事が消えると、どのフィードの記事だったかはもう引けない
+    await apiSend('DELETE', `/api/feeds/${feedId}`);
+    const again = await pin(params);
+
+    expect(((await again.json()) as PinResponse).pin).toMatchObject({ entryId: null, nsfw: true });
+  });
+
+  it('記事がもう無いときは、クライアントが見た印を採る', async () => {
+    // 手元には残っているが、サーバでは保持期間で消えた記事をピンした場合
+    const response = await pin({
+      entryId: 999999,
+      title: '隠すピン',
+      url: 'https://nsfw-local.example.com/1',
+      nsfw: true,
+    });
+    expect(((await response.json()) as PinResponse).pin).toMatchObject({
+      entryId: null,
+      nsfw: true,
+    });
+  });
+
+  it('記事が残っていれば、クライアントの申告よりフィードの印を採る', async () => {
+    const feedId = await seedFeed(env.DB, 'https://plain-claim.example.com/feed');
+    const response = await pin({
+      entryId: await seedEntry(env.DB, feedId),
+      title: '出すピン',
+      url: 'https://plain-claim.example.com/1',
+      nsfw: true,
+    });
+    expect(((await response.json()) as PinResponse).pin.nsfw).toBe(false);
+  });
+
   it('記事に紐付かないピンも作れる', async () => {
     const response = await pin({ title: '手で足したピン', url: 'https://example.com/free' });
     expect(response.status).toBe(201);

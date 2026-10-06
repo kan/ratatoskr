@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import type { Entry, Feed } from '@shared/types';
 import { imageUrlsOf, prefetchImages } from '@/lib/prefetch';
 import { useEntriesStore } from './entries';
+import { useNsfwStore } from './nsfw';
 
 /**
  * 読む順序（レート降順 → 未読数降順）。サーバの ORDER BY と同じ規則。
@@ -35,6 +36,7 @@ const PREFETCH_IMAGES = 40;
  */
 export const useFeedsStore = defineStore('feeds', () => {
   const entriesStore = useEntriesStore();
+  const nsfw = useNsfwStore();
 
   /**
    * サーバが返した順（レート降順 → 未読数降順）。これが読む順序であり先読み順序。
@@ -117,14 +119,25 @@ export const useFeedsStore = defineStore('feeds', () => {
   }
 
   /**
+   * この端末で出してよいフィード（issue #23）。**NSFW の印が付いたものは、表示を
+   * 有効にした端末でしか出さない。** フォルダの絞り込みと違ってユーザが「いま読む範囲」を
+   * 選んだ結果ではないので、未読数にもフォルダ名にも、隠していること自体を出さない。
+   *
+   * 一覧（`feeds`）からは抜かない。既読の同期と手元への書き戻しは全件に対して
+   * 走らせておかないと、表示を有効にした瞬間に古い状態が出る
+   */
+  const shownFeeds = computed(() => nsfw.shownOf(feeds.value));
+
+  /**
    * 左ペインに並べるフィード。絞り込みの外は出さない。
    *
-   * 絞っていないときに `feeds.value` をそのまま返すのは、**同じ配列を返して
+   * 絞っていないときに `shownFeeds` をそのまま返すのは、**同じ配列を返して
    * 左ペインの再描画を誘発しないため**（filter は毎回新しい配列になる）。
-   * 絞っていない状態が常態なので、そこだけ写しを作らない
+   * 絞っていない状態が常態なので、そこだけ写しを作らない（隠すフィードが
+   * 無ければ `shownFeeds` も `feeds.value` そのもの）
    */
   const visibleFeeds = computed(() =>
-    folder.value === null ? feeds.value : feeds.value.filter(inFolder),
+    folder.value === null ? shownFeeds.value : shownFeeds.value.filter(inFolder),
   );
 
   /**
@@ -132,7 +145,7 @@ export const useFeedsStore = defineStore('feeds', () => {
    * 未分類（空文字）は最後に置く。名前として並べる先が無いため
    */
   const folders = computed(() => {
-    const names = [...new Set(feeds.value.map((feed) => feed.folder))];
+    const names = [...new Set(shownFeeds.value.map((feed) => feed.folder))];
     return names.sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b, 'ja')));
   });
 
@@ -143,14 +156,26 @@ export const useFeedsStore = defineStore('feeds', () => {
   function setFolder(next: string | null): void {
     if (folder.value === next) return;
     folder.value = next;
+    reseatIfOutOfScope();
+  }
 
-    // 新しい範囲でカーソルがまだ有効かを見る。**読み終えた状態も無効に含める。**
-    // 絞った範囲を読み切ってから広げると、新しい範囲に未読があっても
-    // 「全て読み終えた」が出たままになる
-    if (finished.value || currentFeed.value === null || !inFolder(currentFeed.value)) {
+  /**
+   * 範囲が変わった後に、カーソルがまだ有効かを見て座らせ直す。
+   *
+   * **読み終えた状態も無効に含める。** 絞った範囲を読み切ってから広げると、
+   * 新しい範囲に未読があっても「全て読み終えた」が出たままになる
+   */
+  function reseatIfOutOfScope(): void {
+    const feed = currentFeed.value;
+    // 隠しているフィードは、どのフォルダを選んでも範囲に入らない
+    if (finished.value || feed === null || nsfw.isHidden(feed) || !inFolder(feed)) {
       enterFirstUnread();
     }
   }
+
+  // NSFW の表示を切り替えたとき（購読管理画面）も、範囲が変わる。隠した側に
+  // カーソルが残ると、見えていないフィードを起点に s / a と先読みが回る
+  watch(() => nsfw.visible, reseatIfOutOfScope, { flush: 'sync' });
 
   /**
    * 絞り込みの外に残っている未読の数。絞っていなければ 0。
@@ -162,7 +187,7 @@ export const useFeedsStore = defineStore('feeds', () => {
   const unreadOutsideScope = computed(() =>
     folder.value === null
       ? 0
-      : feeds.value.reduce((sum, feed) => (inFolder(feed) ? sum : sum + feed.unreadCount), 0),
+      : shownFeeds.value.reduce((sum, feed) => (inFolder(feed) ? sum : sum + feed.unreadCount), 0),
   );
 
   /**
@@ -170,9 +195,14 @@ export const useFeedsStore = defineStore('feeds', () => {
    *
    * **フォルダの絞り込みは見ない。** 絞り込みは「いま何を読むか」の選択であって、
    * 「読むものが残っているか」とは別の話。絞った途端にアイコンが変わると、
-   * 他のフォルダに未読があることを見落とす
+   * 他のフォルダに未読があることを見落とす。
+   *
+   * 隠しているフィード（issue #23）は数えない。この端末では読めないので、
+   * 数えると「読むものが残っている」印が消せなくなる
    */
-  const totalUnread = computed(() => feeds.value.reduce((sum, feed) => sum + feed.unreadCount, 0));
+  const totalUnread = computed(() =>
+    shownFeeds.value.reduce((sum, feed) => sum + feed.unreadCount, 0),
+  );
 
   /**
    * 絞っていたフォルダが消えたら（購読解除・改名）絞り込みも外す。
@@ -279,7 +309,22 @@ export const useFeedsStore = defineStore('feeds', () => {
     const moved = feeds.value.findIndex((feed) => feed.id === currentId);
     // 購読が消えていたら次の未読フィードに逃がす
     if (moved === -1) enterFirstUnread();
-    else feedIndex.value = moved;
+    else {
+      feedIndex.value = moved;
+      leaveIfHidden();
+    }
+  }
+
+  /**
+   * 読んでいたフィードに NSFW の印が付いたら（他の端末で付けた・購読管理で付けた）、
+   * 次の未読へ逃がす。印は外から届くので、範囲の切り替え（setFolder）と違って
+   * 一覧を受け取る側で見る。
+   *
+   * 読み終えていても逃がす。カーソルは最後に読んだフィードに残っているので、
+   * そのままだと k / a で隠したはずの記事を読み返せる
+   */
+  function leaveIfHidden(): void {
+    if (currentFeed.value !== null && nsfw.isHidden(currentFeed.value)) enterFirstUnread();
   }
 
   /**
@@ -300,6 +345,7 @@ export const useFeedsStore = defineStore('feeds', () => {
       syncUnreadCount(feeds.value[index]);
     }
     resortKeepingCursor();
+    leaveIfHidden();
   }
 
   /**
@@ -414,7 +460,7 @@ export const useFeedsStore = defineStore('feeds', () => {
     if (index === -1) {
       feedIndex.value = -1;
       currentEntries.value = [];
-      finished.value = feeds.value.some(inFolder);
+      finished.value = visibleFeeds.value.length > 0;
       return;
     }
     // **enterFeed の前に控える。** 着地した記事を表示した時点で未読例外（u）は外れるので
@@ -623,9 +669,13 @@ export const useFeedsStore = defineStore('feeds', () => {
     // （素直に書いた版は 100 フィードで実測 1.5 倍かかった）
     const list = feeds.value;
     const only = folder.value;
+    // 隠しているフィード（issue #23）も同じ場所で外す。理由はフォルダと同じ
+    const showNsfw = nsfw.visible;
     for (let i = from; i >= 0 && i < list.length; i += step) {
       const feed = list[i];
-      if ((only === null || feed.folder === only) && accept(feed)) return i;
+      if ((showNsfw || !feed.nsfw) && (only === null || feed.folder === only) && accept(feed)) {
+        return i;
+      }
     }
     return -1;
   }
@@ -847,6 +897,7 @@ export const useFeedsStore = defineStore('feeds', () => {
 
   return {
     feeds,
+    shownFeeds,
     visibleFeeds,
     folders,
     folder,

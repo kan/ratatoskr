@@ -41,6 +41,7 @@ function feed(id: number, title: string, rate: number, unreadCount: number): Fee
     disabled: false,
     fullText: false,
     fullTextSuggested: false,
+    nsfw: false,
   };
 }
 
@@ -338,8 +339,16 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
   await page.route('**/api/pins', async (route) => {
     const params = route.request().postDataJSON() as CreatePinRequest;
     recorder.pinned.push(params);
+    // 実際のサーバと同じく、印は記事のフィードから引く。記事が無いときだけ
+    // 要求の申告を採る（src/db/pins.ts）
+    const pinned = entries.find((candidate) => candidate.id === params.entryId);
     const body: PinResponse = {
-      pin: { id: 900 + recorder.pinned.length, ...params, pinnedAt: 1786000200 },
+      pin: {
+        id: 900 + recorder.pinned.length,
+        ...params,
+        pinnedAt: 1786000200,
+        nsfw: pinned === undefined ? params.nsfw === true : current(pinned.feedId).nsfw,
+      },
     };
     await route.fulfill({ status: 201, json: body });
   });

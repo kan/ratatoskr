@@ -1,5 +1,6 @@
 import type { Feed, FeedErrorKind, FeedReadState, ReadMark } from '../../shared/types';
 import { CLEAR_FULL_BODIES } from './entries';
+import { COPY_NSFW_TO_PINS } from './pins';
 import { UNREAD_COUNT_SUBQUERY } from './unread';
 
 /**
@@ -23,6 +24,7 @@ interface FeedRow {
   disabled: number;
   full_text: number;
   full_text_suggested: number;
+  nsfw: number;
 }
 
 function toFeed(row: FeedRow): Feed {
@@ -44,12 +46,13 @@ function toFeed(row: FeedRow): Feed {
     fullText: row.full_text === 1,
     // 2 は「ユーザが決めた」。勧めるのは 1 のときだけ（migrations/0003_full_text.sql）
     fullTextSuggested: row.full_text_suggested === 1,
+    nsfw: row.nsfw === 1,
   };
 }
 
 const FEED_COLUMNS = `f.id, f.url, f.site_url, f.title, f.icon_url, f.rate, f.folder, f.read_seq,
               f.last_fetched_at, f.last_error, f.last_error_kind, f.consecutive_failures,
-              f.disabled, f.full_text, f.full_text_suggested`;
+              f.disabled, f.full_text, f.full_text_suggested, f.nsfw`;
 
 /**
  * 全フィードを未読数付きで返す。
@@ -128,6 +131,8 @@ export interface NewFeed {
   title: string;
   rate: number;
   folder: string;
+  /** 省けば false。OPML の取り込みだけが指定する（書き出した印を戻すため） */
+  nsfw?: boolean;
 }
 
 /**
@@ -135,15 +140,23 @@ export interface NewFeed {
  * next_fetch_at は 0 にして、登録直後のクロール（同期・cron のどちらでも）に拾わせる。
  */
 const INSERT_FEED = `INSERT OR IGNORE INTO feeds
-       (url, site_url, title, rate, folder, next_fetch_at, created_at)
-     VALUES (?, ?, ?, ?, ?, 0, ?)`;
+       (url, site_url, title, rate, folder, nsfw, next_fetch_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?)`;
 
 function bindNewFeed(
   statement: D1PreparedStatement,
   feed: NewFeed,
   now: number,
 ): D1PreparedStatement {
-  return statement.bind(feed.url, feed.siteUrl, feed.title, feed.rate, feed.folder, now);
+  return statement.bind(
+    feed.url,
+    feed.siteUrl,
+    feed.title,
+    feed.rate,
+    feed.folder,
+    feed.nsfw === true ? 1 : 0,
+    now,
+  );
 }
 
 /**
@@ -195,6 +208,8 @@ export interface FeedSettings {
   disabled?: boolean;
   /** 記事ページから本文を取ってくるか（M7） */
   fullText?: boolean;
+  /** 表示を有効にした端末でしか出さないか（issue #23） */
+  nsfw?: boolean;
 }
 
 /**
@@ -237,6 +252,10 @@ export async function updateFeedSettings(
     // 0 に戻すと次のクロールで同じ判定が出て勧めが復活するので、2 を入れる
     assignments.push('full_text_suggested = 2');
   }
+  if (settings.nsfw !== undefined) {
+    assignments.push('nsfw = ?');
+    params.push(settings.nsfw ? 1 : 0);
+  }
   // 無効化を解除したら次の cron で拾えるようにする。
   // 連続失敗で自動的に無効化されたフィードを、手で戻せるようにするため
   if (settings.disabled === false) {
@@ -252,8 +271,13 @@ export async function updateFeedSettings(
   // 全文取得を切ったら、取ってあった本文も捨てる。読み出しは COALESCE なので、
   // 捨てないと「抽出が本文でないものを掴んでいた」ときに元へ戻す手段が無くなる。
   // 設定と後始末を 1 つの batch にまとめて、片方だけ適用された状態を作らない
-  const statements =
-    settings.fullText === false ? [update, db.prepare(CLEAR_FULL_BODIES).bind(id)] : [update];
+  const statements = [update];
+  if (settings.fullText === false) statements.push(db.prepare(CLEAR_FULL_BODIES).bind(id));
+  // NSFW の印はピンにも写してある。フィードの側だけ変えると、隠したはずのフィードの
+  // 記事がピンの一覧に残る
+  if (settings.nsfw !== undefined) {
+    statements.push(db.prepare(COPY_NSFW_TO_PINS).bind(settings.nsfw ? 1 : 0, id));
+  }
 
   const [result] = await db.batch(statements);
   return (result.meta.changes ?? 0) > 0;

@@ -64,7 +64,7 @@ function pinnedOn(pin: Pin): string {
       -->
       <ul v-else class="mt-3">
         <li
-          v-for="pin in pins.pins"
+          v-for="pin in pins.shown"
           :key="pin.url"
           class="flex items-baseline gap-3 border-t border-neutral-200 py-3 md:py-1.5 dark:border-neutral-800"
           :data-testid="`pin-${pin.entryId ?? 'x'}`"

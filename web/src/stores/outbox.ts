@@ -28,7 +28,15 @@ export type OutboxItem =
   | { key: string; kind: 'read'; feedId: number; watermark: number }
   | { key: string; kind: 'unread'; entryId: number; unread: boolean }
   | { key: string; kind: 'rate'; feedId: number; rate: number }
-  | { key: string; kind: 'pin'; entryId: number | null; title: string; url: string }
+  | {
+      key: string;
+      kind: 'pin';
+      entryId: number | null;
+      title: string;
+      url: string;
+      /** 記事のフィードの NSFW の印（issue #23）。立っているときだけ持つ */
+      nsfw?: boolean;
+    }
   | { key: string; kind: 'unpin'; pinId: number };
 
 /** 積んでから送るまでの待ち。j 連打で 1 記事ごとに POST が飛ぶのを防ぐ */
@@ -141,8 +149,9 @@ export const useOutboxStore = defineStore('outbox', () => {
    * 送信が通るとサーバが id を振る。外すには id が要るので、応答を手元のピンに
    * 書き戻す（送信結果を使う唯一の操作）。
    */
-  function queuePin(entryId: number | null, title: string, url: string): void {
-    enqueue({ key: pinKey(url), kind: 'pin', entryId, title, url });
+  function queuePin(entryId: number | null, title: string, url: string, nsfw = false): void {
+    // 印は立っているときだけ載せる。サーバは省かれていれば false と読む
+    enqueue({ key: pinKey(url), kind: 'pin', entryId, title, url, ...(nsfw ? { nsfw } : {}) });
   }
 
   /**
@@ -204,7 +213,12 @@ export const useOutboxStore = defineStore('outbox', () => {
           keys: [item.key],
           // 応答の id と見出しを手元に書き戻す。id が無いとそのピンを外せない
           run: () =>
-            postPin({ entryId: item.entryId, title: item.title, url: item.url }).then((body) => {
+            postPin({
+              entryId: item.entryId,
+              title: item.title,
+              url: item.url,
+              nsfw: item.nsfw,
+            }).then((body) => {
               pinsStore.confirm(item.url, body.pin);
               // 送信中に外されていた。サーバには出来てしまったので、改めて外す
               if (cancelled.delete(item.url)) queueUnpin(body.pin.id, item.url);

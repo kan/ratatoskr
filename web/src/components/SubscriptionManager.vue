@@ -5,6 +5,7 @@ import { REPOSITORY_URL } from '@shared/types';
 import { bookmarkletFor } from '@/lib/bookmarklet';
 import { confirmUnsubscribe, isStalled, UNCATEGORIZED } from '@/lib/subscriptions';
 import { sortByReadingOrder, useFeedsStore } from '@/stores/feeds';
+import { useNsfwStore } from '@/stores/nsfw';
 import { useSessionStore } from '@/stores/session';
 
 /**
@@ -74,8 +75,14 @@ const error = ref<string | null>(null);
 const candidates = ref<{ url: string; title: string | null }[]>([]);
 
 // 並びは左ペインと同じ読む順序にする。ここだけ別の規則で並べると、
-// 「上にあるものから読まれる」という前提が画面ごとに食い違う
-const sorted = computed(() => sortByReadingOrder(feeds.feeds));
+// 「上にあるものから読まれる」という前提が画面ごとに食い違う。
+//
+// **隠しているフィード（issue #23）はここにも出さない。** 件数にも一括解除の対象にも
+// 入れない。印を外すのは、表示を有効にした端末でやる
+const sorted = computed(() => sortByReadingOrder(feeds.shownFeeds));
+
+/** この端末で NSFW を出すか。切り替えはこの画面だけに置く（stores/nsfw.ts） */
+const nsfw = useNsfwStore();
 
 /**
  * 入力欄に出すフォルダ名の候補（issue #3）。左ペインの絞り込みと同じ一覧を引く。
@@ -236,6 +243,17 @@ async function rename(feed: Feed, input: HTMLInputElement): Promise<void> {
   if (error.value !== null) input.value = feed.title;
 }
 
+/**
+ * 入切の状態そのものを見せるトグル（全文 / NSFW）の見た目。枠は切のときも
+ * transparent で残す。消すと幅が動いて、行ごとに後ろのボタンの位置がずれる
+ */
+function toggleClass(on: boolean): string {
+  const state = on
+    ? 'border-neutral-400 text-neutral-900 dark:border-neutral-500 dark:text-neutral-100'
+    : 'border-transparent text-neutral-400 dark:text-neutral-600';
+  return `rounded border px-1.5 ${state}`;
+}
+
 function toggleDisabled(feed: Feed): Promise<void> {
   return run(() => session.editFeed(feed.id, { disabled: !feed.disabled }));
 }
@@ -260,6 +278,22 @@ async function toggleFullText(feed: Feed): Promise<void> {
     }
     await session.refresh(feed.id);
     message.value = '全文取得を入れて、未読の本文を取りに行った';
+  });
+}
+
+/**
+ * NSFW の印の付け外し（issue #23）。
+ *
+ * **隠している端末で付けると、その行はこの場で消える。** 何も言わないと消えた理由が
+ * 分からないので、隠したことを知らせる。外すには表示を有効にする必要がある
+ */
+function toggleNsfw(feed: Feed): Promise<void> {
+  const marked = !feed.nsfw;
+  return run(async () => {
+    await session.editFeed(feed.id, { nsfw: marked });
+    if (marked && !nsfw.visible) {
+      message.value = 'NSFW にした。この端末では隠しているので、一覧からも外した';
+    }
   });
 }
 
@@ -402,7 +436,7 @@ async function onOpmlSelected(event: Event): Promise<void> {
               <th class="w-16 py-1">レート</th>
               <th class="w-28 py-1">フォルダ</th>
               <th class="w-16 py-1 text-right">未読</th>
-              <th class="w-40 py-1"></th>
+              <th class="w-52 py-1"></th>
             </tr>
           </thead>
           <tbody>
@@ -477,12 +511,7 @@ async function onOpmlSelected(event: Event): Promise<void> {
                 後ろのボタンの位置がずれる。枠は切のときも transparent で残す
               -->
                 <button
-                  class="rounded border px-1.5"
-                  :class="
-                    feed.fullText
-                      ? 'border-neutral-400 text-neutral-900 dark:border-neutral-500 dark:text-neutral-100'
-                      : 'border-transparent text-neutral-400 dark:text-neutral-600'
-                  "
+                  :class="toggleClass(feed.fullText)"
                   :disabled="busy"
                   :aria-pressed="feed.fullText"
                   :title="
@@ -494,6 +523,21 @@ async function onOpmlSelected(event: Event): Promise<void> {
                   @click="toggleFullText(feed)"
                 >
                   全文
+                </button>
+                <!-- 全文と同じ形のトグル。入切の状態そのものを見せる -->
+                <button
+                  :class="toggleClass(feed.nsfw)"
+                  :disabled="busy"
+                  :aria-pressed="feed.nsfw"
+                  :title="
+                    feed.nsfw
+                      ? '表示を有効にした端末でしか出さない（入）'
+                      : '表示を有効にした端末でしか出さないようにする（切）'
+                  "
+                  :data-testid="`manage-nsfw-${feed.id}`"
+                  @click="toggleNsfw(feed)"
+                >
+                  NSFW
                 </button>
                 <button class="hover:underline" :disabled="busy" @click="refresh(feed)">
                   更新
@@ -573,6 +617,22 @@ async function onOpmlSelected(event: Event): Promise<void> {
         >
           Ratatoskr に追加
         </a>
+        <!--
+          端末ごとの設定（issue #23）。**覚えるのはこの端末だけ**で、他の端末には
+          伝わらない。切ると、印の付いたフィードとそのピンがこの端末から見えなくなる
+        -->
+        <label
+          class="flex items-center gap-1"
+          title="NSFW の印を付けたフィードと、そのピンをこの端末で出す。他の端末には伝わらない"
+        >
+          <input
+            type="checkbox"
+            :checked="nsfw.visible"
+            data-testid="nsfw-visible"
+            @change="nsfw.setVisible(($event.target as HTMLInputElement).checked)"
+          />
+          この端末で NSFW を表示
+        </label>
         <a
           :href="REPOSITORY_URL"
           target="_blank"

@@ -44,6 +44,12 @@ export interface Feed {
   fullText: boolean;
   /** クロール時に「要約しか配信していない」と見えた。購読管理画面で勧めるのに使う */
   fullTextSuggested: boolean;
+  /**
+   * 表示を有効にした端末でしか出さない（issue #23）。**隠すのは画面側。**
+   * サーバは全ての端末に同じものを配り、どの端末で出すかは端末ごとの設定で決まる
+   * （web/src/stores/nsfw.ts）
+   */
+  nsfw: boolean;
 }
 
 export interface Entry {
@@ -63,6 +69,11 @@ export interface Pin {
   title: string;
   url: string;
   pinnedAt: number;
+  /**
+   * NSFW のフィードの記事に立てたピン（issue #23）。**ピンを立てた時点のフィードの印を
+   * 写したもの。** ピンは記事より長生きするので、後からフィードを辿って決められない
+   */
+  nsfw: boolean;
 }
 
 /**
@@ -169,6 +180,7 @@ export interface UpdateFeedRequest {
   title?: string;
   disabled?: boolean;
   fullText?: boolean;
+  nsfw?: boolean;
 }
 
 export interface FeedResponse {
@@ -204,6 +216,12 @@ export interface CreatePinRequest {
    */
   title: string;
   url: string;
+  /**
+   * 記事のフィードに NSFW の印が付いていたか（issue #23）。**サーバが記事から引けない
+   * ときの控え。** 記事が残っていればサーバはそちらを採る。手元にはあるがサーバでは
+   * もう消えた記事をピンしたときに、これが無いと印なしで保存される。省けば false
+   */
+  nsfw?: boolean;
 }
 
 export interface PinResponse {
