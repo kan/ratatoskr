@@ -21,7 +21,7 @@ import type {
  * 型付き API クライアント。
  *
  * 本番は Worker と同一オリジンなので常に相対パスで叩く（開発時は Vite の proxy が
- * 8787 に渡す）。認証は Cloudflare Access の cookie が自動で付くので、ここでは
+ * wrangler dev に渡す）。認証は Cloudflare Access の cookie が自動で付くので、ここでは
  * 何もしない。
  */
 

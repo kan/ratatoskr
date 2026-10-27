@@ -12,7 +12,7 @@ export interface AuthEnv {
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
   /**
-   * ローカル開発用のバイパス。`pnpm dev` が --var で渡す（package.json）。
+   * ローカル開発用のバイパス。開発サーバの起動時に --var で渡す（scripts/dev.mjs）。
    * wrangler.jsonc の vars に載せていないので、デプロイには含まれない。
    * 万一本番に紛れ込んでも効かないよう、localhost からの要求にしか適用しない
    */

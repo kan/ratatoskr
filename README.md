@@ -56,10 +56,17 @@ cp .dev.vars.example .dev.vars   # Access の値を埋める（検証を飛ば�
 cp .env.example .env             # Workers AI の接続に要る（下記。デプロイ後だけ）
 pnpm db:migrate                  # ローカル D1 にスキーマを適用
 pnpm build                       # web/dist を作る（下記。初回だけ）
-pnpm dev                         # vite(5173) と wrangler dev(8787) を同時起動
+pnpm dev:roji                    # roji がある環境。無ければ pnpm dev
 ```
 
-画面は http://localhost:5173 を開く。`/api` は 8787 の Worker にプロキシされる（本番は同一オリジン）。
+[roji](https://github.com/kan/roji) がある環境では `pnpm dev:roji` で起動し、
+`https://ratatoskr.<roji のドメイン>` を開く（起動時に出る `roji: https://... -> localhost:<ポート>`
+の行か `roji routes` で確かめる）。画面も API も空いているポートで起動するので、他の
+Workers のプロジェクトの開発サーバと同時に動かせる。
+
+roji が無い環境では `pnpm dev` を使い、http://localhost:5173 を開く（埋まっていれば vite が
+次のポートへ逃げる）。どちらでも `/api` は vite から Worker にプロキシされ（本番は同一オリジン）、
+Worker のポートは起動のたびに空いているものを選ぶ（`scripts/dev.mjs`）。
 
 初回に `pnpm build` を挟むのは、`wrangler.jsonc` が Static Assets の置き場として `web/dist` を
 指しているため。**クローン直後は `web/dist` が無く、`wrangler dev` が
@@ -92,13 +99,13 @@ Workers AI（`env.AI`）はローカル実行されず必ずリモートに繋�
 **このトークンは本番の `/api/*` にも到達できる**（Worker 側は JWT の `aud` しか見ないので、
 人間のログインと区別しない）。手元から出さないこと。
 
-`cloudflared access login` でも通せるが、`pnpm dev` は concurrently 経由で
-子プロセスの stdio が pipe になり、wrangler が「非対話」と判断してその経路に入らない。
+`cloudflared access login` を使う経路もあるが、wrangler は非対話と判断するとその経路に入らない。
 Service Token なら対話・非対話を問わない。
 
 | コマンド                | 内容                               |
 | ----------------------- | ---------------------------------- |
-| `pnpm dev`              | 開発サーバ                         |
+| `pnpm dev:roji`         | 開発サーバ（roji 経由）            |
+| `pnpm dev`              | 開発サーバ（roji なし）            |
 | `pnpm build`            | web をビルドして `web/dist` に出力 |
 | `pnpm test`             | Vitest（workerd 上で実行）         |
 | `pnpm test:e2e`         | Playwright（キーバインドの確認）   |

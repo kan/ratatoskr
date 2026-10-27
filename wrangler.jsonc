@@ -65,9 +65,6 @@
   "vars": {
     "ACCESS_TEAM_DOMAIN": "",
     "ACCESS_AUD": ""
-  },
-
-  "dev": {
-    "port": 8787
   }
+  // dev.port は置かない。開発サーバのポートは scripts/dev.mjs が起動のたびに空きから選ぶ
 }

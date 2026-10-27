@@ -3,7 +3,7 @@
 
 # ここに書いた値は wrangler.jsonc の vars を上書きする。
 # localhost の検証を飛ばす ACCESS_DEV_BYPASS を vars に載せていないのは、
-# 本番に渡したくないため。あれは pnpm dev が --var で渡す（package.json）
+# 本番に渡したくないため。あれは開発サーバの起動時に --var で渡す（scripts/dev.mjs）
 
 # バイパスするので中身は使われない。空だと分かりにくいので形だけ入れてある。
 # 本番の値は .prod.vars に置く（README「デプロイ」）

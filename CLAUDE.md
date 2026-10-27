@@ -58,7 +58,8 @@
 ```bash
 pnpm install
 
-pnpm dev                # wrangler dev。Vite の HMR 込みでローカル起動
+pnpm dev:roji           # roji 経由で開発サーバを起動（roji がある環境では必ずこちら）
+pnpm dev                # roji なしで開発サーバを起動
 pnpm build              # web をビルドして Worker にバンドル
 pnpm deploy             # 本番デプロイ（migrations を当ててから上げる）
 
@@ -86,17 +87,19 @@ pnpm db:migrate    # .wrangler/ は未コミット。クローン直後のロー
 cp .dev.vars.example .dev.vars   # Access の値を埋める（後述）
 cp .env.example .env             # デプロイ後は Workers AI の接続にも要る（後述）
 pnpm build                       # web/dist が無いと wrangler dev が起動しない（後述）
-pnpm dev
+pnpm dev:roji                    # roji が無い環境では pnpm dev（後述）
 ```
 
 `.dev.vars` は git 管理外なので、クローン直後は雛形から作る。ここに書いた値は
 `wrangler.jsonc` の `vars` を上書きする。
 
 Access の検証を飛ばす `ACCESS_DEV_BYPASS` を `vars` に載せていないのは、
-デプロイに含めたくないため。**あれは `pnpm dev` が `--var` で渡している**
-（`package.json`）。渡らないと `/api/*` が全て 401 になる。バイパスは
+デプロイに含めたくないため。**あれは `scripts/dev.mjs` が `--var` で渡している。**
+渡らないと `/api/*` が全て 401 になる。バイパスは
 **localhost 宛の要求にしか効かない**ので、デプロイ先に紛れ込んでも認証が
-素通りすることはない（`src/lib/auth.ts`）。
+素通りすることはない（`src/lib/auth.ts`）。roji の URL で開いても効くのは、vite の
+`/api` の転送がホスト名を `127.0.0.1` に書き換えるから（`web/vite.config.ts` の
+`changeOrigin: true`）。**ここを false に戻すと、roji 経由の `/api` が全て 401 になる。**
 
 **アカウント固有の値は追跡させない**（このリポジトリは公開）。`wrangler.jsonc` には
 D1 の `database_id` も Access の値も書かない（`vars` には名前だけ置き、値は空）。
@@ -123,10 +126,22 @@ Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCE
   `wrangler.jsonc` が Static Assets の置き場に `web/dist` を指しているので、
   無いと「The directory specified by the "assets.directory" field ... does not exist」で落ちる。
   開発中の画面は vite が配るため、ここで作った `dist` の中身は古くても構わない
-- `pnpm dev` は **vite(5173) と wrangler dev(8787) の 2 プロセス構成**。画面は 5173 を開き、
-  `/api` は vite の proxy で 8787 に渡る。本番は同一オリジンなので、クライアントは常に
-  相対パスで `/api` を叩けばよい。`strictPort` は指定していないので、5173 が埋まっていれば
-  vite は 5174 に逃げる（proxy 先の 8787 は固定なのでそのまま動く）
+- **roji が使える環境では、開発サーバを `pnpm dev:roji` で起動する。その環境では
+  `pnpm dev`、`vite`、`wrangler dev` を直接実行して起動しない。** ポートを固定すると、
+  他の Workers のプロジェクトの開発サーバとぶつかる。`roji run` は空いているポートを選び、
+  `https://ratatoskr.<roji のドメイン>` という決まった URL を付ける
+  - roji が使えるかは、`command -v roji` が成功し、`roji health` が「正常」を返すことで
+    確かめる。2026-10-27 に 1.5.1 で動作を確かめた
+  - 開く URL は、起動時に出る `roji: https://... -> localhost:<ポート>` の行か `roji routes` で
+    確かめる。roji のドメインは環境ごとに違うので、URL を決め打ちしない
+  - roji が無い、または動いていない環境では `pnpm dev`。画面は 5173 で、埋まっていれば
+    vite が次のポートへ逃げる
+- 開発サーバは **vite と wrangler dev の 2 プロセス構成**（`scripts/dev.mjs`）。`/api` は
+  vite の proxy で Worker に渡る。本番は同一オリジンなので、クライアントは常に相対パスで
+  `/api` を叩けばよい。**Worker のポートとデバッガのポートは起動のたびに空いているものを選ぶ**
+  （`pnpm dev` でも同じ）。vite へは環境変数 `RATATOSKR_API_PORT` で渡す。8787 を決め打ちしない
+- 終了は `Ctrl+C`。2 つとも止まり、roji のルートも取り消される。片方が落ちたときも、
+  もう片方を止めて終了する
 - **ローカル D1 のファイル名は `database_id` から決まる。** `.wrangler/state/v3/d1/` に
   `<hash>.sqlite` として置かれ、この hash が id ごとに違う。つまり **`wrangler.jsonc` の
   `database_id` を変えたり外したりすると、その瞬間から空の別 DB を見に行く。**
@@ -143,7 +158,8 @@ Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCE
   記事で `SQLITE_TOOBIG` になるので、`.wrangler/state/v3/d1/<hash>.sqlite` へ
   sqlite3 で直接書く方が速い。書き込み中の競合を避けるため `pnpm dev` は止めておく
 - `pnpm db:console` は SQL を引数で渡す: `pnpm db:console "SELECT * FROM feeds"`
-- cron のローカル発火: `curl "http://localhost:8787/cdn-cgi/local/scheduled"`
+- cron のローカル発火: `curl "http://localhost:<ポート>/cdn-cgi/local/scheduled"`。ポートは
+  起動時に wrangler が出す `Ready on http://localhost:<ポート>` の行で確かめる
 - `pnpm test:e2e` は Playwright を入れる M3 まで存在しない
 - **Service Worker は本番ビルドにだけ登録する。** `pnpm dev` では登録されない（Vite が
   モジュールを都度配るので、間にキャッシュを挟むと何が古いのか分からなくなる）。
