@@ -23,6 +23,12 @@ defineProps<{
   pinned: boolean;
   /** 元記事の URL があるか。無い記事では「開く」が効かない */
   canOpen: boolean;
+  /**
+   * 記事を出しているか。読み終えた画面では偽になり、「ピン」と「次へ」を押せなくする。
+   * **バーそのものは消さない**（issue #28）。消すとスマホでは戻る手段が無くなるうえ、
+   * 「◀」が同じ位置に居続けることが押し続けて読む操作の前提だから
+   */
+  showingEntry: boolean;
 }>();
 
 defineEmits<{ prev: []; next: []; open: []; pin: [] }>();
@@ -67,12 +73,13 @@ defineEmits<{ prev: []; next: []; open: []; pin: [] }>();
          文言は変えない。幅が動くと隣の「次へ」の位置がずれる -->
     <button
       type="button"
-      class="w-12 shrink-0 py-3.5 md:py-1.5 active:bg-neutral-200 dark:active:bg-neutral-800"
+      class="w-12 shrink-0 py-3.5 md:py-1.5 active:bg-neutral-200 disabled:text-neutral-400 dark:active:bg-neutral-800 dark:disabled:text-neutral-600"
       :class="
         pinned ? 'text-amber-600 dark:text-amber-500' : 'text-neutral-700 dark:text-neutral-300'
       "
       data-testid="bottom-pin"
       :aria-pressed="pinned"
+      :disabled="!showingEntry"
       @click="$emit('pin')"
     >
       ピン
@@ -80,8 +87,9 @@ defineEmits<{ prev: []; next: []; open: []; pin: [] }>();
     <!-- 「次へ」は右端に最大サイズで置く。最も親指が届く位置（docs/UX.md） -->
     <button
       type="button"
-      class="flex-[1.6] border-l border-neutral-300 px-1 py-3.5 md:py-1.5 font-bold whitespace-nowrap active:bg-neutral-200 dark:border-neutral-700 dark:active:bg-neutral-800"
+      class="flex-[1.6] border-l border-neutral-300 px-1 py-3.5 md:py-1.5 font-bold whitespace-nowrap active:bg-neutral-200 disabled:font-normal disabled:text-neutral-400 dark:border-neutral-700 dark:active:bg-neutral-800 dark:disabled:text-neutral-600"
       data-testid="bottom-next"
+      :disabled="!showingEntry"
       @click="$emit('next')"
     >
       {{ atLastEntry ? '次のフィード' : '次の記事' }} ▶

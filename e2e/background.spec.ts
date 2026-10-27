@@ -213,10 +213,10 @@ test('読み終えたら、最後に読んでいたフィードの一覧を左�
   await expect(page.getByTestId('position')).not.toContainText('(1/1)');
 
   // k で読み返しに戻れば、その先の一覧はまた開く（カーソル自体は消していない）。
-  // 夕刊は 1 本しか無いので、戻る先は前のフィードの末尾になる（docs/UX.md の j / k）
+  // 戻る先は最後に出していた記事なので、夕刊の一覧が開く（issue #28）
   await page.keyboard.press('k');
   await expect(page.getByTestId('finished')).toBeHidden();
-  await expect(page.getByTestId('entry-list-1')).toBeVisible();
+  await expect(page.getByTestId('entry-list-2')).toBeVisible();
 });
 
 test('読み終えた画面で r を押しても、届いた新着から読み始められる', async ({ page }) => {

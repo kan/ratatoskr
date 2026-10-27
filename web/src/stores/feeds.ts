@@ -714,7 +714,9 @@ export const useFeedsStore = defineStore('feeds', () => {
   }
 
   function nextEntry(): void {
-    if (!started.value) return;
+    // 読み終えた画面では動かさない。s で読み終えたときはカーソルがフィードの途中に
+    // 残っているので、ここで進めると、表示していない記事の上をカーソルが進む
+    if (!started.value || finished.value) return;
     if (entryIndex.value < currentEntries.value.length - 1) {
       entryIndex.value += 1;
       return;
@@ -723,11 +725,22 @@ export const useFeedsStore = defineStore('feeds', () => {
   }
 
   function prevEntry(): void {
+    // 読み終えた画面は「最後の記事の次」にあたる。そこから 1 つ戻れば、直前に出していた
+    // 記事に着く（カーソルはそこに残っている）。位置を 1 つ下げると、その記事を飛ばす
+    if (finished.value) {
+      if (currentEntry.value !== null) {
+        finished.value = false;
+        return;
+      }
+      // カーソルがどこにも無いとき（起動した時点で未読が無かった、絞り込みや購読の変更で
+      // 座り直した先が無かった）。末尾から読み返す。
+      // **ここで止めると、スマホでは戻る手段が無くなる**（issue #28）
+      prevFeed('last');
+      return;
+    }
     if (!started.value) return;
     if (entryIndex.value > 0) {
       entryIndex.value -= 1;
-      // 「全て読み終えた」から記事に戻ってきた場合は表示を戻す
-      finished.value = false;
       return;
     }
     // 逆方向に読み進める形なので、前のフィードの最終記事に着地する
@@ -878,10 +891,17 @@ export const useFeedsStore = defineStore('feeds', () => {
    * それに反応すると、いま座っている記事に押した u が背景取得のたびに消える。
    */
   watch(
-    [currentEntry, covered],
-    ([entry, isCovered]) => {
+    [currentEntry, covered, finished],
+    ([entry, isCovered, isFinished]) => {
       const feed = currentFeed.value;
       if (feed === null || entry === null) return;
+      // **読み終えた画面は記事を表示していない。** カーソルは最後の記事に残るので、
+      // そこへ戻ったとき（prevEntry）はカーソルが動かないまま、もう一度表示することになる。
+      // 表示し直したことにしないと、u の例外が外れない（issue #28）
+      if (isFinished) {
+        displayed = null;
+        return;
+      }
       // **覆われている間は進めない。** 規則は「表示した時点で進める」なので、
       // 記事ビューが引き出しやオーバーレイの下にある間は表示していない。
       // 覆いが外れた時点でこの監視がもう一度走り、そこで進む

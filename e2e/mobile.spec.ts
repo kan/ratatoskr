@@ -184,6 +184,26 @@ test('ボトムバーは境界でラベルだけが変わる', async ({ page }) 
   await expect(title(page)).toHaveText('朝刊の 2 本目');
 });
 
+test('読み終えた画面にもボトムバーを出し、直前の記事へ戻れる', async ({ page }) => {
+  // スワイプを受ける本文が無い画面なので、バーが無いと戻る手段が無い（issue #28）
+  await open(page);
+  const next = page.getByTestId('bottom-next');
+  const prev = page.getByTestId('bottom-prev');
+  for (let i = 0; i < 3; i += 1) await next.click();
+  await expect(page.getByTestId('finished')).toBeVisible();
+
+  // 進む先も、ピンや開く対象の記事も無い
+  await expect(next).toBeDisabled();
+  await expect(page.getByTestId('bottom-pin')).toBeDisabled();
+  await expect(page.getByTestId('bottom-open')).toBeDisabled();
+  await expect(prev).toHaveText('◀ 前の記事');
+
+  // 最後に出していた記事に戻る（その 1 つ前へは飛ばない）
+  await prev.click();
+  await expect(page.getByTestId('finished')).toBeHidden();
+  await expect(title(page)).toHaveText('夕刊の 1 本目');
+});
+
 test('左右スワイプで記事を送る', async ({ page }) => {
   await open(page);
 

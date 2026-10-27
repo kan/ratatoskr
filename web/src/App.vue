@@ -150,8 +150,15 @@ const emptyLabel = computed(() =>
 );
 
 /** いま読んでいる記事にピンが立っているか。本文の見出しの目印に使う */
+/**
+ * 画面に出している記事。**読み終えた画面では、カーソルが残っていても null。**
+ * ピン・開く・ブクマはこれを対象にする。カーソルの記事を使うと、読み終えた画面で
+ * 押したキーが見えていない記事に効く（issue #28）
+ */
+const shownEntry = computed(() => (feeds.finished ? null : feeds.currentEntry));
+
 const currentPinned = computed(() => {
-  const url = feeds.currentEntry?.url;
+  const url = shownEntry.value?.url;
   return url !== null && url !== undefined && pins.has(url);
 });
 
@@ -168,8 +175,12 @@ const stalledCount = computed(() => feeds.shownFeeds.filter(isStalled).length);
  * 境界にいるか（docs/UX.md「境界でのボタン変化」）。ボタンの位置は動かさず、
  * ラベルだけがここで変わる。j / k と同じで、押す側は境界を意識しなくてよい
  */
-const atFirstEntry = computed(() => feeds.entryIndex <= 0);
-const atLastEntry = computed(() => feeds.entryIndex >= feeds.entryCount - 1);
+const atFirstEntry = computed(() =>
+  // 読み終えた画面から戻る先は、直前に出していた記事（同じフィード）。それが無い
+  // （起動時点で未読が無かった）ときは前のフィードへ戻る。stores/feeds.ts の prevEntry
+  feeds.finished ? feeds.currentEntry === null : feeds.entryIndex <= 0,
+);
+const atLastEntry = computed(() => feeds.finished || feeds.entryIndex >= feeds.entryCount - 1);
 
 /** 手動更新やピンのように、画面が変わらないことのある操作の結果を出す場所 */
 const notice = ref<string | null>(null);
@@ -290,8 +301,11 @@ function handle(binding: KeyBinding): boolean {
  */
 function pageUpToPrevEntry(): void {
   const before = feeds.currentEntry?.id ?? null;
+  // 読み終えた画面から戻るときは、カーソルが動かないまま記事が出る（stores/feeds.ts の
+  // prevEntry）。それでも逆送りなので末尾に着地させる
+  const wasFinished = feeds.finished;
   feeds.prevEntry();
-  if (feeds.currentEntry?.id === before) return;
+  if (feeds.finished || (!wasFinished && feeds.currentEntry?.id === before)) return;
   void nextTick().then(() => reader.value?.scrollToBottom());
 }
 
@@ -399,7 +413,7 @@ function unsubscribeFeed(id: number): void {
  * 押したことが分かるよう、短い知らせだけ出す。
  */
 function togglePin(): void {
-  const entry = feeds.currentEntry;
+  const entry = shownEntry.value;
   if (entry === null || entry.url === null) return;
 
   // 外すのは見えているピンだけ。隠しているピン（issue #23）は立て直す側に回る
@@ -469,7 +483,7 @@ function openTab(url: string): boolean {
  * （noreferrer を付けると戻り値が null になり、開けたかの判定はできなくなる）
  */
 function openOriginal(): void {
-  const url = feeds.currentEntry?.url;
+  const url = shownEntry.value?.url;
   if (url) window.open(url, '_blank', 'noopener,noreferrer');
 }
 
@@ -494,7 +508,7 @@ function openBookmark(url: string, title: string): boolean {
 
 /** 読んでいる記事を送る（b）。記事は切り替えない。ピンにも既読にも触らない */
 function bookmarkCurrentEntry(): void {
-  const entry = feeds.currentEntry;
+  const entry = shownEntry.value;
   if (entry === null) return;
   // URL を配らないフィードの記事。黙って戻ると、押したのに何も起きないように見える
   if (entry.url === null) notify('この記事には URL が無いので、ブックマークに送れない');
@@ -685,7 +699,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
       -->
       <div
         v-if="feeds.finished"
-        class="flex h-full flex-col items-center justify-center gap-1 px-6 text-center"
+        class="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 text-center"
         data-testid="finished"
       >
         <p class="text-sm text-neutral-500" data-testid="finished-label">
@@ -721,35 +735,39 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
       >
         <p class="text-sm text-neutral-500">{{ emptyLabel }}</p>
       </div>
-      <template v-else>
-        <EntryReader
-          ref="reader"
-          class="min-h-0 flex-1"
-          :entry="feeds.currentEntry"
-          :empty-label="emptyLabel"
-          :pinned="currentPinned"
-          @next="feeds.nextEntry()"
-          @prev="feeds.prevEntry()"
-        />
-        <!--
-          記事送りのバー。境界でラベルだけが変わる（docs/UX.md）。
-          押す操作は j / k と同じ経路を通るので、キーとの食い違いが生まれない。
+      <EntryReader
+        v-else
+        ref="reader"
+        class="min-h-0 flex-1"
+        :entry="feeds.currentEntry"
+        :empty-label="emptyLabel"
+        :pinned="currentPinned"
+        @next="feeds.nextEntry()"
+        @prev="feeds.prevEntry()"
+      />
+      <!--
+        記事送りのバー。境界でラベルだけが変わる（docs/UX.md）。
+        押す操作は j / k と同じ経路を通るので、キーとの食い違いが生まれない。
 
-          **PC にも出す（issue #6）。** マウスだけで読み進める道が無かった。
-          サイドバーの記事を選ぶ形にはしない（一覧は移動手段であって選択画面ではない、
-          という docs/UX.md の方針に反する）
-        -->
-        <BottomBar
-          :at-first-entry="atFirstEntry"
-          :at-last-entry="atLastEntry"
-          :pinned="currentPinned"
-          :can-open="Boolean(feeds.currentEntry?.url)"
-          @prev="feeds.prevEntry()"
-          @next="feeds.nextEntry()"
-          @open="openOriginal()"
-          @pin="togglePin()"
-        />
-      </template>
+        **PC にも出す（issue #6）。** マウスだけで読み進める道が無かった。
+        サイドバーの記事を選ぶ形にはしない（一覧は移動手段であって選択画面ではない、
+        という docs/UX.md の方針に反する）
+
+        **読み終えた画面にも出す（issue #28）。** スワイプを受ける EntryReader も
+        ここには無いので、バーが無いとスマホでは戻る手段が無くなる
+      -->
+      <BottomBar
+        v-if="feeds.finished || feeds.started"
+        :at-first-entry="atFirstEntry"
+        :at-last-entry="atLastEntry"
+        :pinned="currentPinned"
+        :can-open="Boolean(shownEntry?.url)"
+        :showing-entry="!feeds.finished"
+        @prev="feeds.prevEntry()"
+        @next="feeds.nextEntry()"
+        @open="openOriginal()"
+        @pin="togglePin()"
+      />
     </main>
 
     <HelpOverlay v-if="activeOverlay === 'help'" @close="closeOverlay" />

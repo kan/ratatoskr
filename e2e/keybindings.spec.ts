@@ -97,6 +97,11 @@ test('全て読み終えるとその旨を表示して止まる', async ({ page 
   // そこから先に進まない（先頭に戻って既読の記事を回らない）
   await page.keyboard.press('j');
   await expect(page.getByTestId('finished')).toBeVisible();
+
+  // k では最後に出していた記事に戻る。ボトムバーの「◀」と同じ経路（issue #28）
+  await page.keyboard.press('k');
+  await expect(page.getByTestId('finished')).toBeHidden();
+  await expect(title(page)).toHaveText('夕刊の 1 本目');
 });
 
 test('読むそばから未読数が減る', async ({ page }) => {

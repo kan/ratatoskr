@@ -356,9 +356,69 @@ describe('フィード間の移動', () => {
     feeds.nextEntry();
     expect(feeds.finished).toBe(true);
 
+    // 直前に出していた記事（最後の記事）に戻る。その 1 つ前へ飛ばさない（issue #28）
     feeds.prevEntry();
     expect(feeds.finished).toBe(false);
+    expect(feeds.currentEntry?.id).toBe(2);
+
+    feeds.prevEntry();
     expect(feeds.currentEntry?.id).toBe(1);
+  });
+
+  it('フィードの途中で読み終えても、読み終えた画面で次へ送ると記事を既読にしない', () => {
+    // s で読み終えるとカーソルはフィードの途中に残る。そこで j を受けると、
+    // 表示していない記事の上をカーソルが進み、既読になる
+    const feeds = useFeedsStore();
+    useEntriesStore().ingest(entries(1, [1, 2, 3]));
+    feeds.setFeeds([feed(1, { unreadCount: 3 }), feed(2)]);
+    feeds.enterFirstUnread();
+    feeds.nextFeed();
+    expect(feeds.finished).toBe(true);
+
+    feeds.nextEntry();
+    expect(feeds.finished).toBe(true);
+    expect(feeds.feeds[0].readSeq).toBe(1);
+
+    // 戻れば、最後に出していた記事に着く
+    feeds.prevEntry();
+    expect(feeds.currentEntry?.id).toBe(1);
+  });
+
+  it('読み終えた画面から戻って表示し直した記事は、未読に戻した例外を外す', () => {
+    // カーソルが動かないまま表示し直すので、「表示したら既読」の監視が反応しないと
+    // u を押した記事が読んでも消えなくなる
+    const feeds = useFeedsStore();
+    const entriesStore = useEntriesStore();
+    entriesStore.ingest(entries(1, [1, 2]));
+    feeds.setFeeds([feed(1, { unreadCount: 2 })]);
+    feeds.enterFirstUnread();
+    feeds.nextEntry();
+    feeds.markCurrentUnread();
+    expect(entriesStore.forcedUnread.has(2)).toBe(true);
+
+    feeds.nextEntry();
+    expect(feeds.finished).toBe(true);
+    // 読み終えた画面にいる間は表示していないので、例外はそのまま
+    expect(entriesStore.forcedUnread.has(2)).toBe(true);
+
+    feeds.prevEntry();
+    expect(feeds.currentEntry?.id).toBe(2);
+    expect(entriesStore.forcedUnread.has(2)).toBe(false);
+  });
+
+  it('起動時点で未読が無くても、前へ戻ると末尾のフィードの最終記事を読み返せる', () => {
+    // カーソルがどこにも無い状態。ここで止めるとスマホでは戻る手段が無い（issue #28）
+    const feeds = useFeedsStore();
+    useEntriesStore().ingest([...entries(1, [1]), ...entries(2, [2, 3])]);
+    feeds.setFeeds([feed(1, { readSeq: 1 }), feed(2, { readSeq: 3 })]);
+    feeds.enterFirstUnread();
+    expect(feeds.finished).toBe(true);
+    expect(feeds.started).toBe(false);
+
+    feeds.prevEntry();
+    expect(feeds.finished).toBe(false);
+    expect(feeds.currentFeed?.id).toBe(2);
+    expect(feeds.currentEntry?.id).toBe(3);
   });
 
   it('最後の記事で止まっていても、新着が無ければ読み終えた画面へ移る', () => {
