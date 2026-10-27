@@ -160,7 +160,6 @@ Node は 24 系。pnpm が未導入の環境で `corepack enable pnpm` が EACCE
 - `pnpm db:console` は SQL を引数で渡す: `pnpm db:console "SELECT * FROM feeds"`
 - cron のローカル発火: `curl "http://localhost:<ポート>/cdn-cgi/local/scheduled"`。ポートは
   起動時に wrangler が出す `Ready on http://localhost:<ポート>` の行で確かめる
-- `pnpm test:e2e` は Playwright を入れる M3 まで存在しない
 - **Service Worker は本番ビルドにだけ登録する。** `pnpm dev` では登録されない（Vite が
   モジュールを都度配るので、間にキャッシュを挟むと何が古いのか分からなくなる）。
   オフライン動作を手元で見るときは `pnpm build && pnpm -C web preview`
