@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { mockApi } from './fixtures';
+import { mockApi, openApp } from './fixtures';
 
 /**
  * スマホの操作（M8。docs/UX.md「境界でのボタン変化」「画面構成（スマホ）」）。
@@ -14,7 +14,7 @@ const title = (page: Page) => page.getByTestId('entry-title');
 
 async function open(page: Page): Promise<void> {
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(title(page)).toHaveText('朝刊の 1 本目');
 }
 
@@ -248,7 +248,7 @@ test('横スクロールする入れ物の中から始めた指では記事を�
 
 test('ボトムバーからピンを付け外しできる', async ({ page }) => {
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(title(page)).toHaveText('朝刊の 1 本目');
 
   const pin = page.getByTestId('bottom-pin');

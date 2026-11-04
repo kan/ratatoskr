@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { mockApi } from './fixtures';
+import { mockApi, openApp } from './fixtures';
 
 /**
  * サイドバーのスクロール位置（issue #5）。
@@ -30,7 +30,7 @@ async function margin(page: Page): Promise<{ below: number; above: number; more:
 async function open(page: Page): Promise<void> {
   // 一覧が縦に収まってしまうとスクロールが起きず、何も確かめられない
   await mockApi(page, { extraEntries: 40 });
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
 }
 

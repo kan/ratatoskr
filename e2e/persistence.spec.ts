@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { ENTRIES, FEEDS, mockApi } from './fixtures';
+import { ENTRIES, FEEDS, mockApi, openApp, waitForBoot } from './fixtures';
 import { SCHEMA_VERSION } from '../shared/types';
 
 /**
@@ -28,7 +28,7 @@ async function storedReadSeq(page: Page, feedId: number): Promise<number | null>
 
 test('読み終えたフィードは再読み込み後も既読のまま', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await page.getByTestId('entry-title').waitFor();
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
 
@@ -41,6 +41,7 @@ test('読み終えたフィードは再読み込み後も既読のまま', async
   await expect.poll(() => storedReadSeq(page, 1)).toBe(12);
 
   await page.reload();
+  await waitForBoot(page);
   // サーバは相変わらず未読 2 件と答えるが、手元の既読が勝つ
   await expect(page.getByTestId('feed-1')).not.toContainText('(2)');
   // 未読の残っているフィードから読み始める
@@ -77,7 +78,7 @@ test('古い版のタブが接続を握っていても、サーバのデータ�
   );
 
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
 
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
   // 手元に保存できないことは黙って続けずに画面に出す
@@ -117,7 +118,7 @@ test('保持期間を過ぎた既読記事は手元からも消える', async ({
     route.fulfill({ json: { entries: [], nextSinceId: null, hasMore: false } }),
   );
 
-  await page.goto('/');
+  await openApp(page);
   // 未読が無いので読む記事は無い。起動が終わったことを画面で待ってから手元を見る
   await expect(page.getByTestId('finished')).toBeVisible();
 
@@ -130,7 +131,7 @@ test('保持期間を過ぎた既読記事は手元からも消える', async ({
  */
 test('他の端末で読み終えたフィードからは始めない', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
   // 控えが手元に残るのを待つ。ここまでが「前回のタブ」
   await expect.poll(() => storedReadSeq(page, 1)).toBe(11);
@@ -152,6 +153,7 @@ test('他の端末で読み終えたフィードからは始めない', async ({
   );
 
   await page.reload();
+  await waitForBoot(page);
   // 手元の控えでは朝刊の 2 本目が未読だが、サーバの既読が届いた時点で座り直す
   await expect(page.getByTestId('entry-title')).toHaveText('夕刊の 1 本目');
   await expect(page.getByTestId('feed-1')).not.toContainText('(');
@@ -190,7 +192,7 @@ test('間引きの後に未読へ戻した記事も、繋がらない次の起�
     route.fulfill({ json: { entries: [], nextSinceId: null, hasMore: false } }),
   );
 
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
   await page.keyboard.press('j');
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 2 本目');
@@ -199,6 +201,7 @@ test('間引きの後に未読へ戻した記事も、繋がらない次の起�
   // 2 本とも読み終えた状態で起動し直すと、間引きが両方を手元から消す。
   // 間引きの正しさは上のテストが見ていて、ここは前提が整ったことの確認
   await page.reload();
+  await waitForBoot(page);
   await expect(page.getByTestId('finished')).toBeVisible();
   await expect.poll(() => storedEntryIds(page)).toEqual([]);
 
@@ -213,6 +216,7 @@ test('間引きの後に未読へ戻した記事も、繋がらない次の起�
   // 繋がらない状態で起動しても、その記事から読める
   await page.route('**/api/**', (route) => route.abort('internetdisconnected'));
   await page.reload();
+  await waitForBoot(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 2 本目', { timeout: 15_000 });
 });
 

@@ -560,6 +560,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
   -->
   <div
     class="h-dvh bg-white text-neutral-900 md:grid md:grid-cols-[18rem_1fr] dark:bg-neutral-950 dark:text-neutral-100"
+    :data-booted="session.booted || undefined"
   >
     <!--
       狭い画面では記事ビューに重ねる引き出しにする。開いていない間は組み立てない

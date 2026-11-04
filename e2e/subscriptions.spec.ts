@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { mockApi } from './fixtures';
+import { mockApi, openApp } from './fixtures';
 
 /**
  * 購読管理（M5 の完了条件: UI からフィードを追加・削除できる）。
@@ -10,7 +10,7 @@ import { mockApi } from './fixtures';
 
 test('購読を追加すると左ペインに出る', async ({ page }) => {
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await page.getByTestId('open-manager').click();
   await expect(page.getByTestId('subscription-manager')).toBeVisible();
 
@@ -32,7 +32,7 @@ test('購読を追加すると左ペインに出る', async ({ page }) => {
 
 test('フィードが複数見つかったら候補から選ぶ', async ({ page }) => {
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await page.getByTestId('open-manager').click();
 
   await page.getByTestId('feed-url').fill('https://multi.example.com/');
@@ -53,7 +53,7 @@ test('購読を解除すると一覧から消える', async ({ page }) => {
   const recorder = await mockApi(page);
   page.on('dialog', (dialog) => dialog.accept());
 
-  await page.goto('/');
+  await openApp(page);
   await page.getByTestId('open-manager').click();
   await page.getByTestId('manage-delete-2').click();
 
@@ -65,7 +65,7 @@ test('購読を解除すると一覧から消える', async ({ page }) => {
 
 test('数字キーでレートを変えると左ペインの並びが入れ替わる', async ({ page }) => {
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
 
   // 読んでいる ★5 の「朝刊」を最下位に落とす
@@ -87,7 +87,7 @@ test('数字キーでレートを変えると左ペインの並びが入れ替�
 
 test('r で今すぐ取得し直す', async ({ page }) => {
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
 
   await page.keyboard.press('r');
@@ -98,7 +98,7 @@ test('取得できないフィードだけをまとめて解除できる', async
   const recorder = await mockApi(page);
   page.on('dialog', (dialog) => dialog.accept());
 
-  await page.goto('/');
+  await openApp(page);
   await page.getByTestId('open-manager').click();
 
   // 404 は 1 回でも対象。応答なしは 2 回続いたものだけ。接続断は対象外
@@ -129,7 +129,7 @@ test('取得できないフィードだけをまとめて解除できる', async
  */
 test('要約しか配信しないフィードには全文取得を勧める', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await page.getByTestId('open-manager').click();
 
   await expect(page.getByTestId('manage-full-text-hint-2')).toBeVisible();
@@ -139,7 +139,7 @@ test('要約しか配信しないフィードには全文取得を勧める', as
 
 test('全文取得を入れると、その場で取りに行く', async ({ page }) => {
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await page.getByTestId('open-manager').click();
 
   await expect(page.getByTestId('manage-full-text-2')).toHaveAttribute('aria-pressed', 'false');
@@ -159,7 +159,7 @@ test('全文取得を入れると、その場で取りに行く', async ({ page 
  */
 test('名前・URL・フォルダで購読を絞り込める', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await page.getByTestId('open-manager').click();
 
   await page.getByTestId('feed-search').fill('夕刊');
@@ -182,7 +182,7 @@ test('名前・URL・フォルダで購読を絞り込める', async ({ page }) 
 
 test('絞り込み中でもレート変更がそのまま効く', async ({ page }) => {
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await page.getByTestId('open-manager').click();
   await page.getByTestId('feed-search').fill('夕刊');
 
@@ -193,7 +193,7 @@ test('絞り込み中でもレート変更がそのまま効く', async ({ page 
 
 test('「問題のあるフィードだけ」と絞り込みは重ねて効く', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await page.getByTestId('open-manager').click();
 
   await page.getByTestId('toggle-problems').click();
@@ -213,7 +213,7 @@ test('左ペインからその場で購読を解除し、そのまま読み続�
   const recorder = await mockApi(page);
   page.on('dialog', (dialog) => dialog.accept());
 
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
 
   // いま読んでいるフィードを解除する
@@ -229,7 +229,7 @@ test('解除の確認を断れば何も起きない', async ({ page }) => {
   const recorder = await mockApi(page);
   page.on('dialog', (dialog) => dialog.dismiss());
 
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
 
   await page.getByTestId('feed-unsubscribe-1').click();
@@ -245,7 +245,7 @@ test('解除の確認を断れば何も起きない', async ({ page }) => {
  */
 test('取得が止まったフィードは左ペインで知らせ、購読管理へ入れる', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
 
   const warning = page.getByTestId('stalled-feeds');
@@ -269,7 +269,7 @@ test('?add= 付きで開くと、その URL をそのまま購読する', async 
   const recorder = await mockApi(page);
   const target = 'https://example.com/blog/';
 
-  await page.goto(`/?add=${encodeURIComponent(target)}`);
+  await openApp(page, `/?add=${encodeURIComponent(target)}`);
 
   // 購読管理が開いて、登録まで済んでいる
   await expect(page.getByTestId('bookmarklet')).toBeVisible();
@@ -284,7 +284,7 @@ test('閉じてから開き直しても、ブックマークレットの URL を
   const recorder = await mockApi(page);
   const target = 'https://example.com/blog/';
 
-  await page.goto(`/?add=${encodeURIComponent(target)}`);
+  await openApp(page, `/?add=${encodeURIComponent(target)}`);
   await expect.poll(() => recorder.created.map((c) => c.url)).toEqual([target]);
 
   // Esc で閉じる経路は @close を通らないので、渡された URL が残りやすい
@@ -301,7 +301,7 @@ test('登録できない URL は無視して、普通に起動する', async ({ 
   const recorder = await mockApi(page);
 
   // このパラメータは誰でも付けられる。そのまま登録の入力にしない
-  await page.goto('/?add=javascript:alert(1)');
+  await openApp(page, '/?add=javascript:alert(1)');
 
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
   expect(recorder.created).toEqual([]);
@@ -309,7 +309,7 @@ test('登録できない URL は無視して、普通に起動する', async ({ 
 
 test('購読管理にブックマークレットが置いてある', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
   await page.getByTestId('open-manager').click();
 

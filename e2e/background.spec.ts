@@ -6,7 +6,9 @@ import {
   feedsWith,
   FEEDS,
   mockApi,
+  openApp,
   syncResponse,
+  waitForBoot,
 } from './fixtures';
 
 /**
@@ -49,7 +51,7 @@ async function expireSession(page: Page, pattern = '**/api/sync*'): Promise<void
  */
 async function readEverything(page: Page): Promise<ApiRecorder> {
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
   for (let i = 0; i < 5; i++) await page.keyboard.press('S');
   await expect(page.getByTestId('finished')).toBeVisible();
@@ -63,7 +65,7 @@ const iconHrefs = (page: Page) =>
 
 test('タブに戻ると差分同期を叩く', async ({ page }) => {
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
   expect(recorder.syncCalls).toHaveLength(0);
 
@@ -76,7 +78,7 @@ test('タブに戻ると差分同期を叩く', async ({ page }) => {
 
 test('同期で届いた新着が、読んでいる場所を動かさずに増える', async ({ page }) => {
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
 
   recorder.nextSync.push(
@@ -122,7 +124,7 @@ test('全て読み終えた後に届いた新着へ、キーで辿り着ける',
 test('ヘッダのリロードで、いま届いている分を取りに行く', async ({ page }) => {
   // 定期ポーリングは 5 分間隔で、タブに戻ったときも間引きが効く。押せば待たずに済む
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
 
   recorder.nextSync.push(
@@ -145,7 +147,7 @@ test('ヘッダのリロードで、いま届いている分を取りに行く',
 test('新着が無ければ、押した結果としてそう出す', async ({ page }) => {
   // 画面が何も変わらない操作なので、黙って終わると押せたのかどうかが分からない
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
 
   await page.getByTestId('reload').click();
@@ -161,7 +163,7 @@ test('最後の記事で止まっていても、新着が無ければ読み終�
   // 出したまま手を止めると、未読 0 でも一覧と本文が残ってまだ読む途中に見える。
   // リロードで新着が無いと分かった時点は、読むものが無いと確定した瞬間でもある
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
 
   // 最後のフィードの最後の記事まで送る（この先へは送らない）
@@ -197,7 +199,7 @@ test('読み終えたら、最後に読んでいたフィードの一覧を左�
   // 左ペインまでそれを「いま読んでいる」と読むと、読むものが無いのに一覧が開いたまま
   // 居座り、読み込み直すか別のフィードを押すまで直らない
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
   await expect(page.getByTestId('entry-list-1')).toBeVisible();
 
@@ -262,7 +264,7 @@ test('同期でフィードの並びが組み替わらない', async ({ page }) 
   // サーバの並びは未読数を含むので、読み進めるそばから順序が変わる。同期のたびに
   // 組み替えると、前方向にしか進まない s が未読を飛ばして「全て読み終えた」に着く
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('position')).toContainText('朝刊');
 
   const before = await feedOrder(page);
@@ -279,7 +281,7 @@ test('起動時はサーバの並びを採る（他の端末で変えたレー�
   // 並びを保つのは読んでいる最中の差し替えだけ。起動時まで手元の並びを優先すると、
   // 他の端末で変えたレートがそのセッション中ずっと効かない
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
   expect((await feedOrder(page))[0]).toBe('feed-1');
 
@@ -300,6 +302,7 @@ test('起動時はサーバの並びを採る（他の端末で変えたレー�
 
   // 手元（IndexedDB）には前の並びが残っている状態で開き直す
   await page.reload();
+  await waitForBoot(page);
   await expect(page.getByTestId('entry-title')).toBeVisible();
 
   await expect.poll(async () => (await feedOrder(page))[0]).toBe('feed-2');
@@ -307,7 +310,7 @@ test('起動時はサーバの並びを採る（他の端末で変えたレー�
 
 test('未読が無くなるとタブのアイコンが沈む', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
 
   // 未読があるうちは通常のアイコン
@@ -329,7 +332,7 @@ async function feedOrder(page: Page): Promise<(string | null)[]> {
 
 test('セッションが切れたら、読んでいる最中は帯で知らせるだけに留める', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
   await expireSession(page);
 
@@ -343,7 +346,7 @@ test('セッションが切れたら、読んでいる最中は帯で知らせ�
 
 test('セッションが切れた後にタブを離れると、読み込み直して繋がった状態にする', async ({ page }) => {
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
   await expireSession(page);
   await returnToTab(page);
@@ -365,7 +368,7 @@ test('読み込み直しても直らないときは、裏で繰り返さない',
   page.on('load', () => {
     loads += 1;
   });
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
 
   await expireSession(page, '**/api/**');

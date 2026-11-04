@@ -1,5 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
-import { mockApi } from './fixtures';
+import { mockApi, openApp, waitForBoot } from './fixtures';
 
 /**
  * 外部ブックマークへ送る（issue #22）。
@@ -20,7 +20,7 @@ async function open(page: Page, context: BrowserContext) {
     route.fulfill({ contentType: 'text/html', body: '<title>投稿画面</title>' }),
   );
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(title(page)).toHaveText('朝刊の 1 本目', { timeout: 15_000 });
   return recorder;
 }
@@ -102,6 +102,7 @@ test('送り先は端末ごとに変えられる', async ({ page, context }) => 
 
   // 再読み込みしても覚えている
   await page.reload();
+  await waitForBoot(page);
   await expect(title(page)).toBeVisible({ timeout: 15_000 });
   await page.getByTestId('open-manager').click();
   await expect(page.getByTestId('bookmark-template')).toHaveValue(

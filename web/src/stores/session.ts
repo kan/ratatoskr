@@ -66,6 +66,14 @@ export const useSessionStore = defineStore('session', () => {
 
   /** hydrated 以降は操作可能。ready は背景取得まで終わった状態 */
   const phase = ref<'booting' | 'hydrated' | 'ready'>('booting');
+  /**
+   * boot() を末尾（定期同期の受け口を張るところ）まで終えたか。
+   *
+   * **phase とは別に持つ。** 起動の取得が失敗すると phase は ready にならないが、
+   * 受け口は張られる。E2E はこれを待ってから操作する（記事が描画された時点では、
+   * 残りの記事も受け口もまだ来ていないことがある）
+   */
+  const booted = ref(false);
   const error = ref<string | null>(null);
   /**
    * 手元（IndexedDB）が使えない理由。読むだけなら困らないが、既読やピンが
@@ -143,6 +151,7 @@ export const useSessionStore = defineStore('session', () => {
     // **起動の取得が失敗しても張る。** オフラインで開いた場合こそ、繋がった後に
     // 自力で追いつけないと再読み込みするまで何も届かない
     startSync();
+    booted.value = true;
   }
 
   async function hydrate(): Promise<void> {
@@ -726,6 +735,7 @@ export const useSessionStore = defineStore('session', () => {
 
   return {
     phase,
+    booted,
     error,
     localError,
     signedOut,

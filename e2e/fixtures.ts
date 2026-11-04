@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import type {
   BootstrapResponse,
   CreatePinRequest,
@@ -142,6 +142,27 @@ export function syncResponse(over: Partial<SyncResponse> = {}): SyncResponse {
  */
 export function feedsWith(id: number, patch: Partial<Feed>): Feed[] {
   return FEEDS.map((feed) => (feed.id === id ? { ...feed, ...patch } : feed));
+}
+
+/** 起動を待つ上限。手元の読み出しと bootstrap の往復を、遅いランナーでも待ち切れる長さ */
+export const BOOT_TIMEOUT = 15_000;
+
+/**
+ * 起動処理が終わるまで待つ。`page.reload()` の後にも呼ぶ。
+ *
+ * **記事が描画されたことでは待てない。** 描画は bootstrap を当てた時点で起きるが、
+ * 残りの記事の取得とタブ復帰時の同期の受け口はその後に来る。描画直後にキーを押すと、
+ * 残りの記事が届く前にフィードを離れたり、受け口の無いところでタブを戻したりして、
+ * ランナーの速さ次第で落ちる（dependabot PR #29 の CI で 2 回続けて踏んだ）
+ */
+export async function waitForBoot(page: Page): Promise<void> {
+  await expect(page.locator('[data-booted]')).toBeAttached({ timeout: BOOT_TIMEOUT });
+}
+
+/** 画面を開き、起動処理が終わるまで待つ */
+export async function openApp(page: Page, path = '/'): Promise<void> {
+  await page.goto(path);
+  await waitForBoot(page);
 }
 
 export interface MockOptions {

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { mockApi } from './fixtures';
+import { mockApi, openApp } from './fixtures';
 
 /**
  * PC でキーを使わない位置移動（issue #6）。
@@ -12,7 +12,7 @@ const title = (page: Page) => page.getByTestId('entry-title');
 
 async function open(page: Page): Promise<void> {
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(title(page)).toHaveText('朝刊の 1 本目');
 }
 

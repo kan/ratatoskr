@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { mockApi } from './fixtures';
+import { mockApi, openApp, waitForBoot } from './fixtures';
 
 /**
  * キーバインドが仕様どおりに動くことの確認（docs/UX.md）。
@@ -11,7 +11,7 @@ const position = (page: Page) => page.getByTestId('position');
 
 async function open(page: Page): Promise<void> {
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(title(page)).toHaveText('朝刊の 1 本目');
 }
 
@@ -208,7 +208,7 @@ test('ヘルプを開いたまま m を押すと、Esc を挟まずに購読管�
 test('Shift+X で読んでいるフィードの購読を解除する', async ({ page }) => {
   const recorder = await mockApi(page);
   page.on('dialog', (dialog) => dialog.accept());
-  await page.goto('/');
+  await openApp(page);
   await expect(title(page)).toHaveText('朝刊の 1 本目');
 
   await page.keyboard.press('X');
@@ -222,7 +222,7 @@ test('Shift+X の確認を断れば何も起きない', async ({ page }) => {
   // 購読を消すと既読位置も設定も失われる。取り消せないので必ず確認を挟む
   const recorder = await mockApi(page);
   page.on('dialog', (dialog) => dialog.dismiss());
-  await page.goto('/');
+  await openApp(page);
   await expect(title(page)).toHaveText('朝刊の 1 本目');
 
   await page.keyboard.press('X');
@@ -234,12 +234,13 @@ test('Shift+X の確認を断れば何も起きない', async ({ page }) => {
 
 test('初回起動時はヘルプを自動で開く', async ({ page }) => {
   await mockApi(page, { showHelp: true });
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('help-overlay')).toBeVisible();
 
   // 一度閉じれば次からは出ない
   await page.keyboard.press('Escape');
   await page.reload();
+  await waitForBoot(page);
   await expect(page.getByTestId('help-overlay')).toBeHidden();
 });
 

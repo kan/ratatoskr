@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { mockApi } from './fixtures';
+import { BOOT_TIMEOUT, mockApi, openApp, waitForBoot } from './fixtures';
 
 /**
  * オフラインで読んだ分が、復帰後に届くこと（M8 の完了条件）。
@@ -12,7 +12,6 @@ import { mockApi } from './fixtures';
  * （fixtures.ts）、context.setOffline では素通りしてしまうため。
  */
 
-const BOOT_TIMEOUT = 15_000;
 const SEND_TIMEOUT = 15_000;
 
 /** 送信だけが落ちる状態を作る。後で外せるよう handler を返す */
@@ -35,7 +34,7 @@ test('繋がらない間に読んだ分は、復帰した時点で送られる',
   const recorder = await mockApi(page);
   const abort = await cutRead(page);
 
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目', {
     timeout: BOOT_TIMEOUT,
   });
@@ -62,7 +61,7 @@ test('繋がらないまま閉じても、次の起動で送られる', async ({
   const recorder = await mockApi(page);
   const abort = await cutRead(page);
 
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目', {
     timeout: BOOT_TIMEOUT,
   });
@@ -74,6 +73,7 @@ test('繋がらないまま閉じても、次の起動で送られる', async ({
   await page.waitForTimeout(3_000);
 
   await page.reload();
+  await waitForBoot(page);
   // 既読は手元に残っているので、読み終えた続きから出る
   await expect(page.getByTestId('entry-title')).toHaveText('夕刊の 1 本目', {
     timeout: BOOT_TIMEOUT,

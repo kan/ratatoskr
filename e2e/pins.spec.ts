@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { mockApi } from './fixtures';
+import { mockApi, openApp } from './fixtures';
 
 /**
  * ピン（M6）。「読む」と「後で処理する」を分ける機能なので、
@@ -13,7 +13,7 @@ const SEND_TIMEOUT = 15_000;
 
 async function open(page: Page) {
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(title(page)).toHaveText('朝刊の 1 本目', { timeout: 15_000 });
   return recorder;
 }

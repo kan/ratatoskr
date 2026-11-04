@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { mockApi } from './fixtures';
+import { mockApi, openApp, waitForBoot } from './fixtures';
 
 /**
  * NSFW のフィードを隠す（issue #23）。
@@ -13,7 +13,7 @@ const title = (page: Page) => page.getByTestId('entry-title');
 
 async function open(page: Page) {
   const recorder = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(title(page)).toHaveText('朝刊の 1 本目', { timeout: 15_000 });
   return recorder;
 }
@@ -60,6 +60,7 @@ test('表示するかどうかは端末が覚えている', async ({ page }) => 
   await page.getByTestId('nsfw-visible').check();
 
   await page.reload();
+  await waitForBoot(page);
   await expect(title(page)).toBeVisible({ timeout: 15_000 });
   await openManager(page);
   await expect(page.getByTestId('nsfw-visible')).toBeChecked();

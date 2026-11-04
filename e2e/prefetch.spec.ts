@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { IMAGE_CACHE, mockApi } from './fixtures';
+import { IMAGE_CACHE, mockApi, openApp } from './fixtures';
 
 /**
  * 画像の先読み（M7 / docs/DESIGN.md §6）。
@@ -26,7 +26,7 @@ async function cached(page: Page, url: string): Promise<boolean> {
 
 test('まだ表示していない記事と次のフィードの画像を先に取りに行く', async ({ page }) => {
   const api = await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
 
   // 12 は同じフィードの次の記事、21 は次のフィードの 1 本目。どちらもまだ表示していない
@@ -42,7 +42,7 @@ test('まだ表示していない記事と次のフィードの画像を先に�
 
 test('ウィンドウから外れた画像を Cache API から捨てる', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await openApp(page);
   await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
   await expect.poll(() => cached(page, 'https://img.example.com/12.jpg')).toBe(true);
 
