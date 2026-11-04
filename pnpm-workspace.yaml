@@ -9,8 +9,8 @@ allowBuilds:
 # pool-workers が 0.35.5 以上の sharp を引く miniflare を使うようになったら外す
 #
 # undici も同じ経路（pool-workers 0.23.0 → miniflare 5.20260815 が 7.29.0 に完全一致で固定）で
-# 7.29.1 未満に留まる（GHSA-w293-vg96-wgc3 ほか）。pool-workers が 7.29.1 以上の miniflare を
-# 引くようになったら外す
+# 修正版に届かない（GHSA-w293-vg96-wgc3 ほか。2026-11 には 7.30.1 で直った 5 件が加わった）。
+# pool-workers が 7.30.1 以上の miniflare を引くようになったら外す
 overrides:
   'sharp@<0.35.5': '0.35.5'
-  'undici@>=7.0.0 <7.29.1': '7.29.1'
+  'undici@>=7.0.0 <7.30.1': '7.30.1'
