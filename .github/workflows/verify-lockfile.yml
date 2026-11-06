@@ -1,0 +1,33 @@
+name: Verify Lockfile
+
+# .github/workflows/actions.lock がワークフローの uses: と食い違っていないか、固定したコミットが
+# 上流で検証できるかを確かめる。壊れた lockfile を main に入れないための検査。実行時にも Actions が
+# lockfile を強制するが、そちらはジョブが始まる前に startup_failure で止まるだけなので、マージや
+# push の時点で見つける。
+#
+# lockfile の更新は gh actions-lock で行う（uses: を変えたら repo のルートで再実行し、書き換わった
+# workflow と lockfile を一緒にコミットする。lockfile は手で編集しない）。運用の正本は kan/dotfiles の
+# docs/github-actions.md。Dependabot は actions の更新 PR で該当エントリを作り直す。
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify actions.lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      # 拡張は 1.0 前なので、版を固定する。この版は Dependabot も actions.lock も追わない。
+      # lockfile の形式が上がって --verify が落ちたら、手元の gh actions-lock と同じ版にここを上げる。
+      - run: gh extension install github/gh-actions-lock --pin v0.4.1
+      - run: gh actions-lock --verify
