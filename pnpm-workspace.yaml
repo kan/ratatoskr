@@ -11,6 +11,12 @@ allowBuilds:
 # undici も同じ経路（pool-workers 0.23.0 → miniflare 5.20260815 が 7.29.0 に完全一致で固定）で
 # 修正版に届かない（GHSA-w293-vg96-wgc3 ほか。2026-11 には 7.30.1 で直った 5 件が加わった）。
 # pool-workers が 7.30.1 以上の miniflare を引くようになったら外す
+#
+# minimatch は eslint 10.14 / @eslint/config-array / @typescript-eslint/typescript-estree が
+# ^10 で引くが、GHSA-g3hv-75wg-m249 は 10.x の全域が対象で、修正は 11.0.1 以降にしかない。
+# 11 で消えた API（makeRe、AST、matchOne など）はこの 3 つが使っていないので、11 へ寄せる。
+# 3 つが ^11 を引くようになったら外す
 overrides:
   'sharp@<0.35.5': '0.35.5'
   'undici@>=7.0.0 <7.30.1': '7.30.1'
+  'minimatch@>=7.0.0 <11.0.1': '11.0.5'
