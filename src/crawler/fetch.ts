@@ -47,11 +47,15 @@ export function releaseBudget(budget: FetchBudget, unused: number): void {
  * フィードが壊れているように見えるので書かない。
  *
  * @param label 引けなかったときにログへ残す名前
+ * @param clientError 4xx（408 と 429 を除く）のときに null の代わりに返す値。
+ *   **待っても直らない失敗を、一時的な失敗と分けたい呼び出し側だけが渡す**
+ *   （Bluesky の返信。src/crawler/bluesky.ts の fetchSelfReplies）
  */
 export async function fetchJson(
   url: string,
   fetchImpl: typeof fetch,
   label: string,
+  clientError: unknown = null,
 ): Promise<unknown> {
   let response: Response;
   try {
@@ -63,13 +67,18 @@ export async function fetchJson(
     console.warn(`${label}の取得に失敗`, url, describeNetworkError(err).message);
     return null;
   }
-  if (!response.ok) return null;
+  if (!response.ok) return isPermanentClientError(response.status) ? clientError : null;
 
   try {
     return await response.json();
   } catch {
     return null;
   }
+}
+
+/** 408（打ち切り）と 429（流量の制限）は時間を置けば通るので、4xx でも一時的に数える */
+function isPermanentClientError(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 408 && status !== 429;
 }
 
 export type FetchOutcome =

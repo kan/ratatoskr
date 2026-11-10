@@ -24,6 +24,13 @@ const APPVIEW = 'https://public.api.bsky.app/xrpc';
 /** getPosts が 1 回で受け取れる at-uri の数（lexicon の上限） */
 const MAX_URIS = 25;
 
+/**
+ * 本人の返信を辿る段数（issue #32）。紹介系の投稿は、紹介先の URL を自リプライに
+ * 付けて 2〜3 段続けることが多い。getPostThread の depth で一度に取れる深さなので、
+ * 深くしても要求の数は増えない
+ */
+const SELF_REPLY_DEPTH = 5;
+
 /** 相対 URL の基準。API が返すのは絶対 URL だが、サニタイズには基準が要る */
 const BASE_URL = 'https://bsky.app/';
 
@@ -87,10 +94,13 @@ export interface BlueskyPosts {
 /**
  * 投稿を組み立てて返す。
  *
- * 使う要求は**投稿者ごとに 1〜2 回だけ**（ハンドルを DID に直すのに 1 回、
+ * 使う要求は**投稿者ごとに 1〜2 回**（ハンドルを DID に直すのに 1 回、
  * 投稿を 25 件ずつまとめて取るのに 1 回）。ハンドルを直すのが要るのは getPosts が
  * DID しか受け付けないため——ハンドル形式の at-uri を渡すと、エラーではなく
  * **空の配列**が返る（実測）ので、握り潰すと「投稿が全部消えた」と区別が付かない。
+ *
+ * これに、**返信の付いた投稿 1 件につき 1 回**を足す（本人の返信を辿る。
+ * fetchSelfReplies）。返信の無い投稿は増えない。
  */
 export async function fetchBlueskyPosts(
   refs: readonly BlueskyPostRef[],
@@ -129,18 +139,162 @@ export async function fetchBlueskyPosts(
       const fetched = await fetchPosts(did, chunk, options.fetchImpl);
       // 要求そのものが通らなかった。何が無いのかは分からないので何も決めない
       if (fetched === null) continue;
-
-      for (const rkey of chunk) {
-        const html = fetched.get(rkey);
-        // 応答は返ったのに入っていない = 消された・非公開の投稿
-        if (html === undefined) result.missing.add(rkey);
-        else result.bodies.set(rkey, html);
-      }
+      await buildBodies(did, chunk, fetched, options, result);
     }
   }
 
   releaseBudget(options.budget, unused);
   return result;
+}
+
+/**
+ * 取れた投稿を HTML にして `result` に入れる。返信の付いた投稿は、本人の返信を
+ * 「続きの投稿」として末尾に足す（issue #32）。
+ *
+ * **返信を辿る分の枠は、返信の付いた投稿の数が分かってから確保する。** getPosts の
+ * 応答を見るまで数が分からない。確保は await を挟まずに読んで引くので（fetch.ts の
+ * reserveBudget）、ここで引いても並列の他のフィードと取り合いにはならない。
+ *
+ * **返信を辿れなかった投稿は、今回は入れない。** 予算が届かなかった・要求が
+ * 通らなかったは時間を置けば直る。返信抜きの本文で埋めると、全文は 1 回しか
+ * 取りに行かないので（selectMissingFullText）、紹介先の URL が永久に出てこない。
+ */
+async function buildBodies(
+  did: string,
+  rkeys: readonly string[],
+  fetched: ReadonlyMap<string, unknown>,
+  options: BlueskyOptions,
+  result: BlueskyPosts,
+): Promise<void> {
+  let threads = reserveBudget(
+    options.budget,
+    [...fetched.values()].filter((post) => hasReplies(post)).length,
+  );
+
+  const built = await Promise.all(
+    rkeys.map(async (rkey): Promise<[string, string | null] | null> => {
+      const post = fetched.get(rkey);
+      // 応答は返ったのに入っていない = 消された・非公開の投稿
+      if (post === undefined) return [rkey, null];
+
+      let replies: unknown[] = [];
+      if (hasReplies(post)) {
+        if (threads < 1) return null;
+        threads -= 1;
+        const uri = `at://${did}/app.bsky.feed.post/${rkey}`;
+        const found = await fetchSelfReplies(uri, did, options.fetchImpl);
+        if (found === null) return null;
+        replies = found;
+      }
+      // 自前で組み立てた HTML でも必ずサニタイズを通す（CLAUDE.md の不変条件 4）。
+      // 中身は API から来た文字列なので、通す先を 1 か所に保つ方が確かめやすい
+      const root = renderPost(post);
+      return [rkey, await sanitizeHtml(root + renderContinuation(replies, root !== ''), BASE_URL)];
+    }),
+  );
+  releaseBudget(options.budget, threads);
+
+  for (const item of built) {
+    if (item === null) continue;
+    const [rkey, html] = item;
+    // 中身の無い投稿（renderPost の説明）も「取りに行ったが採らなかった」印を付けさせる
+    if (html === null || html === '') result.missing.add(rkey);
+    else result.bodies.set(rkey, html);
+  }
+}
+
+function hasReplies(post: unknown): boolean {
+  return (asNumber(asObject(post)?.replyCount) ?? 0) > 0;
+}
+
+const THREAD_VIEW = 'app.bsky.feed.defs#threadViewPost';
+
+/** getPostThread が 4xx で断ったことを示す印（fetch.ts の fetchJson の clientError） */
+const REFUSED = Symbol('refused');
+
+/**
+ * 投稿への本人の返信を、つながりの順（深さ優先、同じ段は投稿の古い順）に並べて返す。
+ *
+ * **各段で本人の返信だけを追い、他人の返信とその下は見ない。** 他人の返信の下に
+ * 本人が答えたものは、紹介の続きではなく会話になる。
+ *
+ * **要求が通らなかったときは null。** 投稿が辿れない（消された・ブロック）ときと、
+ * 要求が 4xx で断られたとき（NotFound など）は空の配列にする。こちらは待っても
+ * 直らないので、返信抜きで埋める。null にすると、その投稿が毎回の全文取得の枠を
+ * 食い続ける
+ */
+async function fetchSelfReplies(
+  uri: string,
+  did: string,
+  fetchImpl: typeof fetch,
+): Promise<unknown[] | null> {
+  const payload = await fetchJson(
+    `${APPVIEW}/app.bsky.feed.getPostThread?uri=${encodeURIComponent(uri)}` +
+      `&depth=${SELF_REPLY_DEPTH}&parentHeight=0`,
+    fetchImpl,
+    'Bluesky のスレッド',
+    REFUSED,
+  );
+  if (payload === REFUSED) return [];
+  const response = asObject(payload);
+  if (response === null) return null;
+
+  const thread = asObject(response.thread);
+  if (thread === null || asString(thread.$type) !== THREAD_VIEW) return [];
+
+  const replies: unknown[] = [];
+  collectSelfReplies(thread, did, 1, replies);
+  return replies;
+}
+
+function collectSelfReplies(
+  node: Record<string, unknown>,
+  did: string,
+  depth: number,
+  into: unknown[],
+): void {
+  // 深さは要求の depth でも絞っているが、ここでも数える。応答が要求より深く返っても、
+  // 足す投稿の数（本文の長さ）が外の都合で増えないように
+  if (depth > SELF_REPLY_DEPTH) return;
+
+  const own = asArray(node.replies)
+    .map(asObject)
+    .filter(
+      (reply): reply is Record<string, unknown> =>
+        reply !== null &&
+        asString(reply.$type) === THREAD_VIEW &&
+        asString(asObject(asObject(reply.post)?.author)?.did) === did,
+    )
+    .sort((a, b) => createdAt(a) - createdAt(b));
+
+  for (const reply of own) {
+    into.push(reply.post);
+    collectSelfReplies(reply, did, depth + 1, into);
+  }
+}
+
+/**
+ * 時刻に直して比べる。**文字列のままでは比べない。** createdAt は投稿したクライアントが
+ * 書く値で、時差の付け方も秒の桁数も揃っていない。読めない値は先頭に寄せる
+ */
+function createdAt(reply: Record<string, unknown>): number {
+  const time = Date.parse(asString(asObject(asObject(reply.post)?.record)?.createdAt) ?? '');
+  return Number.isNaN(time) ? 0 : time;
+}
+
+/**
+ * 本人の返信を「続きの投稿」として組み立てる。**組み立て方は元の投稿と同じ**
+ * （renderPost）。紹介先の URL はリンクカードやリンクの facet で来るので、
+ * そのまま本文に入れば画面のリンク一覧（web/src/lib/links.ts）に出る。
+ *
+ * 元の投稿が空（画像も文字も無い）なら、区切りと見出しを付けない。何も無いものの
+ * 「続き」として出すと、本文が罫線から始まる
+ */
+function renderContinuation(replies: readonly unknown[], afterRoot: boolean): string {
+  const parts = replies.map(renderPost).filter((html) => html !== '');
+  if (parts.length === 0) return '';
+  const lead = afterRoot ? '<hr><p><small>続きの投稿</small></p>' : '';
+  return lead + parts.join('<hr>');
 }
 
 /** 投稿者ごとに「ハンドルを直す分 + まとめて取る回数」 */
@@ -164,14 +318,14 @@ async function resolveHandle(handle: string, fetchImpl: typeof fetch): Promise<s
 }
 
 /**
- * rkey → 組み立てた HTML。消された投稿は入らない。
+ * rkey → 投稿（API の応答のまま）。消された投稿は入らない。
  * **要求そのものが通らなかったときは null**（「無い」と区別が付かないため）。
  */
 async function fetchPosts(
   did: string,
   rkeys: string[],
   fetchImpl: typeof fetch,
-): Promise<Map<string, string> | null> {
+): Promise<Map<string, unknown> | null> {
   const query = rkeys
     .map((rkey) => `uris=${encodeURIComponent(`at://${did}/app.bsky.feed.post/${rkey}`)}`)
     .join('&');
@@ -184,19 +338,12 @@ async function fetchPosts(
   const posts = asObject(payload)?.posts;
   if (!Array.isArray(posts)) return null;
 
-  const built = new Map<string, string>();
-
+  const found = new Map<string, unknown>();
   for (const post of posts) {
     const uri = asString(asObject(post)?.uri);
-    if (uri === null) continue;
-    const rkey = uri.slice(uri.lastIndexOf('/') + 1);
-
-    // 自前で組み立てた HTML でも必ずサニタイズを通す（CLAUDE.md の不変条件 4）。
-    // 中身は API から来た文字列なので、通す先を 1 か所に保つ方が確かめやすい
-    const html = await sanitizeHtml(renderPost(post), BASE_URL);
-    if (html !== '') built.set(rkey, html);
+    if (uri !== null) found.set(uri.slice(uri.lastIndexOf('/') + 1), post);
   }
-  return built;
+  return found;
 }
 
 /**

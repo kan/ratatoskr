@@ -29,14 +29,24 @@ interface Stub {
   calls: string[];
 }
 
-/** rkey → 返す投稿。渡さなかった rkey は「取れなかった」扱いになる */
-function stubApi(posts: unknown[]): Stub {
+/**
+ * rkey → 返す投稿。渡さなかった rkey は「取れなかった」扱いになる。
+ * `threads` は at-uri → getPostThread の `thread`。無い uri は 502 を返す
+ */
+function stubApi(posts: unknown[], threads: Record<string, unknown> = {}): Stub {
   const calls: string[] = [];
   const impl = async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input);
     calls.push(url);
     if (url.includes('resolveHandle')) {
       return new Response(JSON.stringify({ did: DID }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (url.includes('getPostThread')) {
+      const thread = threads[new URL(url).searchParams.get('uri') ?? ''];
+      if (thread === undefined) return new Response('nope', { status: 502 });
+      return new Response(JSON.stringify({ thread }), {
         headers: { 'content-type': 'application/json' },
       });
     }
@@ -476,6 +486,176 @@ describe('fetchBlueskyBodies', () => {
 
     expect(html).not.toContain('<p></p>');
     expect(html).toContain('<img src="https://cdn.example.com/1.jpg" alt="">');
+  });
+
+  describe('本人の返信（issue #32）', () => {
+    const OTHER = 'did:plc:other';
+
+    function uriOf(rkey: string): string {
+      return `at://${DID}/app.bsky.feed.post/${rkey}`;
+    }
+
+    /** getPostThread の 1 段。`by` で投稿者を差し替える */
+    function node(
+      rkey: string,
+      text: string,
+      replies: unknown[] = [],
+      options: { by?: string; createdAt?: string; embed?: unknown } = {},
+    ): unknown {
+      const base = post(
+        rkey,
+        { text, createdAt: options.createdAt ?? '2026-08-29T07:24:49.617Z' },
+        options.embed,
+      ) as Record<string, unknown>;
+      const author = { ...(base.author as object), did: options.by ?? DID };
+      return {
+        $type: 'app.bsky.feed.defs#threadViewPost',
+        post: { ...base, author },
+        replies,
+      };
+    }
+
+    function withReplies(rkey: string, text: string): unknown {
+      return { ...(post(rkey, { text }) as object), replyCount: 1 };
+    }
+
+    async function fetchWith(
+      threads: Record<string, unknown>,
+      root = withReplies('a', '紹介'),
+      budget: FetchBudget = { remaining: 10 },
+    ) {
+      const stub = stubApi([root], threads);
+      const result = await fetchBlueskyPosts(refsOf([postUrl('a', DID)]), {
+        fetchImpl: stub.impl,
+        budget,
+      });
+      return { ...result, stub, budget };
+    }
+
+    it('本人の返信を「続きの投稿」として末尾に足す。リンクカードも同じ形で出す', async () => {
+      const card = {
+        $type: 'app.bsky.embed.external#view',
+        external: { uri: 'https://example.com/item', title: '紹介先', description: '' },
+      };
+      const { bodies } = await fetchWith({
+        [uriOf('a')]: node('a', '紹介', [node('b', 'リンクはこちら', [], { embed: card })]),
+      });
+
+      expect(bodies.get('a')).toBe(
+        '<p>紹介</p><hr><p><small>続きの投稿</small></p>' +
+          '<p>リンクはこちら</p>' +
+          '<p><a href="https://example.com/item" target="_blank" rel="noopener noreferrer">紹介先</a></p>',
+      );
+    });
+
+    it('他人の返信と、その下にある本人の返信は採らない', async () => {
+      const { bodies } = await fetchWith({
+        [uriOf('a')]: node('a', '紹介', [
+          node('x', '他人の返信', [node('y', '本人の受け答え')], { by: OTHER }),
+          node('b', '本人の続き'),
+        ]),
+      });
+
+      const html = bodies.get('a') ?? '';
+      expect(html).toContain('本人の続き');
+      expect(html).not.toContain('他人の返信');
+      expect(html).not.toContain('本人の受け答え');
+    });
+
+    it('本人の返信は 5 段まで辿り、同じ段は古い順に並べる', async () => {
+      let chain: unknown = node('r6', '6 段目');
+      for (let depth = 5; depth >= 1; depth -= 1)
+        chain = node(`r${depth}`, `${depth} 段目`, [chain]);
+      const later = node('late', '後から足した返信', [], { createdAt: '2026-08-30T00:00:00.000Z' });
+
+      const { bodies, stub } = await fetchWith({
+        [uriOf('a')]: node('a', '紹介', [later, chain]),
+      });
+
+      const html = bodies.get('a') ?? '';
+      expect(html).toContain('5 段目');
+      expect(html).not.toContain('6 段目');
+      expect(html.indexOf('5 段目')).toBeLessThan(html.indexOf('後から足した返信'));
+      // 段数は 1 回の要求で取れる深さに収める
+      expect(stub.calls.filter((call) => call.includes('getPostThread'))).toHaveLength(1);
+      expect(stub.calls.find((call) => call.includes('getPostThread'))).toContain('depth=5');
+    });
+
+    it('返信の無い投稿はスレッドを引かない', async () => {
+      const { stub } = await fetchWith({}, post('a', { text: '単発' }));
+
+      expect(stub.calls.some((call) => call.includes('getPostThread'))).toBe(false);
+    });
+
+    it('スレッドを引く枠が無ければ、今回は埋めずに次の機会に回す', async () => {
+      // getPosts の 1 回で枠が尽きる。返信抜きで埋めると、全文は 1 回しか取りに
+      // 行かないので紹介先の URL が永久に出てこない
+      const { bodies, missing, stub } = await fetchWith(
+        { [uriOf('a')]: node('a', '紹介', [node('b', '続き')]) },
+        withReplies('a', '紹介'),
+        { remaining: 1 },
+      );
+
+      expect(bodies.size).toBe(0);
+      expect(missing.size).toBe(0);
+      expect(stub.calls.some((call) => call.includes('getPostThread'))).toBe(false);
+    });
+
+    it('スレッドの要求が通らなければ、印を付けずに次の機会に回す', async () => {
+      const { bodies, missing, budget } = await fetchWith({});
+
+      expect(bodies.size).toBe(0);
+      expect(missing.size).toBe(0);
+      // 取りに行って失敗した分は返さない（fetch.ts の releaseBudget）
+      expect(budget.remaining).toBe(8);
+    });
+
+    it('スレッドの要求が 4xx で断られたら、返信抜きで埋める（毎回取り直さない）', async () => {
+      const stub = stubApi([withReplies('a', '紹介')]);
+      const impl = (async (input: RequestInfo | URL): Promise<Response> => {
+        if (String(input).includes('getPostThread')) {
+          return new Response('{"error":"NotFound"}', { status: 400 });
+        }
+        return stub.impl(input);
+      }) as unknown as typeof fetch;
+
+      const { bodies } = await fetchBlueskyPosts(refsOf([postUrl('a', DID)]), {
+        fetchImpl: impl,
+        budget: { remaining: 10 },
+      });
+
+      expect(bodies.get('a')).toBe('<p>紹介</p>');
+    });
+
+    it('同じ段の返信は、時差の書き方が違っても時刻の順に並べる', async () => {
+      // 16:00+09:00 は 07:00Z。文字列で比べると 08:00Z より後に来てしまう
+      const { bodies } = await fetchWith({
+        [uriOf('a')]: node('a', '紹介', [
+          node('b', '後', [], { createdAt: '2026-08-29T08:00:00Z' }),
+          node('c', '先', [], { createdAt: '2026-08-29T16:00:00+09:00' }),
+        ]),
+      });
+
+      const html = bodies.get('a') ?? '';
+      expect(html.indexOf('先')).toBeLessThan(html.indexOf('後'));
+    });
+
+    it('元の投稿が空なら、区切りと見出しを付けずに返信だけを出す', async () => {
+      const { bodies } = await fetchWith(
+        { [uriOf('a')]: node('a', '', [node('b', '本人の続き')]) },
+        { ...(post('a', { text: '' }) as object), replyCount: 1 },
+      );
+
+      expect(bodies.get('a')).toBe('<p>本人の続き</p>');
+    });
+
+    it('スレッドが辿れない投稿（消された・ブロック）は、返信抜きで埋める', async () => {
+      const { bodies } = await fetchWith({
+        [uriOf('a')]: { $type: 'app.bsky.feed.defs#notFoundPost', uri: uriOf('a'), notFound: true },
+      });
+
+      expect(bodies.get('a')).toBe('<p>紹介</p>');
+    });
   });
 
   it('予算が無ければ取りに行かない', async () => {
