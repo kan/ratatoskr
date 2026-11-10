@@ -21,6 +21,8 @@ export type Action =
   | 'togglePin'
   | 'togglePinList'
   | 'openAllPins'
+  | 'toggleLinkList'
+  | 'openLink'
   | 'pageDown'
   | 'pageUp'
   | 'openOriginal'
@@ -29,6 +31,8 @@ export type Action =
   | 'openSubscriptions'
   | 'unsubscribeFeed'
   | 'closeOverlay';
+
+export type Overlay = 'help' | 'subscriptions' | 'pins' | 'links';
 
 export interface KeyBinding {
   /**
@@ -51,7 +55,14 @@ export interface KeyBinding {
    * どれを開くのかはキーの側に持たせる。開いている間に押されたら、同じものなら閉じ、
    * 別のものなら切り替える（ヘルプを読んで m を押した人が、Esc を挟まずに済む）
    */
-  overlay?: 'help' | 'subscriptions' | 'pins';
+  overlay?: Overlay;
+
+  /**
+   * このオーバーレイの表示中だけ効くキー（o はピン一覧、Enter はリンク一覧）。
+   * **外では処理しなかったことにする**（App.vue の handle が false を返す）。処理した
+   * ことにすると既定の動作を止めてしまい、フォーカスのあるボタンが Enter で押せなくなる
+   */
+  within?: Overlay;
 
   /**
    * キーそのものが引数を兼ねる場合の値（レートの 1–5）。
@@ -127,7 +138,26 @@ export const KEYMAP: readonly KeyBinding[] = [
     key: 'o',
     label: 'o',
     action: 'openAllPins',
+    within: 'pins',
     description: 'ピンを全て新しいタブで開く（ピン一覧の表示中）',
+    group: 'pin',
+  },
+  {
+    // 一覧の中では j / k / p を読み替える（App.vue の handle）。別のキーを足すと、
+    // 記事を読むときと一覧を見るときで指の置き場が変わる
+    key: 'l',
+    overlay: 'links',
+    label: 'l',
+    action: 'toggleLinkList',
+    description: '記事内のリンク一覧を開く / 閉じる（中では j / k で選び、p でピンする）',
+    group: 'pin',
+  },
+  {
+    key: 'Enter',
+    label: 'Enter',
+    action: 'openLink',
+    within: 'links',
+    description: '選んだリンクを新しいタブで開く（リンク一覧の表示中）',
     group: 'pin',
   },
   {

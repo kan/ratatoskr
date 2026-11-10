@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import type { Entry, Pin } from '@shared/types';
+import { normalizeUrl } from '@/lib/url';
 import { useNsfwStore } from './nsfw';
 
 /**
@@ -56,15 +57,24 @@ export const usePinsStore = defineStore('pins', () => {
   );
 
   /**
-   * ピンの url はサーバが new URL().href で正規化して返す。手元でも同じ形にしないと、
-   * bootstrap で受け取った後に同じ記事が「別のピン」に見えてしまう
+   * 画面に出ているピンを立てた元の記事の id（issue #32）。**左ペインの目印は url ではなく
+   * これでも引く。** 記事の中のリンクだけをピンした記事は、記事の url のピンが無くても
+   * 「ここから何かをピンした」と分かる必要がある
    */
-  function normalize(url: string): string {
-    try {
-      return new URL(url).href;
-    } catch {
-      return url;
-    }
+  const shownEntryIds = computed(
+    () => new Set(shown.value.flatMap((pin) => (pin.entryId === null ? [] : [pin.entryId]))),
+  );
+
+  /**
+   * 左ペインの記事一覧に目印を出すか（issue #32）。**目印の規則はここに閉じる。**
+   *
+   * url だけで引かない。記事の中のリンクだけをピンした記事は、記事の url のピンが無い。
+   * 逆に id だけでも引けない。同じ URL を別のフィードが配ると、ピンを立てた記事とは
+   * 別の記事になる。記事の見出しとボトムバーの印は、p で外せる記事のピンだけを表すので
+   * こちらではなく has を使う
+   */
+  function isMarked(entry: Entry): boolean {
+    return shownEntryIds.value.has(entry.id) || (entry.url !== null && has(entry.url));
   }
 
   /**
@@ -73,12 +83,12 @@ export const usePinsStore = defineStore('pins', () => {
    * 答えると、隠している端末で p を押したときに見えていないピンを外してしまう
    */
   function has(url: string): boolean {
-    return shownUrls.value.has(normalize(url));
+    return shownUrls.value.has(normalizeUrl(url));
   }
 
   /** 隠しているピンも含めて探す。送信結果の書き戻しなど、手元の整合のために使う */
   function find(url: string): Pin | undefined {
-    const normalized = normalize(url);
+    const normalized = normalizeUrl(url);
     return pins.value.find((pin) => pin.url === normalized);
   }
 
@@ -114,13 +124,27 @@ export const usePinsStore = defineStore('pins', () => {
    * 引き直す）。「既にある」として何もしないと、p を押しても何も起きない
    */
   function add(entry: Entry, now: number, marked = false): Pin | null {
-    if (entry.url === null || has(entry.url)) return null;
+    if (entry.url === null) return null;
+    return addLink({ entryId: entry.id, title: entry.title, url: entry.url }, now, marked);
+  }
+
+  /**
+   * 記事の中のリンクをピンする（issue #32）。**記事のピンと同じ置き場に入れる。**
+   * `entryId` は元の記事、`url` はリンク先、`title` はリンクの文字。ピンの同一性は
+   * url なので、サーバ（UNIQUE）も手元もこのまま扱える。振る舞いは add と同じ
+   */
+  function addLink(
+    link: { entryId: number; title: string; url: string },
+    now: number,
+    marked = false,
+  ): Pin | null {
+    if (has(link.url)) return null;
 
     const pin: Pin = {
       id: nextLocalId,
-      entryId: entry.id,
-      title: entry.title,
-      url: normalize(entry.url),
+      entryId: link.entryId,
+      title: link.title,
+      url: normalizeUrl(link.url),
       pinnedAt: now,
       nsfw: marked,
     };
@@ -132,7 +156,7 @@ export const usePinsStore = defineStore('pins', () => {
 
   /** 消すのは url で行う。仮 id は起動をまたぐと信用できない */
   function remove(url: string): void {
-    const normalized = normalize(url);
+    const normalized = normalizeUrl(url);
     pins.value = pins.value.filter((pin) => pin.url !== normalized);
     revision.value += 1;
   }
@@ -177,10 +201,12 @@ export const usePinsStore = defineStore('pins', () => {
     shownUrls,
     revision,
     has,
+    isMarked,
     find,
     findShown,
     setPins,
     add,
+    addLink,
     remove,
     confirm,
     setNsfwByEntries,

@@ -174,6 +174,11 @@ export interface MockOptions {
    * スクロールが一度も起きない
    */
   extraEntries?: number;
+  /**
+   * 記事 id → 差し替える本文。本文の中身に依る検証（リンク一覧。issue #32）で使う。
+   * ENTRIES そのものを書き換えると、本文の長さで Space の境界を見ているテストが動く
+   */
+  bodies?: Record<number, string>;
 }
 
 /**
@@ -204,7 +209,7 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
   // 足す分は朝刊（feed 1）の後ろに付ける。id を離してあるので、既定の 3 件を
   // 見ている他のテストの位置表示（(1/2) 朝刊）には影響しない
   const entries: Entry[] = [
-    ...ENTRIES,
+    ...ENTRIES.map((e) => ({ ...e, body: options.bodies?.[e.id] ?? e.body })),
     ...Array.from({ length: options.extraEntries ?? 0 }, (_, i) =>
       entry(100 + i, 1, `朝刊の追加 ${i + 1} 本目`, SHORT),
     ),

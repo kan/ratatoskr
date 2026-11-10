@@ -19,8 +19,8 @@ const props = defineProps<{
   /** 読んでいる最中のフィードにだけ渡る。それ以外は null */
   currentEntryId: number | null;
   entriesOf: (feedId: number) => Entry[];
-  /** ピンの立っている記事の url */
-  pinnedUrls: Set<string>;
+  /** ピンの目印を出すか（stores/pins.ts の isMarked） */
+  isPinned: (entry: Entry) => boolean;
 }>();
 
 defineEmits<{ select: [entryId: number] }>();
@@ -31,10 +31,6 @@ const entries = computed(() => props.entriesOf(props.feed.id));
  * 読んだ記事は暗く、まだ読んでいない記事は通常の明るさで出す。
  * 既読判定はウォーターマーク（id <= read_seq）そのもの。記事ごとの既読フラグは無い
  */
-function isPinned(entry: Entry): boolean {
-  return entry.url !== null && props.pinnedUrls.has(entry.url);
-}
-
 function entryClass(entry: Entry): string {
   if (entry.id === props.currentEntryId) {
     return 'border-amber-600 bg-neutral-100 font-bold dark:border-amber-500 dark:bg-neutral-900';

@@ -180,6 +180,47 @@ describe('NSFW のピンを隠す（issue #23）', () => {
     expect(pins.count).toBe(0);
   });
 
+  it('記事の中のリンクは、リンク先の URL と元の記事の id でピンする（issue #32）', () => {
+    const pins = usePinsStore();
+    const added = pins.addLink(
+      { entryId: 10, title: '紹介先', url: 'https://shop.example.com/item' },
+      200,
+    );
+
+    expect(added).toMatchObject({
+      entryId: 10,
+      title: '紹介先',
+      url: 'https://shop.example.com/item',
+    });
+    // 記事そのものにはピンが立っていない
+    expect(pins.has('https://example.com/10')).toBe(false);
+    // 左ペインの目印は元の記事の id で引く
+    expect(pins.isMarked(entry(10))).toBe(true);
+    expect(pins.isMarked(entry(11))).toBe(false);
+    // 同じリンクは二度立たない
+    expect(
+      pins.addLink({ entryId: 11, title: '', url: 'https://shop.example.com/item' }, 300),
+    ).toBeNull();
+  });
+
+  it('隠しているピンを立てた記事には、左ペインの目印を出さない', () => {
+    const pins = usePinsStore();
+    pins.setPins([
+      pin(1, 'https://shop.example.com/a', { entryId: 10, nsfw: true }),
+      pin(2, 'https://shop.example.com/b', { entryId: 20 }),
+    ]);
+
+    expect(pins.isMarked(entry(10))).toBe(false);
+    expect(pins.isMarked(entry(20))).toBe(true);
+  });
+
+  it('記事の url のピンでも目印を出す（ピンを立てた記事と別の記事でも）', () => {
+    const pins = usePinsStore();
+    pins.setPins([pin(1, 'https://example.com/30', { entryId: 99 })]);
+
+    expect(pins.isMarked(entry(30))).toBe(true);
+  });
+
   it('フィードの印を変えたら、その記事に立てたピンにも当てる', () => {
     const pins = usePinsStore();
     pins.setPins([

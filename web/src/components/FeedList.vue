@@ -22,8 +22,10 @@ const props = defineProps<{
   currentEntryId: number | null;
   /** そのフィードの下に並べる記事。読んでいる最中のフィードだけ扱いが違う */
   entriesOf: (feedId: number) => Entry[];
-  /** ピンの立っている記事の url。一覧に目印を出すために引く */
+  /** 画面に出ているピンの url。頭の「ピン」に件数を出すために引く */
   pinnedUrls: Set<string>;
+  /** 記事一覧に目印を出すか。規則はピンのストアが持つ（stores/pins.ts の isMarked） */
+  isPinned: (entry: Entry) => boolean;
   /**
    * 狭い画面か。この一覧が記事ビューに重ねる引き出しになる
    * （docs/UX.md「画面構成（スマホ）」）。
@@ -312,7 +314,7 @@ watch(
             :feed="feed"
             :current-entry-id="feed.id === currentFeedId ? currentEntryId : null"
             :entries-of="entriesOf"
-            :pinned-urls="pinnedUrls"
+            :is-pinned="isPinned"
             @select="(entryId) => $emit('selectEntry', feed.id, entryId)"
           />
         </li>

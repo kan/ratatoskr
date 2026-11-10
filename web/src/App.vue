@@ -5,12 +5,20 @@ import EntryReader from '@/components/EntryReader.vue';
 import FeedList from '@/components/FeedList.vue';
 import { confirmUnsubscribe, folderLabel, isStalled } from '@/lib/subscriptions';
 import HelpOverlay from '@/components/HelpOverlay.vue';
+import LinkList from '@/components/LinkList.vue';
 import PinList from '@/components/PinList.vue';
 import SubscriptionManager from '@/components/SubscriptionManager.vue';
 import { bookmarkTemplate, bookmarkUrl } from '@/lib/bookmark';
 import { pendingSubscription } from '@/lib/bookmarklet';
 import { showUnread } from '@/lib/favicon';
-import { isTextInput, releaseKeyFocus, resolveBinding, type KeyBinding } from '@/lib/keymap';
+import {
+  isTextInput,
+  releaseKeyFocus,
+  resolveBinding,
+  type KeyBinding,
+  type Overlay,
+} from '@/lib/keymap';
+import { linkRowsOf, type LinkRow } from '@/lib/links';
 import { hasSeenHelp, markHelpSeen } from '@/lib/prefs';
 import { toggleTheme, useTheme } from '@/lib/theme';
 import { useCompact } from '@/lib/viewport';
@@ -31,6 +39,7 @@ const outbox = useOutboxStore();
 const session = useSessionStore();
 
 const reader = ref<InstanceType<typeof EntryReader> | null>(null);
+const linkList = ref<InstanceType<typeof LinkList> | null>(null);
 
 /**
  * 狭い画面では記事ビューが既定で、フィード一覧はヘッダから開く引き出しになる
@@ -75,9 +84,17 @@ function selectEntryIn(feedId: number, entryId: number): void {
  * オーバーレイより手前に出る（引き出しが z-20、オーバーレイが z-10）。
  * 畳まないと、どれを開いても開いたことに気付けない
  */
-function openOverlay(name: NonNullable<typeof activeOverlay.value>): void {
+function openOverlay(name: Overlay): void {
   drawerOpen.value = false;
   activeOverlay.value = name;
+}
+
+/**
+ * いま開けるか。**リンク一覧は出している記事が無ければ開かない**（読み終えた画面では
+ * 一覧の元になる記事が無い。ピンや v と同じく、見えていない記事には効かせない）
+ */
+function canOpen(name: Overlay): boolean {
+  return name !== 'links' || shownEntry.value !== null;
 }
 
 function openManager(): void {
@@ -103,7 +120,7 @@ function takePendingSubscription(): void {
 
 // オーバーレイは「いま何が開いているか」で持つ。ピン一覧（M6）が増えたときに
 // 表示中フラグを増やさずに済ませるため
-const activeOverlay = ref<'help' | 'subscriptions' | 'pins' | null>(null);
+const activeOverlay = ref<Overlay | null>(null);
 
 /**
  * 記事ビューが何かの下に隠れているか。**覆う UI を増やしたらここに足す。**
@@ -163,6 +180,14 @@ const currentPinned = computed(() => {
 });
 
 /**
+ * 画面に出している記事のリンク一覧の行（issue #32）。先頭が「この記事」。
+ * 本文のリンクは、描画済みの本文から EntryReader が拾ったもの（lib/links.ts の linksIn）
+ */
+const linkRows = computed(() =>
+  shownEntry.value === null ? [] : linkRowsOf(shownEntry.value, reader.value?.links ?? []),
+);
+
+/**
  * 取得が止まったフィードがあるか（M9）。
  *
  * 知らせの本体は左ペインの頭に出す（FeedList）。ただし狭い画面ではその左ペインが
@@ -213,19 +238,28 @@ watch(
 function handle(binding: KeyBinding): boolean {
   // オーバーレイを開いている間は、閉じる操作とその画面自身の操作だけを受け付ける
   if (activeOverlay.value !== null) {
-    if (activeOverlay.value === 'pins' && binding.action === 'openAllPins') {
-      openAllPins();
-      return true;
-    }
+    if (handleInOverlay(activeOverlay.value, binding)) return true;
     // 別のオーバーレイの入口なら切り替える。**Esc を挟ませない。** 初回起動で
     // 自動で開くヘルプに m が載っている以上、そこから 1 打で行けないと嘘になる
     if (binding.overlay !== undefined && binding.overlay !== activeOverlay.value) {
-      closeOverlay();
-      openOverlay(binding.overlay);
+      if (canOpen(binding.overlay)) {
+        closeOverlay();
+        openOverlay(binding.overlay);
+      }
       return true;
     }
     if (binding.action !== 'closeOverlay' && binding.overlay === undefined) return false;
     closeOverlay();
+    return true;
+  }
+
+  // オーバーレイの中でだけ効くキー（keymap.ts の within）。外では処理しなかったことにする。
+  // o はピン一覧の外で誤爆するとタブが大量に開き、Enter は止めるとボタンが押せなくなる
+  if (binding.within !== undefined) return false;
+
+  // どれを開くのかはキーの側が持つ（keymap.ts の overlay）。入口ごとに分岐を足さない
+  if (binding.overlay !== undefined) {
+    if (canOpen(binding.overlay)) openOverlay(binding.overlay);
     return true;
   }
 
@@ -258,12 +292,6 @@ function handle(binding: KeyBinding): boolean {
     case 'togglePin':
       togglePin();
       break;
-    case 'togglePinList':
-      openOverlay('pins');
-      break;
-    case 'openAllPins':
-      // ピン一覧を開いていないときは何もしない（誤爆でタブが大量に開くのを避ける）
-      break;
     case 'pageDown':
       // 下端に着いていたら記事送りに変わる。境界の判断は読み手が持つ（docs/UX.md）
       if (!reader.value?.pageDown()) feeds.nextEntry();
@@ -276,12 +304,6 @@ function handle(binding: KeyBinding): boolean {
       break;
     case 'bookmarkEntry':
       bookmarkCurrentEntry();
-      break;
-    case 'toggleHelp':
-      openOverlay('help');
-      break;
-    case 'openSubscriptions':
-      openManager();
       break;
     case 'unsubscribeFeed': {
       // 読んでいるフィードが対象。確認と後始末は左ペインのボタンと同じ経路を通る
@@ -414,16 +436,26 @@ function unsubscribeFeed(id: number): void {
  */
 function togglePin(): void {
   const entry = shownEntry.value;
-  if (entry === null || entry.url === null) return;
+  if (entry?.url) togglePinOf({ entryId: entry.id, title: entry.title, url: entry.url });
+}
 
+/**
+ * 記事のピンとリンクのピン（issue #32）で共通。置き場は 1 つで、ピンの同一性は url
+ * （stores/pins.ts）。`entryId` はどちらも表示中の記事
+ */
+function togglePinOf(target: { entryId: number; title: string; url: string }): void {
   // 外すのは見えているピンだけ。隠しているピン（issue #23）は立て直す側に回る
-  const existing = pins.findShown(entry.url);
+  const existing = pins.findShown(target.url);
   if (existing !== undefined) {
     removePin(existing);
     return;
   }
 
-  const added = pins.add(entry, Math.floor(Date.now() / 1000), feeds.currentFeed?.nsfw ?? false);
+  const added = pins.addLink(
+    target,
+    Math.floor(Date.now() / 1000),
+    feeds.currentFeed?.nsfw ?? false,
+  );
   if (added === null) return;
   outbox.queuePin(added.entryId, added.title, added.url, added.nsfw);
   notify('ピンした');
@@ -432,6 +464,73 @@ function togglePin(): void {
 function removePin(pin: Pin): void {
   pins.remove(pin.url);
   outbox.queueUnpin(pin.id, pin.url);
+}
+
+/**
+ * オーバーレイの中の操作。開いている画面に応じて振り分ける。
+ *
+ * @returns 処理したか。false なら通常のオーバーレイの扱い（切り替え・閉じる）に回す
+ */
+function handleInOverlay(overlay: Overlay, binding: KeyBinding): boolean {
+  if (overlay === 'pins' && binding.action === 'openAllPins') {
+    openAllPins();
+    return true;
+  }
+  return overlay === 'links' && handleInLinkList(binding);
+}
+
+/**
+ * リンク一覧を開いている間のキー（issue #32）。**j / k / p は読み替える。**
+ * 一覧のためにキーを足すと、読むときと一覧を見るときで指の置き場が変わる。
+ */
+function handleInLinkList(binding: KeyBinding): boolean {
+  const list = linkList.value;
+  if (list === null) return false;
+
+  switch (binding.action) {
+    case 'nextEntry':
+      list.move(1);
+      return true;
+    case 'prevEntry':
+      list.move(-1);
+      return true;
+    case 'openLink': {
+      // Tab でリンクやボタンにフォーカスを移していたら、その既定の動作に任せる。
+      // 横取りすると、閉じるボタンの上で押した Enter が別のリンクを開く
+      if (isActivatable(document.activeElement)) return false;
+      // 開いても一覧は閉じない。紹介先が複数ある記事で、続けて次の行を開いたり
+      // ピンしたりできるように。ピンにも既読にも触らない（v と同じ扱い）
+      const row = list.selected();
+      if (row !== null) openDetached(row.url);
+      return true;
+    }
+    case 'togglePin': {
+      const row = list.selected();
+      if (row !== null) toggleLinkPin(row);
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+function isActivatable(el: Element | null): boolean {
+  return el instanceof HTMLButtonElement || el instanceof HTMLAnchorElement;
+}
+
+/**
+ * 一覧の行をピンする / 外す。「この記事」は p と同じ（記事のピン）。
+ * 左ペインの目印は元の記事の id でも引く（stores/pins.ts の isMarked）
+ */
+function toggleLinkPin(row: LinkRow): void {
+  const entry = shownEntry.value;
+  if (entry === null) return;
+
+  // 見出しが空だと、サーバは**記事の**本文の書き出しで埋める（src/api/pins.ts）。
+  // リンクのピンでそれをされると、一覧の見出しと開く先が食い違う。URL を見出しにする。
+  // 「この記事」は p と同じ見出し（空なら書き出しで埋めるのが正しい）
+  const title = row.self ? entry.title : row.text || row.url;
+  togglePinOf({ entryId: entry.id, title, url: row.url });
 }
 
 /**
@@ -478,13 +577,18 @@ function openTab(url: string): boolean {
 }
 
 /**
- * 元記事を開く（v）。openTab は使わない。
- * こちらは開けたかを知る必要が無いぶん、noreferrer まで付けて相手に渡す情報を減らせる
+ * 開けたかを知る必要の無いものを開く（v とリンク一覧）。openTab は使わない。
+ * こちらは noreferrer まで付けて相手に渡す情報を減らせる
  * （noreferrer を付けると戻り値が null になり、開けたかの判定はできなくなる）
  */
+function openDetached(url: string): void {
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+/** 元記事を開く（v） */
 function openOriginal(): void {
   const url = shownEntry.value?.url;
-  if (url) window.open(url, '_blank', 'noopener,noreferrer');
+  if (url) openDetached(url);
 }
 
 /**
@@ -574,6 +678,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
       :current-entry-id="feeds.readingFeed === null ? null : (feeds.currentEntry?.id ?? null)"
       :entries-of="feeds.entriesFor"
       :pinned-urls="pins.shownUrls"
+      :is-pinned="pins.isMarked"
       :compact="compact"
       :stalled-count="stalledCount"
       :folders="feeds.folders"
@@ -745,6 +850,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
         :pinned="currentPinned"
         @next="feeds.nextEntry()"
         @prev="feeds.prevEntry()"
+        @links="openOverlay('links')"
       />
       <!--
         記事送りのバー。境界でラベルだけが変わる（docs/UX.md）。
@@ -783,6 +889,15 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
       @open-all="openAllPins"
       @remove="(pin) => removePin(pin)"
       @bookmark="(pin) => bookmarkPin(pin)"
+    />
+    <LinkList
+      v-if="activeOverlay === 'links'"
+      ref="linkList"
+      :rows="linkRows"
+      :pinned-urls="pins.shownUrls"
+      @close="closeOverlay"
+      @open="(row) => openDetached(row.url)"
+      @pin="toggleLinkPin"
     />
   </div>
 </template>

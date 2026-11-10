@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import type { Entry } from '@shared/types';
 import { repairBrokenImage } from '@/lib/image-repair';
+import { releaseKeyFocus } from '@/lib/keymap';
+import { linksIn, sameLinks, type ArticleLink } from '@/lib/links';
 import { classifySwipe, pullsPastBottom } from '@/lib/swipe';
 
 /**
@@ -23,9 +25,42 @@ const props = defineProps<{
 
 /**
  * 左右スワイプは j / k と同じ移動要求として上に投げる（docs/UX.md）。
- * 境界でフィードを跨ぐかどうかも含めて、判断はカーソルの所有者が持つ
+ * 境界でフィードを跨ぐかどうかも含めて、判断はカーソルの所有者が持つ。
+ * `links` はリンク一覧を開く要求（l と同じ）
  */
-const emit = defineEmits<{ next: []; prev: [] }>();
+const emit = defineEmits<{ next: []; prev: []; links: [] }>();
+
+const body = ref<HTMLElement | null>(null);
+
+/**
+ * 本文中のリンク（issue #32）。リンク一覧（App.vue）の元で、件数は見出しの横に出す。
+ * 「この記事」は数えない（記事のピンはボトムバーにある）。
+ *
+ * **描画済みの DOM から拾う。** v-html が描いた後の post で読むので、本文を読み解き
+ * 直さずに済む。描き直しは同じ描画の中で済み、件数が 1 拍遅れて出ることは無い。
+ * 本文だけを見張るのは、全文が後から届くと同じ記事で本文が差し替わるため
+ */
+const links = ref<ArticleLink[]>([]);
+
+function collect(): void {
+  const el = body.value;
+  const next = el === null || props.entry === null ? [] : linksIn(el, props.entry.url);
+  // 中身が同じなら差し替えない。差し替えると、見出しの横の件数を描き直すだけの
+  // 描画が記事送りのたびに 1 回増える
+  if (!sameLinks(links.value, next)) links.value = next;
+}
+
+// immediate にしない。描く前に走ると、本文の DOM がまだ無い。
+// 見張るのは id と本文の 2 つの値。記事のオブジェクトごと見ると、同じ記事が
+// 同期で差し替わっただけでも本文を走査し直す
+onMounted(collect);
+watch([() => props.entry?.id, () => props.entry?.body], collect, { flush: 'post' });
+
+function openLinks(event: Event): void {
+  // 押した後もフォーカスが残ると、一覧を閉じた後の Space がこのボタンの再発火になる
+  releaseKeyFocus(event);
+  emit('links');
+}
 
 /**
  * 画像が読めなかったときだけ動く。壊れた控えを捨てて 1 回だけ取り直す
@@ -175,7 +210,7 @@ function onTouchEnd(event: TouchEvent): void {
   else if (direction === 'prev') emit('prev');
 }
 
-defineExpose({ pageDown, pageUp, scrollToBottom });
+defineExpose({ pageDown, pageUp, scrollToBottom, links });
 </script>
 
 <template>
@@ -195,17 +230,33 @@ defineExpose({ pageDown, pageUp, scrollToBottom });
     -->
       <div class="mx-auto w-full max-w-[44rem]">
         <template v-if="entry">
-          <h1 class="text-2xl font-bold">
-            <!-- ピンは目立たせない。読む邪魔をせず、目印として分かればよい。
-               タイトルの中には入れない（見出しの文言そのものを変えないため） -->
-            <span
-              v-if="pinned"
-              class="mr-1 align-middle text-sm text-amber-600 dark:text-amber-500"
-              data-testid="entry-pinned"
-              title="ピン済み"
-              >📌</span
-            ><span data-testid="entry-title">{{ entry.title || '(無題)' }}</span>
-          </h1>
+          <div class="flex items-start gap-3">
+            <h1 class="min-w-0 flex-1 text-2xl font-bold">
+              <!-- ピンは目立たせない。読む邪魔をせず、目印として分かればよい。
+                 タイトルの中には入れない（見出しの文言そのものを変えないため） -->
+              <span
+                v-if="pinned"
+                class="mr-1 align-middle text-sm text-amber-600 dark:text-amber-500"
+                data-testid="entry-pinned"
+                title="ピン済み"
+                >📌</span
+              ><span data-testid="entry-title">{{ entry.title || '(無題)' }}</span>
+            </h1>
+            <!--
+              リンク一覧の入口（issue #32）。**ボトムバーには足さない。** 5 つ目を足すと
+              「次へ」が狭くなる（docs/UX.md）。キーの無い画面のための入口だが、マウスだけで
+              読む PC でも届くよう、幅に依らず出す
+            -->
+            <button
+              v-if="links.length > 0"
+              type="button"
+              class="mt-1 shrink-0 rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-500 hover:text-neutral-900 dark:border-neutral-700 dark:hover:text-neutral-100"
+              data-testid="open-links"
+              @click="openLinks"
+            >
+              リンク ({{ links.length }})
+            </button>
+          </div>
           <p class="mt-1.5 text-xs text-neutral-500">
             <span v-if="entry.author">{{ entry.author }} / </span>
             <span v-if="entry.publishedAt">{{
@@ -215,7 +266,12 @@ defineExpose({ pageDown, pageUp, scrollToBottom });
           <hr class="my-4 border-neutral-300 dark:border-neutral-700" />
           <!-- body は取り込み時にサーバ側でサニタイズ済み（CLAUDE.md の不変条件 4） -->
           <!-- eslint-disable-next-line vue/no-v-html -->
-          <div class="article-body" @error.capture="onLoadError" v-html="entry.body"></div>
+          <div
+            ref="body"
+            class="article-body"
+            @error.capture="onLoadError"
+            v-html="entry.body"
+          ></div>
         </template>
         <p v-else class="text-sm text-neutral-500">{{ emptyLabel }}</p>
       </div>
