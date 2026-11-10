@@ -236,6 +236,28 @@ Worker は `Cf-Access-Jwt-Assertion` の JWT を、このチームドメイン�
 `aud` が一致するものだけ通す（`src/lib/auth.ts`）。
 **`ACCESS_AUD` を間違えると全ての API が 401 になる**ので、入れた後に画面を開いて記事が出ることを確かめる。
 
+### 自分のドメインで開く（任意。手元からのデプロイのみ）
+
+Cloudflare に置いてあるドメインのサブドメインを入口にするなら、`.prod.vars` にホスト名を足す。
+
+```
+CUSTOM_DOMAIN=rss.example.com
+```
+
+`pnpm deploy` がこのホスト名を Custom Domain にし（DNS と証明書は Cloudflare が用意する）、
+**workers.dev とプレビュー URL を閉じる**。Access は入口のホスト名ごとに掛けるので、
+入口を 2 つ開けておくと、Access を掛け忘れた側が素通しになりうるため。
+
+workers.dev から移すときは次の順にする。逆にすると、新しいホスト名が Access 無しで開く時間ができる。
+
+1. Access のアプリの Destinations に新しいホスト名を足す（AUD は変わらないので `.prod.vars` の
+   Access の値はそのまま）
+2. `.prod.vars` に `CUSTOM_DOMAIN` を書いて `pnpm deploy`
+3. 新しいホスト名で開いて記事が出ることを確かめたら、Destinations から workers.dev のホスト名を外す
+
+入口のオリジンが変わるので、**ブックマークレットは画面から作り直す**（古いものは workers.dev を指している）。
+スマートフォンのホーム画面に置いた分も置き直す。購読や既読はサーバにあるので引き継がれる。
+
 ### 動いていることを確かめる
 
 ```bash

@@ -5,12 +5,16 @@ import { readFileSync, writeFileSync } from 'node:fs';
  *
  * **このリポジトリは公開なので、wrangler.jsonc にアカウント固有の値を書かない。**
  * 値は環境変数か .prod.vars（git 管理外）から取り、wrangler.deploy.json を生成する。
- * 差し込むのは 2 種類。
+ * 差し込むのは 3 種類。
  *
  *   1. D1 の database_id … デプロイ時に必須で、データベース名だけでは解決されない
  *   2. vars の中身 … Access の検証に使う 2 つ（名前は wrangler.jsonc の vars が正で、
  *      Env の型もそこから生成される）。**デプロイのたびに必ず渡す**ので、Worker ごと
  *      消しても .prod.vars さえあれば 1 コマンドで戻せる
+ *   3. 入口のホスト名（任意）… CUSTOM_DOMAIN を置くと、そのホスト名を Custom Domain に
+ *      して workers.dev とプレビュー URL を閉じる。置かなければ workers.dev が入口のまま
+ *      （ボタン経由の既定）。Access は入口のホスト名に掛かるので、両方を開けたままにすると
+ *      片方だけ素通しになりうる。だから「どちらか一方」にしている
  *
  * **Deploy to Cloudflare ボタン経由でもここを通る。** あちらは D1 を先に用意して
  * 設定ファイルへ id を書き戻すので、手元の .prod.vars が無くてもデプロイできる。
@@ -26,6 +30,7 @@ const SOURCE = 'wrangler.jsonc';
 const LOCAL_VARS = '.prod.vars';
 const CONFIG_OUT = 'wrangler.deploy.json';
 const DATABASE_ID = 'D1_DATABASE_ID';
+const CUSTOM_DOMAIN = 'CUSTOM_DOMAIN';
 
 /** .prod.vars（dotenv 形式）を読む。無くても環境変数だけで動く */
 function readLocalVars() {
@@ -82,6 +87,17 @@ if (databaseId === undefined || databaseId === '') {
 }
 d1.database_id = databaseId;
 
+// 空文字は「置いていない」と同じに扱う（.prod.vars に「CUSTOM_DOMAIN=」と残した場合）
+const customDomain = valueOf(CUSTOM_DOMAIN) || undefined;
+if (customDomain !== undefined) {
+  if (!/^[a-z0-9.-]+$/i.test(customDomain)) {
+    fail(`${CUSTOM_DOMAIN} はホスト名だけを書く（https:// やパスは付けない）: ${customDomain}`);
+  }
+  config.routes = [{ pattern: customDomain, custom_domain: true }];
+  config.workers_dev = false;
+  config.preview_urls = false;
+}
+
 // vars の名前は wrangler.jsonc が正。ここに一覧を持たない
 const names = Object.keys(config.vars ?? {});
 const missing = names.filter((name) => valueOf(name) === undefined);
@@ -103,3 +119,4 @@ const empty = names.filter((name) => config.vars[name] === '');
 if (empty.length > 0) console.warn(`空のまま上げる: ${empty.join(', ')}`);
 const from = selfHosted ? LOCAL_VARS : 'ビルドの環境変数';
 console.log(`${CONFIG_OUT} を生成した（${SOURCE} + ${from}）`);
+console.log(`入口: ${customDomain ?? 'workers.dev'}`);
