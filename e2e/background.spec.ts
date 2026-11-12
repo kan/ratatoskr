@@ -98,6 +98,36 @@ test('同期で届いた新着が、読んでいる場所を動かさずに増�
   await expect(page.getByText('同期で届いた新着')).toBeVisible();
 });
 
+test('同期で全文が届くと、読んでいる記事の本文とリンクが差し替わる', async ({ page }) => {
+  // 全文は記事を入れた後に埋まる。要約を持っていった端末には、同期が
+  // updatedEntries で全文を届け直す（docs/API.md）
+  const recorder = await mockApi(page);
+  await openApp(page);
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+  await expect(page.getByTestId('open-links')).toHaveCount(0);
+
+  recorder.nextSync.push(
+    syncResponse({
+      updatedEntries: [
+        entry(
+          11,
+          1,
+          '朝刊の 1 本目',
+          '<p>全文</p><p><a href="https://example.com/introduced">紹介先</a></p>',
+        ),
+      ],
+    }),
+  );
+
+  await returnToTab(page);
+  await expect.poll(() => recorder.syncCalls.length).toBe(1);
+
+  await expect(page.getByText('紹介先')).toBeVisible();
+  await expect(page.getByTestId('open-links')).toHaveText('リンク (1)');
+  // 新着ではないので、読んでいる場所は動かない
+  await expect(page.getByTestId('entry-title')).toHaveText('朝刊の 1 本目');
+});
+
 test('全て読み終えた後に届いた新着へ、キーで辿り着ける', async ({ page }) => {
   // 読み切った画面ではカーソルがどのフィードにも居ない。同期で新着が届いたときに
   // 取り直さないと、アイコンは未読ありに変わるのに j も s も無反応になる

@@ -108,6 +108,11 @@ export interface SyncResponse {
   feeds: Feed[];
   /** entryCursor より大きい記事 */
   newEntries: Entry[];
+  /**
+   * entryCursor 以下の未読のうち、since 以降に本文が変わった記事（全文が後から
+   * 入った・全文取得を切って要約に戻った）。手元の同じ id の記事を置き換える
+   */
+  updatedEntries: Entry[];
   pins: Pin[];
   deletedPinIds: number[];
   maxEntryId: number;

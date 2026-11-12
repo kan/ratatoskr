@@ -58,6 +58,7 @@ export interface EntryRow {
   published_at: number | null;
   stored_at: number;
   full_body: string | null;
+  body_updated_at: number | null;
 }
 
 /**

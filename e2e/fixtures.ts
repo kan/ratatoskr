@@ -126,6 +126,7 @@ export function syncResponse(over: Partial<SyncResponse> = {}): SyncResponse {
     serverTime: 1786000200,
     feeds: FEEDS,
     newEntries: [],
+    updatedEntries: [],
     pins: [],
     deletedPinIds: [],
     maxEntryId: 21,

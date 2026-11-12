@@ -187,7 +187,7 @@ export const useSessionStore = defineStore('session', () => {
    * 順序に意味がある（出し切ってから当てる、当てた直後に起点を取り直す）ので、
    * 2 本に分けない。片方だけ直すと不変条件 1・3 が静かに崩れる。
    *
-   * @param entries この応答で届いた記事（bootstrap は全件、同期は新着だけ）
+   * @param entries この応答で届いた記事（bootstrap は全件、同期は新着と本文が変わった記事）
    * @param background 読んでいる最中に走る差し替えか（定期同期）
    */
   async function applyServerState(
@@ -384,7 +384,10 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   function applySync(body: SyncResponse): Promise<void> {
-    return applyServerState(body, body.newEntries, { background: true });
+    // 本文が変わった記事は、手元の同じ id を置き換える（貯蔵庫は id で後勝ち）。
+    // 読んでいるフィードの一覧への載せ替えは absorbNewEntries が受け持つ
+    const entries = [...body.newEntries, ...body.updatedEntries];
+    return applyServerState(body, entries, { background: true });
   }
 
   /**

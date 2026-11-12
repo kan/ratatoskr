@@ -272,7 +272,9 @@ export async function updateFeedSettings(
   // 捨てないと「抽出が本文でないものを掴んでいた」ときに元へ戻す手段が無くなる。
   // 設定と後始末を 1 つの batch にまとめて、片方だけ適用された状態を作らない
   const statements = [update];
-  if (settings.fullText === false) statements.push(db.prepare(CLEAR_FULL_BODIES).bind(id));
+  if (settings.fullText === false) {
+    statements.push(db.prepare(CLEAR_FULL_BODIES).bind(Math.floor(Date.now() / 1000), id));
+  }
   // NSFW の印はピンにも写してある。フィードの側だけ変えると、隠したはずのフィードの
   // 記事がピンの一覧に残る
   if (settings.nsfw !== undefined) {

@@ -317,6 +317,25 @@ describe('PATCH /api/feeds/:id の fullText', () => {
     expect((await getEntryRows(env.DB, id))[0].full_body).toBeNull();
   });
 
+  it('切ると、全文が入っていた記事にだけ本文の変更時刻を刻む（他の端末へ届け直す）', async () => {
+    const id = await seedFeed(env.DB, 'https://full.example.com/feed5', { fullText: 1 });
+    const filled = await seedEntry(env.DB, id, { body: '<p>要約</p>' });
+    const rejected = await seedEntry(env.DB, id, { body: '<p>要約</p>' });
+    const untouched = await seedEntry(env.DB, id, { body: '<p>要約</p>' });
+    await env.DB.batch([
+      env.DB.prepare('UPDATE entries SET full_body = ? WHERE id = ?').bind('<p>全文</p>', filled),
+      env.DB.prepare(`UPDATE entries SET full_body = '' WHERE id = ?`).bind(rejected),
+    ]);
+
+    await apiSend('PATCH', `/api/feeds/${id}`, { fullText: false });
+
+    // 読み出しが変わるのは全文が入っていた記事だけ。'' の印と未取得は要約のまま
+    const rows = new Map((await getEntryRows(env.DB, id)).map((row) => [row.id, row]));
+    expect(rows.get(filled)?.body_updated_at).toBeGreaterThan(0);
+    expect(rows.get(rejected)?.body_updated_at).toBeNull();
+    expect(rows.get(untouched)?.body_updated_at).toBeNull();
+  });
+
   it('切ると、本文の位置も忘れる（入れ直しがやり直しになる）', async () => {
     const id = await seedFeed(env.DB, 'https://full.example.com/feed4', {
       fullText: 1,

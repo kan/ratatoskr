@@ -282,6 +282,9 @@ export async function selectMissingFullText(
 /**
  * 取れた全文を書き込む。body は触らない（元の要約を残す。migrations/0003 参照）。
  * fullBody に '' を渡すと「取りに行ったが採らなかった」印になり、次から拾われない。
+ *
+ * 全文を入れた記事には body_updated_at を刻み、差分同期で届け直させる
+ * （migrations/0007）。'' の印では読み出しが変わらないので刻まない。
  */
 export async function updateFullBodies(
   db: D1Database,
@@ -289,12 +292,47 @@ export async function updateFullBodies(
 ): Promise<void> {
   if (bodies.length === 0) return;
 
-  const statement = db.prepare('UPDATE entries SET full_body = ? WHERE id = ?');
+  const statement = db.prepare(
+    `UPDATE entries
+        SET full_body = ?1,
+            body_updated_at = CASE WHEN ?1 = '' THEN body_updated_at ELSE ?2 END
+      WHERE id = ?3`,
+  );
   for (let i = 0; i < bodies.length; i += BATCH_SIZE) {
+    // **書き込む直前の時刻を刻む。** クロールの開始時刻を使うと、クロール中に走った
+    // 差分同期の serverTime より古い時刻が付き、次の同期の since から漏れる
+    const now = Math.floor(Date.now() / 1000);
     await db.batch(
-      bodies.slice(i, i + BATCH_SIZE).map((body) => statement.bind(body.fullBody, body.id)),
+      bodies.slice(i, i + BATCH_SIZE).map((body) => statement.bind(body.fullBody, now, body.id)),
     );
   }
+}
+
+/**
+ * 差分同期（GET /api/sync）で届け直す、本文が変わった未読の記事。
+ *
+ * - `since` 以降に本文が変わったもの（body_updated_at。migrations/0007）
+ * - 端末が持っている範囲（id <= maxId）だけ。それより新しい記事は新着として
+ *   最新の本文で届く
+ * - 未読だけ。既読の記事は読み返しのためにしか使わず、本文が要約のままでも
+ *   読み進める妨げにならない。既読まで返すと、保持期間で端末から消した記事が戻ってくる
+ */
+export async function selectUpdatedEntries(
+  db: D1Database,
+  query: { since: number; maxId: number },
+): Promise<Entry[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT ${ENTRY_COLUMNS}
+         FROM entries e
+         JOIN feeds f ON f.id = e.feed_id
+         ${UNREAD_JOIN}
+        WHERE e.body_updated_at >= ? AND e.id <= ? AND ${UNREAD_PREDICATE}
+        ORDER BY e.id`,
+    )
+    .bind(query.since, query.maxId)
+    .all<EntryRow>();
+  return results.map(toEntry);
 }
 
 /** 手動更新（POST /api/feeds/:id/fetch）が、全文を埋めた記事を返すために使う */
@@ -333,8 +371,14 @@ export async function clearRejectedFullText(db: D1Database, feedId: number): Pro
  *
  * 捨てないと、抽出が本文でないものを掴んでいた場合に元へ戻す手段が無くなる
  * （読み出しは COALESCE なので、設定を切っただけでは差し替わったままになる）。
+ *
+ * 全文が入っていた記事は本文が要約に戻るので、body_updated_at を刻んで他の端末にも
+ * 差分同期で届け直す（migrations/0007）。バインドは (時刻, feed_id)。
  */
-export const CLEAR_FULL_BODIES = 'UPDATE entries SET full_body = NULL WHERE feed_id = ?';
+export const CLEAR_FULL_BODIES = `UPDATE entries
+    SET body_updated_at = CASE WHEN full_body <> '' THEN ? ELSE body_updated_at END,
+        full_body = NULL
+  WHERE feed_id = ?`;
 
 /**
  * 既に取り込み済みの guid_hash を返す。
