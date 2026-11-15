@@ -143,7 +143,9 @@ export async function readBoundedText(response: Response): Promise<BoundedRead> 
  * HTML のページを、宣言された文字コードで読む（issue #35）。
  *
  * readBoundedText は常に UTF-8 として読むので、Shift_JIS や EUC-JP の記事ページの
- * 全文が化けたまま entries.body に入っていた。判定は src/crawler/charset.ts に任せる
+ * 全文が化けたまま entries.body に入っていた。判定は src/crawler/charset.ts に任せる。
+ * 判定は XML の宣言も見るので、HTML かフィードか分からないものを読む購読の検出
+ * （src/crawler/discover.ts、issue #36）もこれで読む
  */
 export async function readBoundedHtml(response: Response): Promise<BoundedRead> {
   const contentType = response.headers.get('content-type');

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { bytesOf, EUCJP_NIHONGO, SJIS_NIHONGO } from '../test/bytes';
 import { discoverFeed } from './discover';
 
 /**
@@ -349,5 +350,41 @@ describe('discoverFeed', () => {
     expect(await discoverFeed('https://example.com/', notFound)).toMatchObject({
       result: { kind: 'error', message: expect.stringContaining('404') },
     });
+  });
+});
+
+/** Shift_JIS / EUC-JP のサイト（issue #36）。候補名とフィードのタイトルを化けさせない */
+describe('discoverFeed の文字コード', () => {
+  function stubBytes(body: Uint8Array, type: string): typeof fetch {
+    return (() =>
+      Promise.resolve(
+        new Response(body, { status: 200, headers: { 'content-type': type } }),
+      )) as unknown as typeof fetch;
+  }
+
+  it('<meta> で宣言した HTML の、<link> の title を読む（Shift_JIS）', async () => {
+    const html = bytesOf(
+      '<html><head><meta charset="Shift_JIS"><link rel="alternate" type="application/rss+xml" title="',
+      SJIS_NIHONGO,
+      '" href="/rss.xml"></head></html>',
+    );
+    const { result } = await discoverFeed('https://example.jp/', stubBytes(html, 'text/html'));
+    expect(result).toEqual({
+      kind: 'candidates',
+      candidates: [{ url: 'https://example.jp/rss.xml', title: '日本語' }],
+    });
+  });
+
+  it('XML の宣言で示したフィードの、タイトルを読む（EUC-JP）', async () => {
+    const xml = bytesOf(
+      '<?xml version="1.0" encoding="EUC-JP"?>\n<rss version="2.0"><channel><title>',
+      EUCJP_NIHONGO,
+      '</title><link>https://example.jp/</link></channel></rss>',
+    );
+    const { result } = await discoverFeed(
+      'https://example.jp/rss.xml',
+      stubBytes(xml, 'application/rss+xml'),
+    );
+    expect(result).toMatchObject({ kind: 'feed', title: '日本語' });
   });
 });
