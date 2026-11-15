@@ -1,4 +1,5 @@
 import type { CreatePinRequest, PinResponse } from '../../shared/types';
+import { fetchPageTitle, looksLikeUrl } from '../crawler/page-title';
 import { titleFromBody } from '../crawler/title';
 import { selectEntriesByIds } from '../db/entries';
 import { deletePin, insertPin } from '../db/pins';
@@ -67,8 +68,24 @@ function parseNsfw(value: unknown): boolean {
  * **ピンは記事より長生きする**ので、控える見出しは作れるうちに作っておく。記事が消えた
  * 後に残るのが URL だけでは、一覧を見ても何をピンしたのか分からない。取りに行くのは
  * 見出しが無いときだけなので、普段のピンに往復は増えない。
+ *
+ * **見出しが URL の形なら、リンク先のページのタイトルで置き換える**（issue #34）。
+ * 記事内のリンクのピンで、リンクの文字が無い・URL そのものだったとき、画面は URL を
+ * 見出しにして送ってくる（web/src/App.vue の toggleLinkPin）。引けなければ URL のまま。
+ * 応答の見出しは画面のピンに写される（web/src/stores/pins.ts の confirm）ので、
+ * 画面は待たずに済み、送信が通った時点で見出しが入れ替わる
  */
-async function fillTitle(db: D1Database, title: string, entryId: number | null): Promise<string> {
+async function fillTitle(
+  db: D1Database,
+  title: string,
+  entryId: number | null,
+  url: string,
+): Promise<string> {
+  if (looksLikeUrl(title, url)) {
+    const fetched = await fetchPageTitle(url);
+    // コードポイント単位で切る。UTF-16 の単位で切ると、境目の絵文字が割れて U+FFFD になる
+    return fetched === null ? title : [...fetched].slice(0, MAX_TITLE_LENGTH).join('');
+  }
   if (title !== '' || entryId === null) return title;
 
   // 本文の採り方（全文が取れていればそちら）はクエリ層に任せる
@@ -83,11 +100,13 @@ export async function createPin(request: Request, env: Env): Promise<Response> {
 
   const entryId = parseEntryId(input.entryId);
   const url = parseUrl(input.url);
-  const title = await fillTitle(env.DB, parseTitle(input.title), entryId);
+  const nsfw = parseNsfw(input.nsfw);
+  // 検証を全て済ませてから補う。見出しはリンク先を引きに行くことがあり、
+  // 400 にする要求のために外へ取りに行かない
+  const title = await fillTitle(env.DB, parseTitle(input.title), entryId, url);
 
   // 記事が既に消えていることがある（オフラインでピンした後に購読を解除した等）。
   // その場合は参照だけ落として作る（クエリ層の副問い合わせが引き受ける）
-  const nsfw = parseNsfw(input.nsfw);
   const pin = await insertPin(env.DB, { entryId, title, url, nsfw }, Math.floor(Date.now() / 1000));
 
   const responseBody: PinResponse = { pin };

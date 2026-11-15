@@ -160,19 +160,26 @@ export async function readBoundedText(
  * workerd は接続できない相手（消えたドメインを含む）を
  * `internal error; reference = ...` と報告する。そのまま last_error に入れると
  * 購読管理画面に意味の通らない文字列が並ぶので、ここで噛み砕く。
+ *
+ * @param timeoutMs 打ち切りに使った時間。TIMEOUT_MS と違う時間で打ち切った
+ *   呼び出し側（src/crawler/page-title.ts）が、文言の秒数を合わせるために渡す
  */
-export function describeNetworkError(err: unknown): { message: string; reason: FeedErrorKind } {
+export function describeNetworkError(
+  err: unknown,
+  timeoutMs = TIMEOUT_MS,
+): { message: string; reason: FeedErrorKind } {
+  const timedOut = `応答が無い（${timeoutMs / 1000} 秒で打ち切り）`;
   // 打ち切りは名前で判る。AbortSignal.timeout は TimeoutError を投げると
   // 仕様で決まっているので、文言が変わっても取り違えない
   if (err instanceof DOMException && err.name === 'TimeoutError') {
-    return { message: `応答が無い（${TIMEOUT_MS / 1000} 秒で打ち切り）`, reason: 'timeout' };
+    return { message: timedOut, reason: 'timeout' };
   }
 
   // 以下は workerd の文言に頼るしかない。取りこぼしても other として記録は残り、
   // 一括解除の対象から外れる（消しすぎない側に倒れる）だけで済ませてある
   const raw = errorMessage(err);
   if (raw.includes('aborted due to timeout')) {
-    return { message: `応答が無い（${TIMEOUT_MS / 1000} 秒で打ち切り）`, reason: 'timeout' };
+    return { message: timedOut, reason: 'timeout' };
   }
   if (raw.includes('Network connection lost')) {
     return { message: '接続が途中で切れた', reason: 'connection_lost' };
@@ -199,7 +206,8 @@ export type ArticlePageOutcome =
   /** 一時的な失敗。次の機会に回す */
   | { kind: 'retry' };
 
-const ARTICLE_ACCEPT = 'text/html, application/xhtml+xml;q=0.9, */*;q=0.5';
+/** 記事ページ（とリンク先のページ。src/crawler/page-title.ts）を取りに行くときの Accept */
+export const ARTICLE_ACCEPT = 'text/html, application/xhtml+xml;q=0.9, */*;q=0.5';
 
 /**
  * 記事ページを 1 枚取る（全文取得。src/crawler/fulltext.ts と src/crawler/idolmaster.ts）。

@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BootstrapResponse, PinResponse } from '../../shared/types';
 import { apiJson, apiSend } from '../test/request';
 import { seedEntry, seedFeed } from '../test/seed';
@@ -180,6 +180,64 @@ describe('POST /api/pins', () => {
     expect((await pin({ title: 'ピン', url: 'https://example.com/', entryId: 0 })).status).toBe(
       400,
     );
+  });
+});
+
+/**
+ * 記事内のリンクのピン（issue #34）。見出しが URL の形なら、リンク先のタイトルで
+ * 置き換える。外向きの fetch はグローバルごと差し替える（src/api/feeds.test.ts と同じ）
+ */
+describe('POST /api/pins（リンク先のタイトル）', () => {
+  const requested: string[] = [];
+
+  beforeEach(() => {
+    requested.length = 0;
+    vi.stubGlobal('fetch', (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      requested.push(url);
+      if (url.endsWith('/missing')) return Promise.resolve(new Response('', { status: 404 }));
+      return Promise.resolve(
+        new Response(
+          '<title>リンク先 | サイト</title><meta property="og:title" content="リンク先">',
+          {
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+          },
+        ),
+      );
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function titleOf(body: unknown): Promise<string> {
+    const response = await pin(body);
+    expect(response.status).toBe(201);
+    return ((await response.json()) as PinResponse).pin.title;
+  }
+
+  it('見出しが URL なら、リンク先のタイトルで控える', async () => {
+    const url = 'https://link.example.com/article';
+    expect(await titleOf({ title: url, url })).toBe('リンク先');
+    expect((await pinsOf()).find((p) => p.url === url)?.title).toBe('リンク先');
+  });
+
+  it('切り詰められた URL（Bluesky のリンクの文字）も置き換える', async () => {
+    const url = 'https://link.example.com/articles/2026/11/long-path';
+    expect(await titleOf({ title: 'link.example.com/articles/20...', url })).toBe('リンク先');
+  });
+
+  it('引けなければ、送られた URL のまま控える', async () => {
+    const url = 'https://link.example.com/missing';
+    expect(await titleOf({ title: url, url })).toBe(url);
+  });
+
+  it('言葉の見出しはそのまま。リンク先を引きに行かない', async () => {
+    expect(await titleOf({ title: '詳しくはこちら', url: 'https://link.example.com/x' })).toBe(
+      '詳しくはこちら',
+    );
+    expect(requested).toEqual([]);
   });
 });
 

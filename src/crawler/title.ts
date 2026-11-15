@@ -66,13 +66,22 @@ export async function titleFromBody(html: string): Promise<string> {
     .transform(htmlResponse(html))
     .arrayBuffer();
 
-  // 実体参照を戻してから空白を畳む。`&nbsp;` は畳んだ先で普通の空白になる
-  const text = decodeEntities(collected).replace(/\s+/gu, ' ').trim();
+  const text = normalizeText(collected);
   // **切るのはコードポイント単位。** slice は UTF-16 の単位で切るので、境目に
   // 絵文字が来るとサロゲートペアが割れ、画面には U+FFFD が出る。Bluesky のような
   // 短文の投稿が主な対象なので、絵文字が境目に来る率は低くない
   const points = [...text];
   return points.length <= MAX_LENGTH ? text : `${points.slice(0, MAX_LENGTH).join('')}…`;
+}
+
+/**
+ * HTMLRewriter が拾った生のテキストを、見出しとして描ける文字列にする
+ * （リンク先のページのタイトルも同じ。src/crawler/page-title.ts）。
+ *
+ * 実体参照を戻してから空白を畳む。`&nbsp;` は畳んだ先で普通の空白になる
+ */
+export function normalizeText(raw: string): string {
+  return decodeEntities(raw).replace(/\s+/gu, ' ').trim();
 }
 
 /**
@@ -87,6 +96,9 @@ export async function titleFromBody(html: string): Promise<string> {
  * されていたもの**——つまりサニタイザや配信側が書き出す定番の数個だけ。
  * HTML5 の表は 2000 件を超えるが、それを持ち込む理由が無い。知らない名前は
  * そのまま残す（消すより、字面が出た方が読み手には分かる）。
+ *
+ * リンク先のページのタイトル（src/crawler/page-title.ts）もこれで戻す。あちらは
+ * 生のページなので `&raquo;` のような名前も来うるが、字面が残るだけで読めはする。
  *
  * **画面側にも同じ物がある**（`web/src/lib/prefetch.ts` の decodeCharRefs）。
  * あちらは属性値の URL 用で、名前付きの表がさらに短い。片方だけ直さないこと
