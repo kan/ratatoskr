@@ -1,6 +1,7 @@
 import { REPOSITORY_URL, type FeedErrorKind } from '../../shared/types';
 import { errorMessage } from '../lib/errors';
 import { sha256Hex } from '../lib/hash';
+import { decodeHtml } from './charset';
 
 /**
  * フィードの取得。条件付き GET と content_hash による差分判定までを担当し、
@@ -128,30 +129,78 @@ export const MAX_BYTES = 4 * 1024 * 1024;
 const ACCEPT =
   'application/atom+xml, application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5';
 
+type BoundedRead =
+  { kind: 'ok'; body: string } | { kind: 'error'; message: string; reason: FeedErrorKind };
+
+const UTF8 = new TextDecoder();
+
+/** 大きすぎる応答を弾いて本文を UTF-8 として読む（フィード本体と購読の検出） */
+export async function readBoundedText(response: Response): Promise<BoundedRead> {
+  return readBounded(response, (bytes) => UTF8.decode(bytes));
+}
+
 /**
- * 大きすぎる応答を弾いて本文を読む。
- * 申告（content-length）で先に切り、申告の無いサーバのために読んだ後でも見る。
+ * HTML のページを、宣言された文字コードで読む（issue #35）。
+ *
+ * readBoundedText は常に UTF-8 として読むので、Shift_JIS や EUC-JP の記事ページの
+ * 全文が化けたまま entries.body に入っていた。判定は src/crawler/charset.ts に任せる
  */
-export async function readBoundedText(
+export async function readBoundedHtml(response: Response): Promise<BoundedRead> {
+  const contentType = response.headers.get('content-type');
+  return readBounded(response, (bytes) => decodeHtml(bytes, contentType));
+}
+
+/**
+ * 上限（MAX_BYTES）までのバイト列を読んで文字列に戻す。**上限はバイト数で見る。**
+ *
+ * 申告（content-length）で先に切り、申告の無いサーバのためには**読みながら**見て、
+ * 超えた時点で読むのをやめる。読み切ってから測ると、申告の無い巨大な応答を
+ * 丸ごとメモリに載せてしまう（全文取得は複数のページを並列に読む）
+ */
+async function readBounded(
   response: Response,
-): Promise<
-  { kind: 'ok'; body: string } | { kind: 'error'; message: string; reason: FeedErrorKind }
-> {
+  decode: (bytes: Uint8Array) => string,
+): Promise<BoundedRead> {
   const declaredLength = Number(response.headers.get('content-length') ?? NaN);
   if (Number.isFinite(declaredLength) && declaredLength > MAX_BYTES) {
     return { kind: 'error', message: `応答が大きすぎる: ${declaredLength} bytes`, reason: 'other' };
   }
 
-  let body: string;
+  const reader = response.body?.getReader();
+  if (reader === undefined) return { kind: 'ok', body: '' };
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
   try {
-    body = await response.text();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.byteLength;
+      if (total > MAX_BYTES) {
+        await reader.cancel();
+        return {
+          kind: 'error',
+          message: `応答が大きすぎる: ${MAX_BYTES} bytes を超えた`,
+          reason: 'other',
+        };
+      }
+    }
   } catch (err) {
     return { ...describeNetworkError(err), kind: 'error' };
   }
-  if (body.length > MAX_BYTES) {
-    return { kind: 'error', message: `応答が大きすぎる: ${body.length} 文字`, reason: 'other' };
+  return { kind: 'ok', body: decode(concatBytes(chunks, total)) };
+}
+
+/** 読んだ塊を 1 つのバイト列につなぐ（src/crawler/page-title.ts の readHead も使う） */
+export function concatBytes(chunks: readonly Uint8Array[], total: number): Uint8Array {
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
   }
-  return { kind: 'ok', body };
+  return bytes;
 }
 
 /**
@@ -238,7 +287,7 @@ export async function fetchArticlePage(
   if (response.status === 404 || response.status === 410) return { kind: 'gone' };
   if (!response.ok) return { kind: 'retry' };
 
-  const read = await readBoundedText(response);
+  const read = await readBoundedHtml(response);
   return read.kind === 'ok' ? { kind: 'ok', html: read.body } : { kind: 'retry' };
 }
 

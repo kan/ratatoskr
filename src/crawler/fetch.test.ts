@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { describeNetworkError, fetchFeed } from './fetch';
+import { bytesOf, EUCJP_NIHONGO, SJIS_NIHONGO } from '../test/bytes';
+import { describeNetworkError, fetchArticlePage, fetchFeed, MAX_BYTES } from './fetch';
 
 /**
  * 取得の失敗を、人が読める文言と機械的な分類の両方に落とせること。
@@ -79,5 +80,60 @@ describe('fetchFeed の失敗分類', () => {
   it('接続そのものの失敗も分類する', async () => {
     const outcome = await fetchFeed(TARGET, stubThrow('internal error; reference = abc'));
     expect(outcome).toMatchObject({ kind: 'error', reason: 'unreachable' });
+  });
+});
+
+/** 全文取得の記事ページ（issue #35）。UTF-8 以外のページを化けさせずに読む */
+describe('fetchArticlePage の文字コード', () => {
+  function stubPage(body: Uint8Array, contentType: string): typeof fetch {
+    return () => Promise.resolve(new Response(body, { headers: { 'content-type': contentType } }));
+  }
+
+  it('Content-Type の charset で読む（Shift_JIS）', async () => {
+    const page = bytesOf('<p>', SJIS_NIHONGO, '</p>');
+    const outcome = await fetchArticlePage(
+      'https://example.jp/1',
+      stubPage(page, 'text/html; charset=Shift_JIS'),
+    );
+    expect(outcome).toEqual({ kind: 'ok', html: '<p>日本語</p>' });
+  });
+
+  it('<meta> の宣言で読む（EUC-JP）', async () => {
+    const page = bytesOf('<meta charset="EUC-JP"><p>', EUCJP_NIHONGO, '</p>');
+    const outcome = await fetchArticlePage('https://example.jp/2', stubPage(page, 'text/html'));
+    expect(outcome).toMatchObject({ kind: 'ok', html: expect.stringContaining('日本語') });
+  });
+
+  it('上限を超える大きさは読まずに次の機会に回す', async () => {
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(
+        new Response('x', {
+          headers: { 'content-type': 'text/html', 'content-length': String(MAX_BYTES + 1) },
+        }),
+      );
+    expect(await fetchArticlePage('https://example.jp/3', fetchImpl)).toEqual({ kind: 'retry' });
+  });
+
+  it('申告の無い応答は、読みながらバイト数で測って打ち切る', async () => {
+    // 「あ」は UTF-8 で 3 バイト。文字数は上限の半分未満だが、バイト数は上限を超える
+    const chunk = new TextEncoder().encode('あ'.repeat(256 * 1024));
+    const chunks = Math.ceil(MAX_BYTES / chunk.byteLength) + 4;
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          pulled += 1;
+          if (pulled > chunks) controller.close();
+          else controller.enqueue(chunk);
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(new Response(stream, { headers: { 'content-type': 'text/html' } }));
+
+    expect(await fetchArticlePage('https://example.jp/4', fetchImpl)).toEqual({ kind: 'retry' });
+    // 超えた時点でやめ、残りの塊は引かない
+    expect(pulled).toBeLessThan(chunks);
   });
 });

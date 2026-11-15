@@ -1,19 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { decodeHtml, fetchPageTitle, looksLikeUrl, titleFromHtml } from './page-title';
-
-/** ASCII の部分を素のバイトに、日本語の部分を与えたバイト列にして連結する */
-function bytesOf(...parts: (string | number[])[]): Uint8Array {
-  const out: number[] = [];
-  for (const part of parts) {
-    if (typeof part === 'string') out.push(...new TextEncoder().encode(part));
-    else out.push(...part);
-  }
-  return new Uint8Array(out);
-}
-
-/** 「日本語」 */
-const SJIS_NIHONGO = [0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea];
-const EUCJP_NIHONGO = [0xc6, 0xfc, 0xcb, 0xdc, 0xb8, 0xec];
+import { bytesOf, EUCJP_NIHONGO, SJIS_NIHONGO } from '../test/bytes';
+import { fetchPageTitle, looksLikeUrl, titleFromHtml } from './page-title';
 
 function stub(body: BodyInit, init: ResponseInit = {}): typeof fetch {
   return () =>
@@ -86,33 +73,6 @@ describe('titleFromHtml', () => {
 
   it('どちらも無ければ null', async () => {
     expect(await titleFromHtml('<p>本文だけ</p>')).toBeNull();
-  });
-});
-
-describe('decodeHtml', () => {
-  it('Content-Type の charset で読む（Shift_JIS）', () => {
-    const bytes = bytesOf('<title>', SJIS_NIHONGO, '</title>');
-    expect(decodeHtml(bytes, 'text/html; charset=Shift_JIS')).toBe('<title>日本語</title>');
-  });
-
-  it('<meta charset> で読む（EUC-JP）', () => {
-    const bytes = bytesOf('<meta charset="euc-jp"><title>', EUCJP_NIHONGO, '</title>');
-    expect(decodeHtml(bytes, 'text/html')).toContain('日本語');
-  });
-
-  it('http-equiv の宣言で読む', () => {
-    const bytes = bytesOf(
-      '<meta http-equiv="Content-Type" content="text/html; charset=x-sjis"><title>',
-      SJIS_NIHONGO,
-      '</title>',
-    );
-    expect(decodeHtml(bytes, null)).toContain('日本語');
-  });
-
-  it('宣言が無ければ UTF-8、知らない名前でも UTF-8 に倒す', () => {
-    const bytes = new TextEncoder().encode('<title>日本語</title>');
-    expect(decodeHtml(bytes, null)).toContain('日本語');
-    expect(decodeHtml(bytes, 'text/html; charset=no-such-charset')).toContain('日本語');
   });
 });
 

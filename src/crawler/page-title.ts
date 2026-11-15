@@ -1,4 +1,5 @@
-import { ARTICLE_ACCEPT, describeNetworkError, USER_AGENT } from './fetch';
+import { decodeHtml, LATIN1 } from './charset';
+import { ARTICLE_ACCEPT, concatBytes, describeNetworkError, USER_AGENT } from './fetch';
 import { elementScope, htmlResponse } from './rewriter';
 import { normalizeText } from './title';
 
@@ -24,12 +25,6 @@ export const PAGE_TITLE_TIMEOUT_MS = 5_000;
  * `<head>` に大きなスクリプトを埋め込むページもあるので、余裕を持たせてある
  */
 const READ_LIMIT = 512 * 1024;
-
-/** 文字コードの宣言を探す範囲。HTML の仕様が `<meta>` の事前走査に取る大きさと同じ */
-const PRESCAN_BYTES = 1024;
-
-/** 1 バイト 1 文字で読む。ASCII のタグを、元の文字コードに依らず探すのに使う */
-const LATIN1 = new TextDecoder('latin1');
 
 /** 読むのをやめる目印。境目の持ち越しの長さもこれで決まる */
 const HEAD_END = '</head';
@@ -129,57 +124,7 @@ async function readHead(response: Response): Promise<Uint8Array> {
     }
   }
 
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
-/**
- * バイト列を文字列に戻す。**`response.text()` は使わない。** あれは常に UTF-8 として
- * 読むので、Shift_JIS や EUC-JP のページのタイトルが化ける（日本の古いサイトに多い）。
- *
- * 文字コードは HTML の仕様の順で決める: BOM → Content-Type の charset →
- * 頭の `<meta>` の宣言 → UTF-8。知らない名前なら UTF-8 に倒す
- */
-export function decodeHtml(bytes: Uint8Array, contentType: string | null): string {
-  const label = bomCharset(bytes) ?? headerCharset(contentType) ?? metaCharset(bytes) ?? 'utf-8';
-  try {
-    return new TextDecoder(label).decode(bytes);
-  } catch {
-    // 知らない名前の TextDecoder は RangeError を投げる
-    return new TextDecoder().decode(bytes);
-  }
-}
-
-function bomCharset(bytes: Uint8Array): string | null {
-  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return 'utf-8';
-  if (bytes[0] === 0xfe && bytes[1] === 0xff) return 'utf-16be';
-  if (bytes[0] === 0xff && bytes[1] === 0xfe) return 'utf-16le';
-  return null;
-}
-
-const CHARSET = /charset\s*=\s*["']?([\w.:-]+)/iu;
-
-function headerCharset(contentType: string | null): string | null {
-  return contentType === null ? null : (CHARSET.exec(contentType)?.[1] ?? null);
-}
-
-/**
- * `<meta charset="...">` と `<meta http-equiv="content-type" content="...; charset=...">`。
- * 宣言は ASCII で書かれるので、頭を 1 バイト 1 文字で読めば、元の文字コードに
- * 依らず見つけられる
- */
-function metaCharset(bytes: Uint8Array): string | null {
-  const head = LATIN1.decode(bytes.subarray(0, PRESCAN_BYTES));
-  for (const [tag] of head.matchAll(/<meta\b[^>]*>/giu)) {
-    const found = CHARSET.exec(tag);
-    if (found !== null) return found[1];
-  }
-  return null;
+  return concatBytes(chunks, total);
 }
 
 /**
