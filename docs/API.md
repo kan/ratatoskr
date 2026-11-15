@@ -256,6 +256,8 @@ export interface Pin {
 
 `multipart/form-data` または `text/x-opml` の生ボディを受け付ける。
 
+文字コードは BOM → XML の宣言 → `Content-Type` の charset（`multipart/form-data` ならファイルのパートの Content-Type）→ UTF-8 の順で決める（issue #37）。Shift_JIS で書き出された OPML があるため。宣言を charset より先に見るのは、charset を `utf-8` 固定で付けて送るクライアントがあるため（`docs/DESIGN.md` の「要約フィードの全文取得」）。
+
 ```jsonc
 {
   "imported": 42,
