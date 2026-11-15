@@ -1,4 +1,5 @@
 import type { OpmlImportResponse } from '../../shared/types';
+import { decodeMarkup } from '../crawler/charset';
 import { attr, collect, parseXml, pick } from '../crawler/xml';
 import { insertFeeds, selectFeeds, type NewFeed } from '../db/feeds';
 import { badRequest } from '../lib/body';
@@ -133,17 +134,25 @@ function normalizeRate(value: string | null): number {
   return rate;
 }
 
-/** multipart/form-data（ファイル選択）と text/x-opml の生ボディの両方を受ける */
+/**
+ * multipart/form-data（ファイル選択）と text/x-opml の生ボディの両方を受ける。
+ *
+ * **バイト列で受けて、宣言された文字コードで戻す**（issue #37）。`text()` は常に
+ * UTF-8 として読むので、Shift_JIS で書き出された OPML（古い国産のリーダー）の
+ * フィード名が化ける。判定は src/crawler/charset.ts（XML の宣言も見る）
+ */
 async function readOpml(request: Request): Promise<string> {
-  const contentType = request.headers.get('content-type') ?? '';
+  const contentType = request.headers.get('content-type');
 
-  if (contentType.includes('multipart/form-data')) {
+  if (contentType?.includes('multipart/form-data') === true) {
     const form = await request.formData();
     const file = form.get('file') ?? form.get('opml');
     if (file === null) badRequest('file パートが無い');
-    return typeof file === 'string' ? file : await file.text();
+    if (typeof file === 'string') return file;
+    // ファイルの種類はパートの Content-Type。空なら宣言と BOM だけで決める
+    return decodeMarkup(new Uint8Array(await file.arrayBuffer()), file.type || null);
   }
-  return await request.text();
+  return decodeMarkup(new Uint8Array(await request.arrayBuffer()), contentType);
 }
 
 export async function importOpml(request: Request, env: Env): Promise<Response> {

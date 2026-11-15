@@ -1,7 +1,7 @@
 import {
   DISCOVER_ANCESTOR_BUDGET_MS,
   describeNetworkError,
-  readBoundedHtml,
+  readBoundedMarkup,
   TIMEOUT_MS,
   USER_AGENT,
 } from './fetch';
@@ -224,7 +224,7 @@ async function discoverAt(
   // 宣言された文字コードで読む（issue #36）。ここに来るのは HTML かフィード（XML）の
   // どちらかで、判定（src/crawler/charset.ts）は XML の宣言も見るので、両方これで読める。
   // UTF-8 決め打ちで読むと、Shift_JIS のサイトの候補名やフィードのタイトルが化ける
-  const read = await readBoundedHtml(response);
+  const read = await readBoundedMarkup(response);
   if (read.kind === 'error') return fail(read.message);
   const body = read.body;
 
@@ -232,7 +232,7 @@ async function discoverAt(
   const pageUrl = response.url === '' ? url : response.url;
 
   // **HTML と名乗っているものを XML として読もうとしない。** 遡り先は索引ページ
-  // なのでまず外れるうえ、readBoundedHtml は 4MB まで読むので、その全文を
+  // なのでまず外れるうえ、readBoundedMarkup は 4MB まで読むので、その全文を
   // fast-xml-parser に通す時間が段の数だけ積み上がる（CPU 時間は計上される）
   const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
   if (!contentType.includes('text/html') && !contentType.includes('xhtml')) {

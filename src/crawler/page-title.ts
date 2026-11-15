@@ -1,4 +1,4 @@
-import { decodeHtml, LATIN1 } from './charset';
+import { decodeMarkup, LATIN1 } from './charset';
 import { ARTICLE_ACCEPT, concatBytes, describeNetworkError, USER_AGENT } from './fetch';
 import { elementScope, htmlResponse } from './rewriter';
 import { normalizeText } from './title';
@@ -91,7 +91,7 @@ export async function fetchPageTitle(
       await response.body?.cancel();
       return null;
     }
-    return await titleFromHtml(decodeHtml(await readHead(response), contentType));
+    return await titleFromHtml(decodeMarkup(await readHead(response), contentType));
   } catch (err) {
     const { message } = describeNetworkError(err, PAGE_TITLE_TIMEOUT_MS);
     console.warn('リンク先のタイトルの取得に失敗', url, message);

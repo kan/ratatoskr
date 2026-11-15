@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import type { OpmlImportResponse } from '../../shared/types';
+import { bytesOf, SJIS_NIHONGO } from '../test/bytes';
 import { apiGet, apiRaw } from '../test/request';
 import { getFeedRow, seedFeed } from '../test/seed';
 
@@ -182,6 +183,38 @@ describe('POST /api/opml', () => {
     const response = await apiRaw('POST', '/api/opml', { body: form });
     expect(response.status).toBe(200);
     expect((await response.json()) as OpmlImportResponse).toMatchObject({ imported: 2 });
+  });
+
+  describe('Shift_JIS で書き出された OPML（issue #37）', () => {
+    const sjisOpml = bytesOf(
+      '<?xml version="1.0" encoding="Shift_JIS"?>\n<opml version="1.0"><body>' + '<outline text="',
+      SJIS_NIHONGO,
+      '" type="rss" xmlUrl="https://sjis.example.jp/rss.xml"/></body></opml>',
+    );
+
+    async function importedTitle(response: Response): Promise<string | null> {
+      expect(response.status).toBe(200);
+      expect((await response.json()) as OpmlImportResponse).toMatchObject({ imported: 1 });
+      const { results } = await env.DB.prepare('SELECT title FROM feeds WHERE url = ?')
+        .bind('https://sjis.example.jp/rss.xml')
+        .all<{ title: string }>();
+      return results[0]?.title ?? null;
+    }
+
+    it('生のボディで受けても、フィード名が化けない', async () => {
+      const response = await apiRaw('POST', '/api/opml', {
+        headers: { 'content-type': OPML_TYPE },
+        body: sjisOpml,
+      });
+      expect(await importedTitle(response)).toBe('日本語');
+    });
+
+    it('ファイル選択（multipart）で受けても、フィード名が化けない', async () => {
+      const form = new FormData();
+      form.set('file', new File([sjisOpml], 'subscriptions.opml', { type: '' }));
+      const response = await apiRaw('POST', '/api/opml', { body: form });
+      expect(await importedTitle(response)).toBe('日本語');
+    });
   });
 
   it('OPML として読めないものは 400', async () => {

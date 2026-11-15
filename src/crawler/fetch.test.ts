@@ -83,6 +83,35 @@ describe('fetchFeed の失敗分類', () => {
   });
 });
 
+/** フィード本体（issue #37）。XML の宣言だけで文字コードを示すフィードを化けさせない */
+describe('fetchFeed の文字コード', () => {
+  it('XML の宣言で読む（EUC-JP）', async () => {
+    const xml = bytesOf(
+      '<?xml version="1.0" encoding="EUC-JP"?>\n<rss version="2.0"><channel><title>',
+      EUCJP_NIHONGO,
+      '</title></channel></rss>',
+    );
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(new Response(xml, { headers: { 'content-type': 'application/rss+xml' } }));
+    const outcome = await fetchFeed(TARGET, fetchImpl);
+    expect(outcome).toMatchObject({ kind: 'fetched', body: expect.stringContaining('日本語') });
+  });
+
+  it('Content-Type の charset で読む（Shift_JIS）', async () => {
+    const xml = bytesOf(
+      '<rss version="2.0"><channel><title>',
+      SJIS_NIHONGO,
+      '</title></channel></rss>',
+    );
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(
+        new Response(xml, { headers: { 'content-type': 'text/xml; charset=Shift_JIS' } }),
+      );
+    const outcome = await fetchFeed(TARGET, fetchImpl);
+    expect(outcome).toMatchObject({ kind: 'fetched', body: expect.stringContaining('日本語') });
+  });
+});
+
 /** 全文取得の記事ページ（issue #35）。UTF-8 以外のページを化けさせずに読む */
 describe('fetchArticlePage の文字コード', () => {
   function stubPage(body: Uint8Array, contentType: string): typeof fetch {
