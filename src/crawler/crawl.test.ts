@@ -544,6 +544,19 @@ describe('crawl（取得定義）', () => {
     expect(stub.calls.map((call) => call.url)).toEqual(['https://www.example.co.jp/robots.txt']);
     expect((await getFeedRow(env.DB, id)).last_error).toContain('robots.txt');
   });
+
+  it('一覧のページの Retry-After を引き継ぐ（issue #39）', async () => {
+    const id = await seedFeed(env.DB, PAGE, { recipe: STALE, recipeSource: 'score' });
+    const stub = stubFetch(({ url }) =>
+      url.endsWith('/robots.txt')
+        ? new Response('', { status: 404 })
+        : new Response('', { status: 429, headers: { 'retry-after': '18000' } }),
+    );
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+
+    expect((await getFeedRow(env.DB, id)).next_fetch_at).toBe(NOW + 18000);
+  });
 });
 
 /** 翻訳（issue #42） */
