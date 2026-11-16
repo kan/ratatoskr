@@ -7,6 +7,7 @@ interface __BaseEnv_Env {
 	ASSETS: Fetcher;
 	ACCESS_TEAM_DOMAIN: string;
 	ACCESS_AUD: string;
+	EMAIL_ADDRESS: string;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
@@ -19,7 +20,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "ACCESS_TEAM_DOMAIN" | "ACCESS_AUD">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "ACCESS_TEAM_DOMAIN" | "ACCESS_AUD" | "EMAIL_ADDRESS">> {}
 }
 
 // Begin runtime types

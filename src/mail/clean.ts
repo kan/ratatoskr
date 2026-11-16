@@ -1,0 +1,117 @@
+import { htmlResponse } from '../crawler/rewriter';
+import { escapeHtml } from '../crawler/sanitize';
+import { normalizeText } from '../crawler/title';
+
+/**
+ * メールマガジンの HTML を、読む画面に載せられる形に整える（issue #41）。
+ *
+ * **サニタイズの前に通す。** サニタイズは属性の多く（width / height / style）を落とすので、
+ * その後では「1×1 の画像」「隠してある要素」が見分けられなくなる。ここで落とすのは
+ * 見分けに属性が要るものだけで、危険なものを落とすのは従来どおりサニタイズの仕事
+ * （CLAUDE.md の不変条件 4）。
+ *
+ * - **トラッキングピクセル**: 1×1（か 0）の画像、計測用らしい URL の画像。開封を
+ *   送り手に知らせる仕掛けで、読む側には何も見えない。先読み（画像の先読みは
+ *   開く前に取りに行く）が働くと、**読んでいないのに開封したことになる**
+ * - **隠してある要素**: プレヘッダ（受信箱の一覧に出す一文を `display:none` で
+ *   本文に埋めたもの）。サニタイズで style が落ちると本文の頭に見えてしまう
+ * - **レイアウト用のテーブル**: メールの HTML は表組みで段組みを作る。そのまま
+ *   描くと、行長の制限や表の罫線（読む画面の表の装飾）が段組みに掛かって崩れる。
+ *   メールに本物の表はまず無いので、表の要素は全て div に読み替える
+ */
+
+const LAYOUT_TAGS = new Set(['table', 'tbody', 'thead', 'tfoot', 'tr', 'td', 'th']);
+
+/** 計測用の画像らしい URL。開封の通知を返すサービスの定番の形 */
+const TRACKING_SRC =
+  /(\/open(\.gif|\.png)?[/?]|\/track(ing)?\/|\/pixel|\/beacon|\/o\.gif|wf\/open)/i;
+
+/** 隠してある要素の style */
+const HIDDEN_STYLE =
+  /(display\s*:\s*none|visibility\s*:\s*hidden|max-height\s*:\s*0|mso-hide\s*:\s*all)/i;
+
+/** 「Web 版で読む」リンクの文言 */
+const WEB_VERSION =
+  /(ブラウザ(で|で見る|で表示|で読む)|web\s*版|ウェブ版|オンラインで|view\s+(this\s+)?(email\s+)?(it\s+)?(in|on)\s+(your\s+)?(web\s+)?browser|view\s+online|read\s+online|open\s+in\s+browser)/i;
+
+export interface CleanedMail {
+  html: string;
+  /** 「Web 版で読む」のリンク先。記事の URL にする（無ければ null） */
+  webUrl: string | null;
+}
+
+export async function cleanMailHtml(html: string): Promise<CleanedMail> {
+  let webUrl: string | null = null;
+  let pendingHref: string | null = null;
+  let pendingText = '';
+
+  const rewriter = new HTMLRewriter()
+    .on('img', {
+      element(element) {
+        const width = Number(element.getAttribute('width') ?? NaN);
+        const height = Number(element.getAttribute('height') ?? NaN);
+        const tiny = (width <= 2 && width >= 0) || (height <= 2 && height >= 0);
+        const src = element.getAttribute('src') ?? '';
+        const hidden = HIDDEN_STYLE.test(element.getAttribute('style') ?? '');
+        if (tiny || hidden || TRACKING_SRC.test(src)) element.remove();
+      },
+    })
+    .on('*', {
+      element(element) {
+        const tag = element.tagName.toLowerCase();
+        if (HIDDEN_STYLE.test(element.getAttribute('style') ?? '')) {
+          element.remove();
+          return;
+        }
+        if (LAYOUT_TAGS.has(tag)) element.tagName = 'div';
+      },
+      // リンクの文字は中の要素（`<span>`）に入っていることが多いので、`*` で拾う
+      text(chunk) {
+        if (pendingHref !== null && pendingText.length < 200) pendingText += chunk.text;
+      },
+    })
+    .on('a[href]', {
+      element(element) {
+        if (webUrl !== null) return;
+        pendingHref = element.getAttribute('href');
+        pendingText = '';
+        try {
+          element.onEndTag(() => {
+            if (
+              webUrl === null &&
+              pendingHref !== null &&
+              WEB_VERSION.test(normalizeText(pendingText))
+            ) {
+              webUrl = httpUrl(normalizeText(pendingHref));
+            }
+            pendingHref = null;
+          });
+        } catch {
+          pendingHref = null;
+        }
+      },
+    });
+
+  const out = await rewriter.transform(htmlResponse(html)).text();
+  return { html: out, webUrl };
+}
+
+function httpUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** テキストだけのメールを HTML にする。空行で段落を分け、行の折り返しは残す */
+export function textToHtml(text: string): string {
+  return text
+    .replace(/\r\n?/g, '\n')
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph !== '')
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replaceAll('\n', '<br>')}</p>`)
+    .join('');
+}

@@ -552,6 +552,13 @@ async function onOpmlSelected(event: Event): Promise<void> {
                   要約しか配信していない。「全文」で記事ページから本文を取ってこられる
                 </p>
                 <p
+                  v-if="feed.url.startsWith('mailto:')"
+                  class="text-neutral-500"
+                  :data-testid="`manage-mail-${feed.id}`"
+                >
+                  メールマガジン。要らなければ「停止」にする（解除すると、次のメールで作り直される）
+                </p>
+                <p
                   v-if="feed.recipeSource !== null"
                   class="text-neutral-500"
                   :data-testid="`manage-recipe-${feed.id}`"

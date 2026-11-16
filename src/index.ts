@@ -1,6 +1,7 @@
 import { handleApi } from './api/router';
 import { crawl } from './crawler';
 import { RETENTION_CRON } from './cron';
+import { ingestMail } from './mail/ingest';
 import { purgeExpiredEntries } from './retention';
 
 export default {
@@ -28,5 +29,18 @@ export default {
     // filledEntryIds は記事の id をそのまま持つので、件数だけを残す。
     // cron のログは毎回出るものなので、追える形で短くしておく
     console.log('crawl', JSON.stringify({ ...counts, filled: filledEntryIds.length }));
+  },
+
+  // メールマガジンの取り込み（issue #41）。Cloudflare Email Routing でこの Worker に
+  // 回したメールが届く
+  async email(message, env, _ctx): Promise<void> {
+    const outcome = await ingestMail(
+      env,
+      { to: message.to, raw: message.raw, rawSize: message.rawSize },
+      Math.floor(Date.now() / 1000),
+    );
+    // 断ったメールは送り手に戻す。転送元（Gmail）に戻るので、設定の誤りに気付ける
+    if (outcome.kind === 'rejected') message.setReject(outcome.reason);
+    console.log('email', JSON.stringify(outcome));
   },
 } satisfies ExportedHandler<Env>;

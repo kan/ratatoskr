@@ -1,3 +1,4 @@
+import { MAIL_FEED_PREFIX } from '../db/feeds';
 import { errorMessage } from '../lib/errors';
 import { withFeed } from './api-feed';
 import { asobiTicket } from './asobiticket';
@@ -61,8 +62,15 @@ export function sourceFor(target: {
     if (typeof recipe === 'string') return brokenRecipe(recipe);
     return recipeSource(recipe, target.recipeSource);
   }
+  // メールマガジン（issue #41）は届いたときに入る。手動の更新（r キー）で呼ばれても
+  // 取りに行く先が無いので、変わっていない扱いで終える
+  if (target.url.startsWith(MAIL_FEED_PREFIX)) return mailSource;
   return knownSource(target.url) ?? rssSource;
 }
+
+const mailSource: Source = {
+  fetch: () => Promise.resolve({ kind: 'notModified' }),
+};
 
 function brokenRecipe(reason: string): Source {
   return {

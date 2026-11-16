@@ -189,6 +189,32 @@ export async function insertFeed(
   return row?.id ?? null;
 }
 
+/**
+ * メールマガジンの送信者のフィード（issue #41）を、無ければ作って返す。
+ *
+ * UNIQUE(url) に任せて INSERT OR IGNORE してから引く。同じ送信者のメールが同時に
+ * 届いても、フィードは 1 つにしかならない
+ */
+export async function ensureMailFeed(
+  db: D1Database,
+  feed: { url: string; title: string },
+  now: number,
+): Promise<{ id: number; disabled: boolean }> {
+  const [, selected] = await db.batch<{ id: number; disabled: number }>([
+    bindNewFeed(db.prepare(INSERT_FEED), { ...feed, siteUrl: null, rate: 3, folder: '' }, now),
+    db.prepare('SELECT id, disabled FROM feeds WHERE url = ?').bind(feed.url),
+  ]);
+  const row = selected.results[0];
+  if (row === undefined) throw new Error(`メールのフィードを作れない: ${feed.url}`);
+  return { id: row.id, disabled: row.disabled === 1 };
+}
+
+/**
+ * クロールで取りに行かないフィードの URL。メールマガジン（issue #41）は届いたときに
+ * 入るので、取りに行く先が無い
+ */
+export const MAIL_FEED_PREFIX = 'mailto:';
+
 // D1 の 1 バッチが際限なく膨らまないように区切る（insertEntries と同じ考え方）
 const INSERT_BATCH_SIZE = 50;
 
@@ -392,7 +418,7 @@ export async function selectCrawlTargets(
     .prepare(
       `SELECT ${CRAWL_COLUMNS}
          FROM feeds
-        WHERE disabled = 0 AND next_fetch_at <= ?
+        WHERE disabled = 0 AND next_fetch_at <= ? AND url NOT LIKE '${MAIL_FEED_PREFIX}%'
         ORDER BY next_fetch_at
         LIMIT ?`,
     )
