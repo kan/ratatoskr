@@ -643,6 +643,41 @@ describe('crawl（翻訳）', () => {
     expect(after.every((e) => e.translated_body?.includes('訳:'))).toBe(true);
   });
 
+  it('訳している間に翻訳を切られたら、訳文を書き戻さない', async () => {
+    const id = await seedFeed(env.DB, 'https://en.example.com/feed', { translate: 1 });
+    // AI の応答待ちの間に、利用者が購読管理画面で翻訳を切った
+    const slow = {
+      run: async (model: string, input: { messages: { content: string }[] }) => {
+        await env.DB.prepare('UPDATE feeds SET translate = 0 WHERE id = ?').bind(id).run();
+        return ai.run(model as never, input as never);
+      },
+    } as unknown as Ai;
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: english().fetch, ai: slow });
+
+    const entries = await getEntryRows(env.DB, id);
+    expect(entries.every((e) => e.translated_body === null)).toBe(true);
+  });
+
+  it('見出しも本文も短い外国語の記事も訳す（日本語の印を付けない）', async () => {
+    const id = await seedFeed(env.DB, 'https://en.example.com/feed', { translate: 1 });
+    const short = `<?xml version="1.0"?>
+<rss version="2.0"><channel><title>Releases</title><link>https://en.example.com/</link>
+  <item><title>v2.1 released</title><link>https://en.example.com/r</link>
+    <guid>https://en.example.com/r</guid><description>See notes.</description></item>
+</channel></rss>`;
+
+    await crawl(env, {
+      now: NOW,
+      feedIds: [id],
+      fetchImpl: stubFetch(() => xmlResponse(short)).fetch,
+      ai,
+    });
+
+    const [entry] = await getEntryRows(env.DB, id);
+    expect(entry.translated_title).toBe('訳:v2.1 released');
+  });
+
   it('回の上限を超えた分は残し、次の回に訳す', async () => {
     const id = await seedFeed(env.DB, 'https://en.example.com/feed', { translate: 1 });
 

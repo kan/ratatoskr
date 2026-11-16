@@ -47,10 +47,28 @@ const SYSTEM_PROMPT = [
  * langdetect は無い）。漢字だけを数えないのは中国語を日本語と取り違えないため
  */
 export function needsTranslation(text: string): boolean {
-  const letters = text.match(/\p{L}/gu)?.length ?? 0;
-  if (letters < 20) return false;
+  // 短すぎると判定が当てにならない。フィードに翻訳を勧めるかどうかの判定なので、
+  // 迷うものは勧めない側に倒す
+  if (letterCount(text) < 20) return false;
+  return !isJapanese(text);
+}
+
+/**
+ * 記事 1 本を訳さずに済ませてよいか（日本語か、訳す文字が無い）。
+ *
+ * **`needsTranslation` の文字数の下限を使わない。** あちらは勧めるかどうかの判定で、
+ * 短いものを「訳さない」に倒している。記事ごとにそれを使うと、見出しと本文が短い
+ * 外国語の記事（「v2.1 released」）に訳さない印が付き、二度と訳されない
+ */
+export function isJapanese(text: string): boolean {
+  const letters = letterCount(text);
+  if (letters === 0) return true;
   const kana = text.match(/[\p{Script=Hiragana}\p{Script=Katakana}]/gu)?.length ?? 0;
-  return kana / letters < 0.05;
+  return kana / letters >= 0.05;
+}
+
+function letterCount(text: string): number {
+  return text.match(/\p{L}/gu)?.length ?? 0;
 }
 
 export interface Translation {
@@ -263,7 +281,7 @@ export async function translatePending(
     targets.map(async (target) => {
       const fragments = await collectFragments(target.body);
       // 日本語の記事は訳さない印を付ける。訳すフィードにも日本語の記事は混ざる
-      if (!needsTranslation(`${target.title}\n${fragments.slice(0, 50).join(' ')}`)) {
+      if (isJapanese(`${target.title}\n${fragments.slice(0, 50).join(' ')}`)) {
         return { id: target.id, title: '', body: '' };
       }
       const translated = await translateEntry(target.title, target.body, target.url, ai, fragments);

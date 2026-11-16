@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isJapanese,
   needsTranslation,
   parseTranslations,
   translateEntry,
@@ -39,6 +40,14 @@ describe('needsTranslation', () => {
       false,
     );
     expect(needsTranslation('Short.')).toBe(false);
+  });
+});
+
+describe('isJapanese', () => {
+  it('短い外国語の記事も日本語とはみなさない。訳す文字が無ければ日本語扱い', () => {
+    expect(isJapanese('v2.1 released\nSee notes.')).toBe(false);
+    expect(isJapanese('これは日本語の記事です')).toBe(true);
+    expect(isJapanese('2026 / 11 / 16')).toBe(true);
   });
 });
 

@@ -446,7 +446,11 @@ export async function selectUntranslated(
 
 /**
  * 訳文を書き込む。body に '' を渡すと「訳さないと決めた」印になる。
- * 訳文を入れた記事には body_updated_at を刻み、差分同期で届け直させる
+ * 訳文を入れた記事には body_updated_at を刻み、差分同期で届け直させる。
+ *
+ * **書く時点でフィードの translate を確かめ直す。** 訳している間（AI の応答待ち）に
+ * 翻訳が切られると、CLEAR_TRANSLATIONS で消した後にここで訳文が書き戻り、
+ * 切ったのに訳文が出続ける
  */
 export async function updateTranslations(
   db: D1Database,
@@ -457,7 +461,8 @@ export async function updateTranslations(
     `UPDATE entries
         SET translated_title = ?1, translated_body = ?2,
             body_updated_at = CASE WHEN ?2 = '' THEN body_updated_at ELSE ?3 END
-      WHERE id = ?4`,
+      WHERE id = ?4
+        AND feed_id IN (SELECT id FROM feeds WHERE translate = 1)`,
   );
   const now = Math.floor(Date.now() / 1000);
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
