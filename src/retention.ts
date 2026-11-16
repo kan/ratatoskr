@@ -1,5 +1,6 @@
 import { RETENTION_DAYS } from '../shared/types';
 import { deleteExpiredEntries } from './db/entries';
+import { deleteOldReadingEvents, refreshSkimmedFeeds } from './db/events';
 import { deleteStaleRobots } from './db/robots';
 
 /**
@@ -26,6 +27,9 @@ const CHUNK = 500;
  * 使い切るより、翌日に持ち越す方がよい（消し残しても読む分には何も困らない）。
  */
 const MAX_PER_RUN = 10_000;
+
+/** 読み方のデータを持つ日数（issue #43）。1 年ぶんあれば季節の偏りも見える */
+const READING_EVENTS_DAYS = 365;
 
 export interface RetentionOptions {
   now?: number;
@@ -54,6 +58,10 @@ export async function purgeExpiredEntries(
   // robots.txt の控えは期限が切れても取り直しに失敗したときの拠り所になるので、
   // 記事と同じ保持期間だけ置いてから捨てる。購読を外したサイトの分が積み上がらないように
   const robots = await deleteStaleRobots(env.DB, before);
+  // 読み方のデータ（issue #43）は記事より長く持つ（記事は消えても、どのフィードを
+  // どう読んだかは残す価値がある）。印は直近の保持期間ぶんで付け直す
+  await deleteOldReadingEvents(env.DB, now - READING_EVENTS_DAYS * 86_400);
+  await refreshSkimmedFeeds(env.DB, before);
 
   let deleted = 0;
   while (deleted < maxPerRun) {

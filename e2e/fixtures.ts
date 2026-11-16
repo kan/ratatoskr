@@ -45,6 +45,7 @@ function feed(id: number, title: string, rate: number, unreadCount: number): Fee
     recipeSource: null,
     translate: false,
     translateSuggested: false,
+    skimmed: false,
     nsfw: false,
   };
 }

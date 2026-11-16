@@ -34,6 +34,7 @@ interface FeedRow {
   recipe_source: string | null;
   translate: number;
   translate_suggested: number;
+  skimmed: number;
   nsfw: number;
 }
 
@@ -60,6 +61,7 @@ function toFeed(row: FeedRow): Feed {
     recipeSource: isRecipeSource(row.recipe_source) ? row.recipe_source : null,
     translate: row.translate === 1,
     translateSuggested: row.translate_suggested === 1,
+    skimmed: row.skimmed === 1,
     nsfw: row.nsfw === 1,
   };
 }
@@ -67,7 +69,7 @@ function toFeed(row: FeedRow): Feed {
 const FEED_COLUMNS = `f.id, f.url, f.site_url, f.title, f.icon_url, f.rate, f.folder, f.read_seq,
               f.last_fetched_at, f.last_error, f.last_error_kind, f.consecutive_failures,
               f.disabled, f.full_text, f.full_text_suggested, f.full_text_blocked,
-              f.recipe_source, f.translate, f.translate_suggested, f.nsfw`;
+              f.recipe_source, f.translate, f.translate_suggested, f.skimmed, f.nsfw`;
 
 /**
  * 全フィードを未読数付きで返す。

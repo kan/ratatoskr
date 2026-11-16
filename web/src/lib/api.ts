@@ -12,6 +12,8 @@ import type {
   PinResponse,
   ReadMark,
   ReadRequest,
+  ReadingEvent,
+  ReadingEventsRequest,
   ReadResponse,
   SyncResponse,
   UpdateFeedRequest,
@@ -169,6 +171,12 @@ async function send<T>(
 export function postRead(marks: ReadMark[]): Promise<ReadResponse> {
   const body: ReadRequest = { marks };
   return send<ReadResponse>('POST', '/read', body);
+}
+
+/** 読み方のデータをまとめて送る（issue #43） */
+export function postEvents(events: ReadingEvent[]): Promise<{ accepted: number }> {
+  const body: ReadingEventsRequest = { events };
+  return send<{ accepted: number }>('POST', '/events', body);
 }
 
 /** 個別の記事を未読に戻す / 戻したものを既読にする */

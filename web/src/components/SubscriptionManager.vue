@@ -588,6 +588,13 @@ async function onOpmlSelected(event: Event): Promise<void> {
                   }}
                 </p>
                 <p
+                  v-if="feed.skimmed"
+                  class="text-amber-700 dark:text-amber-500"
+                  :data-testid="`manage-skimmed-${feed.id}`"
+                >
+                  最近ほとんど読まずに送っている。レートを下げるか、要らなければ解除する
+                </p>
+                <p
                   v-if="feed.translateSuggested && !feed.translate"
                   class="text-amber-700 dark:text-amber-500"
                   :data-testid="`manage-translate-hint-${feed.id}`"

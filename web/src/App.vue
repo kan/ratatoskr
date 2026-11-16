@@ -26,6 +26,7 @@ import type { Pin } from '@shared/types';
 import { useFeedsStore } from '@/stores/feeds';
 import { useOutboxStore } from '@/stores/outbox';
 import { usePinsStore } from '@/stores/pins';
+import { useReadingStore } from '@/stores/reading';
 import { useSessionStore } from '@/stores/session';
 
 /**
@@ -35,6 +36,7 @@ import { useSessionStore } from '@/stores/session';
  */
 const feeds = useFeedsStore();
 const pins = usePinsStore();
+const reading = useReadingStore();
 const outbox = useOutboxStore();
 const session = useSessionStore();
 
@@ -520,7 +522,10 @@ function handleInLinkList(binding: KeyBinding): boolean {
       // 開いても一覧は閉じない。紹介先が複数ある記事で、続けて次の行を開いたり
       // ピンしたりできるように。ピンにも既読にも触らない（v と同じ扱い）
       const row = list.selected();
-      if (row !== null) openDetached(row.url);
+      if (row !== null) {
+        openDetached(row.url);
+        reading.logLink(row.url);
+      }
       return true;
     }
     case 'togglePin': {
@@ -607,7 +612,9 @@ function openDetached(url: string): void {
 /** 元記事を開く（v） */
 function openOriginal(): void {
   const url = shownEntry.value?.url;
-  if (url) openDetached(url);
+  if (!url) return;
+  openDetached(url);
+  reading.logOpen();
 }
 
 /**
@@ -648,6 +655,8 @@ function bookmarkPin(pin: Pin): void {
 
 function onKeydown(event: KeyboardEvent): void {
   if (isTextInput(event.target)) return;
+  // 押されたキーは読んでいる最中の操作として数える（issue #43。stores/reading.ts）
+  reading.activity();
   const binding = resolveBinding(event);
   if (binding === null) return;
   // Space の既定のスクロールと衝突させないため、処理したものだけを止める
@@ -871,6 +880,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
         @next="feeds.nextEntry()"
         @prev="feeds.prevEntry()"
         @links="openOverlay('links')"
+        @link="reading.logLink($event)"
       />
       <!--
         記事送りのバー。境界でラベルだけが変わる（docs/UX.md）。

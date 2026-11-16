@@ -41,6 +41,7 @@ import { isPrunable, prunedAt } from '@/lib/retention';
 import { useEntriesStore } from './entries';
 import { sortByReadingOrder, useFeedsStore } from './feeds';
 import { useOutboxStore } from './outbox';
+import { useReadingStore } from './reading';
 import { usePinsStore } from './pins';
 
 /**
@@ -128,6 +129,8 @@ export const useSessionStore = defineStore('session', () => {
     // 送信の契機は persistLocalState より後に張る。離脱時は「手元の変化を積む → 送る」
     // の順でなければ、最後に読んだ分が送られない
     persistLocalState();
+    // 読み方のデータ（issue #43）も「積む」側なので、送る側より先に張る
+    useReadingStore().install();
     outbox.install();
     // 前回送り切れなかった分の再送。完了は待たずに読み始められる
     void outbox.hydrate();

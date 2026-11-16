@@ -2,6 +2,7 @@ import { authenticate } from '../lib/auth';
 import { jsonError, toErrorResponse } from '../lib/errors';
 import { bootstrap } from './bootstrap';
 import { entries } from './entries';
+import { postEvents } from './events';
 import { createFeed, refetchFeed, removeFeed, updateFeed } from './feeds';
 import { health } from './health';
 import { createPin, removePin } from './pins';
@@ -26,6 +27,7 @@ const ROUTES: Record<string, Handler> = {
   'GET /api/entries': entries,
   'GET /api/sync': sync,
   'POST /api/read': read,
+  'POST /api/events': postEvents,
   'POST /api/entries/:id/unread': (_request, env, id) => setEntryUnread(env, id, true),
   'DELETE /api/entries/:id/unread': (_request, env, id) => setEntryUnread(env, id, false),
   'POST /api/feeds': createFeed,

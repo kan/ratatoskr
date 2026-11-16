@@ -30,7 +30,16 @@ const props = defineProps<{
  * 境界でフィードを跨ぐかどうかも含めて、判断はカーソルの所有者が持つ。
  * `links` はリンク一覧を開く要求（l と同じ）
  */
-const emit = defineEmits<{ next: []; prev: []; links: [] }>();
+const emit = defineEmits<{ next: []; prev: []; links: []; link: [url: string] }>();
+
+/**
+ * 本文中のリンクが開かれた（issue #43）。記録は親に任せ、ここは知らせるだけ。
+ * 開く動作そのものはブラウザの既定（新しいタブ）に任せて止めない。中ボタンも数える
+ */
+function onBodyClick(event: MouseEvent): void {
+  const target = event.target instanceof Element ? event.target.closest('a[href]') : null;
+  if (target instanceof HTMLAnchorElement) emit('link', target.href);
+}
 
 const body = ref<HTMLElement | null>(null);
 
@@ -273,6 +282,8 @@ defineExpose({ pageDown, pageUp, scrollToBottom, links });
             ref="body"
             class="article-body"
             @error.capture="onLoadError"
+            @click="onBodyClick"
+            @auxclick="onBodyClick"
             v-html="entry.body"
           ></div>
         </template>

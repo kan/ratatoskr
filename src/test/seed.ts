@@ -53,6 +53,7 @@ export interface FeedRow {
   recipe_source: string | null;
   translate: number;
   translate_suggested: number;
+  skimmed: number;
 }
 
 export interface EntryRow {

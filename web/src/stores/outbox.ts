@@ -1,10 +1,11 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
-import type { ReadMark } from '@shared/types';
+import type { ReadingEvent, ReadMark } from '@shared/types';
 import {
   ApiError,
   beaconRead,
   deletePin,
+  postEvents,
   postPin,
   postRead,
   sendEntryUnread,
@@ -37,7 +38,12 @@ export type OutboxItem =
       /** 記事のフィードの NSFW の印（issue #23）。立っているときだけ持つ */
       nsfw?: boolean;
     }
-  | { key: string; kind: 'unpin'; pinId: number };
+  | { key: string; kind: 'unpin'; pinId: number }
+  /** 読み方のデータ（issue #43）。1 件ずつ積み、送るときにまとめる */
+  | { key: string; kind: 'event'; event: ReadingEvent };
+
+/** 1 リクエストに載せる読み方のデータの数。サーバの上限（api/events.ts）に揃える */
+const EVENTS_PER_REQUEST = 200;
 
 /** 積んでから送るまでの待ち。j 連打で 1 記事ごとに POST が飛ぶのを防ぐ */
 const FLUSH_DELAY = 2_000;
@@ -182,6 +188,14 @@ export const useOutboxStore = defineStore('outbox', () => {
   }
 
   /**
+   * 読み方のデータを積む（issue #43）。**id は積む前に振る**ので、送信が二重になっても
+   * サーバで 1 件になる（冪等）
+   */
+  function queueEvent(event: ReadingEvent): void {
+    enqueue({ key: `event:${event.id}`, kind: 'event', event });
+  }
+
+  /**
    * 1 回の吐き出しで送る単位。既読はまとめて 1 リクエスト、未読戻しとレートは対象ごと。
    * marks が付いているものだけが sendBeacon に載せられる（離脱時の経路）。
    */
@@ -201,6 +215,15 @@ export const useOutboxStore = defineStore('outbox', () => {
         watermark: item.watermark,
       }));
       sends.push({ keys: reads.map((item) => item.key), run: () => postRead(marks), marks });
+    }
+
+    const events = batch.filter((item) => item.kind === 'event');
+    for (let i = 0; i < events.length; i += EVENTS_PER_REQUEST) {
+      const chunk = events.slice(i, i + EVENTS_PER_REQUEST);
+      sends.push({
+        keys: chunk.map((item) => item.key),
+        run: () => postEvents(chunk.map((item) => item.event)),
+      });
     }
 
     for (const item of batch) {
@@ -374,6 +397,7 @@ export const useOutboxStore = defineStore('outbox', () => {
     queueRate,
     queuePin,
     queueUnpin,
+    queueEvent,
     pendingRates,
     flush,
     flushOnUnload,
