@@ -76,8 +76,8 @@ export async function cleanMailHtml(html: string, subject = ''): Promise<Cleaned
   const rewriter = new HTMLRewriter()
     .on('img', {
       element(element) {
-        const width = Number(element.getAttribute('width') ?? NaN);
-        const height = Number(element.getAttribute('height') ?? NaN);
+        const width = dimension(element.getAttribute('width'));
+        const height = dimension(element.getAttribute('height'));
         const tiny = (width <= 2 && width >= 0) || (height <= 2 && height >= 0);
         const src = element.getAttribute('src') ?? '';
         // 隠してある画像は下の `*` が落とす
@@ -128,6 +128,17 @@ export async function cleanMailHtml(html: string, subject = ''): Promise<Cleaned
   // 「ブラウザで見る」が見つかればそちらを優先する。見出しのリンクは、同じ文字の
   // 別の記事（過去の号の紹介）を指していることがあるので、あくまで代わり
   return { html: out, webUrl: webUrl ?? titleUrl };
+}
+
+/**
+ * img の width / height を数にする。指定が無い・空・数でないときは NaN。
+ *
+ * `Number('')` は 0 になるので、そのまま使うと `width=""` の画像（配信ツールが
+ * よく出す）を 1×1 のトラッキングピクセルと取り違えて消す
+ */
+function dimension(value: string | null): number {
+  if (value === null || value.trim() === '') return NaN;
+  return Number(value);
 }
 
 /** テキストだけのメールを HTML にする。空行で段落を分け、行の折り返しは残す */

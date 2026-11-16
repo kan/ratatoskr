@@ -57,6 +57,7 @@ const NEWSLETTER = `<html><body>
   <p><a href="https://weekly.example.com/issues/42?utm=mail"><span>ブラウザで見る</span></a></p>
   <h1>今週のまとめ</h1>
   <p>本文の段落です。<img src="https://cdn.example.com/photo.jpg" width="560" height="300" alt="写真"></p>
+  <p><img src="https://cdn.example.com/banner.jpg" width="" height="" alt="バナー"></p>
 </td></tr></table>
 <img src="https://t.example.com/open/xyz.gif" width="1" height="1" alt="">
 </body></html>`;
@@ -80,6 +81,8 @@ describe('ingestMail', () => {
     expect(entry.published_at).toBe(Math.floor(Date.parse('2026-11-15T00:00:00Z') / 1000));
     expect(entry.body).toContain('本文の段落です');
     expect(entry.body).toContain('https://cdn.example.com/photo.jpg');
+    // width="" の画像は 1×1 とみなさない（Number('') は 0）
+    expect(entry.body).toContain('https://cdn.example.com/banner.jpg');
     // トラッキングピクセル・プレヘッダ・レイアウトの表は持ち込まない
     expect(entry.body).not.toContain('t.example.com');
     expect(entry.body).not.toContain('受信箱に出すだけの一文');
