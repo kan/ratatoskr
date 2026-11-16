@@ -28,7 +28,7 @@ export async function extractHtmlItems(
   const items: RawItem[] = [];
   let current: RawItem | null = null;
   /** テキストを溜めている値。入れ子の要素の中の文字も、終了タグまでは同じ値に入る */
-  const capturing = new Map<keyof RawItem, number>();
+  const capturing = new Set<keyof RawItem>();
   const buffers = new Map<keyof RawItem, string>();
 
   let rewriter = new HTMLRewriter().on(itemSelector, {
@@ -45,7 +45,7 @@ export async function extractHtmlItems(
             if (field.attr !== undefined) {
               current[name] = applyTemplate(attribute(element, field.attr), field.template);
             } else {
-              capturing.set(name, 1);
+              capturing.add(name);
               buffers.set(name, '');
             }
           }
@@ -80,7 +80,7 @@ export async function extractHtmlItems(
         buffers.set(name, '');
         elementScope(
           element,
-          () => capturing.set(name, (capturing.get(name) ?? 0) + 1),
+          () => capturing.add(name),
           () => {
             capturing.delete(name);
             const value = normalizeText(buffers.get(name) ?? '');
@@ -102,7 +102,7 @@ export async function extractHtmlItems(
   rewriter = rewriter.on('*', {
     text(chunk) {
       if (current === null || capturing.size === 0 || hidden > 0) return;
-      for (const name of capturing.keys()) {
+      for (const name of capturing) {
         const buffer = buffers.get(name) ?? '';
         if (buffer.length < MAX_TEXT) buffers.set(name, buffer + chunk.text);
       }

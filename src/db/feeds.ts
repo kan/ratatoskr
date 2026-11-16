@@ -5,6 +5,7 @@ import type {
   ReadMark,
   RecipeSource,
 } from '../../shared/types';
+import { isRecipeSource, MAIL_FEED_PREFIX } from '../../shared/types';
 import { CLEAR_FULL_BODIES, CLEAR_TRANSLATIONS } from './entries';
 import { COPY_NSFW_TO_PINS } from './pins';
 import { UNREAD_COUNT_SUBQUERY } from './unread';
@@ -205,21 +206,15 @@ export async function ensureMailFeed(
   db: D1Database,
   feed: { url: string; title: string },
   now: number,
-): Promise<{ id: number; disabled: boolean }> {
-  const [, selected] = await db.batch<{ id: number; disabled: number }>([
+): Promise<{ id: number; disabled: boolean; translate: boolean }> {
+  const [, selected] = await db.batch<{ id: number; disabled: number; translate: number }>([
     bindNewFeed(db.prepare(INSERT_FEED), { ...feed, siteUrl: null, rate: 3, folder: '' }, now),
-    db.prepare('SELECT id, disabled FROM feeds WHERE url = ?').bind(feed.url),
+    db.prepare('SELECT id, disabled, translate FROM feeds WHERE url = ?').bind(feed.url),
   ]);
   const row = selected.results[0];
   if (row === undefined) throw new Error(`メールのフィードを作れない: ${feed.url}`);
-  return { id: row.id, disabled: row.disabled === 1 };
+  return { id: row.id, disabled: row.disabled === 1, translate: row.translate === 1 };
 }
-
-/**
- * クロールで取りに行かないフィードの URL。メールマガジン（issue #41）は届いたときに
- * 入るので、取りに行く先が無い
- */
-export const MAIL_FEED_PREFIX = 'mailto:';
 
 // D1 の 1 バッチが際限なく膨らまないように区切る（insertEntries と同じ考え方）
 const INSERT_BATCH_SIZE = 50;
@@ -418,10 +413,6 @@ function toCrawlTarget(row: CrawlTargetRow): CrawlTarget {
   };
 }
 
-function isRecipeSource(value: string | null): value is RecipeSource {
-  return value === 'ai' || value === 'score' || value === 'manual';
-}
-
 const CRAWL_COLUMNS = `id, url, title, site_url, etag, last_modified, content_hash,
          fetch_interval, consecutive_failures, full_text, full_text_selector,
          full_text_blocked, recipe, recipe_source, translate`;
@@ -598,14 +589,6 @@ export async function updateFullTextSelector(
     .run();
 }
 
-/**
- * 「要約しか配信していない」と見えたことを覚える。購読管理画面で勧めるだけで、
- * 取りに行き始めはしない（相手のサーバに記事の数だけ取りに行く動作なので、
- * こちらが勝手に決めない）。
- *
- * 既にユーザが決めた後（full_text_suggested = 2）は触らない。触ると、勧めを断った
- * フィードで次のクロックごとに勧めが復活する。
- */
 /** 「日本語ではない」と見えたことを覚える（issue #42）。勧めるだけで訳しはしない */
 export async function markTranslateSuggested(db: D1Database, id: number): Promise<void> {
   await db
@@ -614,6 +597,14 @@ export async function markTranslateSuggested(db: D1Database, id: number): Promis
     .run();
 }
 
+/**
+ * 「要約しか配信していない」と見えたことを覚える。購読管理画面で勧めるだけで、
+ * 取りに行き始めはしない（相手のサーバに記事の数だけ取りに行く動作なので、
+ * こちらが勝手に決めない）。
+ *
+ * 既にユーザが決めた後（full_text_suggested = 2）は触らない。触ると、勧めを断った
+ * フィードで次のクロックごとに勧めが復活する。
+ */
 export async function markFullTextSuggested(db: D1Database, id: number): Promise<void> {
   await db
     .prepare('UPDATE feeds SET full_text_suggested = 1 WHERE id = ? AND full_text_suggested = 0')

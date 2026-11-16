@@ -6,7 +6,7 @@
  */
 
 /** 自分の名乗りの製品トークン。USER_AGENT（src/crawler/fetch.ts）の頭と揃える */
-export const ROBOTS_PRODUCT_TOKEN = 'ratatoskr';
+const ROBOTS_PRODUCT_TOKEN = 'ratatoskr';
 
 /** RFC 9309 §2.5: 少なくとも 500 KiB は読む。それより後ろは見ない */
 export const MAX_ROBOTS_BYTES = 500 * 1024;
@@ -24,9 +24,6 @@ export interface RobotsRules {
   /** state が ok のとき、自分に効く規則（自分宛ての群が無ければ `*` の群） */
   rules: RobotsRule[];
 }
-
-export const ALLOW_ALL: RobotsRules = { state: 'allow_all', rules: [] };
-export const DISALLOW_ALL: RobotsRules = { state: 'disallow_all', rules: [] };
 
 /**
  * robots.txt の本文から、自分に効く規則を取り出す。
@@ -180,11 +177,11 @@ function normalizePath(path: string): string {
  *   取りに行く理由が無い）
  * - 5xx … 全て禁じる
  */
-export function rulesForStatus(status: number): RobotsRules | null {
+export function stateForStatus(status: number): Exclude<RobotsState, 'ok'> | null {
   if (status >= 200 && status < 300) return null;
-  if (status === 429) return DISALLOW_ALL;
-  if (status >= 400 && status < 500) return ALLOW_ALL;
-  return DISALLOW_ALL;
+  if (status === 429) return 'disallow_all';
+  if (status >= 400 && status < 500) return 'allow_all';
+  return 'disallow_all';
 }
 
 /** robots.txt に禁じられたページを取りに行こうとした（src/crawler/polite.ts が投げる） */

@@ -57,11 +57,14 @@ export async function purgeExpiredEntries(
 
   // robots.txt の控えは期限が切れても取り直しに失敗したときの拠り所になるので、
   // 記事と同じ保持期間だけ置いてから捨てる。購読を外したサイトの分が積み上がらないように
-  const robots = await deleteStaleRobots(env.DB, before);
   // 読み方のデータ（issue #43）は記事より長く持つ（記事は消えても、どのフィードを
-  // どう読んだかは残す価値がある）。印は直近の保持期間ぶんで付け直す
-  await deleteOldReadingEvents(env.DB, now - READING_EVENTS_DAYS * 86_400);
-  await refreshSkimmedFeeds(env.DB, before);
+  // どう読んだかは残す価値がある）。印は直近の保持期間ぶんで付け直す。
+  // 3 つは互いに依存しない（印は保持期間ぶんしか見ないので、1 年より古い行の掃除と競わない）
+  const [robots] = await Promise.all([
+    deleteStaleRobots(env.DB, before),
+    deleteOldReadingEvents(env.DB, now - READING_EVENTS_DAYS * 86_400),
+    refreshSkimmedFeeds(env.DB, before),
+  ]);
 
   let deleted = 0;
   while (deleted < maxPerRun) {

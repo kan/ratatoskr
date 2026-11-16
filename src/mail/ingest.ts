@@ -1,7 +1,9 @@
 import PostalMime from 'postal-mime';
+import { MAIL_FEED_PREFIX } from '../../shared/types';
 import { parseDate } from '../crawler/date';
 import { sanitizeHtml } from '../crawler/sanitize';
 import { titleFromBody } from '../crawler/title';
+import { translatePending } from '../crawler/translate';
 import { insertEntries } from '../db/entries';
 import { ensureMailFeed } from '../db/feeds';
 import { sha256Hex } from '../lib/hash';
@@ -50,7 +52,7 @@ export interface IncomingMail {
 }
 
 export async function ingestMail(
-  env: Pick<Env, 'DB' | 'EMAIL_ADDRESS'>,
+  env: Pick<Env, 'DB' | 'EMAIL_ADDRESS'> & { AI?: Ai },
   mail: IncomingMail,
   now: number,
 ): Promise<MailOutcome> {
@@ -69,7 +71,7 @@ export async function ingestMail(
 
   const feed = await ensureMailFeed(
     env.DB,
-    { url: `mailto:${address}`, title: sender?.name.trim() || address },
+    { url: `${MAIL_FEED_PREFIX}${address}`, title: sender?.name.trim() || address },
     now,
   );
   if (feed.disabled) return { kind: 'dropped' };
@@ -101,6 +103,11 @@ export async function ingestMail(
     ],
     now,
   );
+  // **訳すことにした送信者のメールは、届いたその場で訳す**（issue #42）。メールのフィードは
+  // クロールの対象から外してあるので、ここで訳さないと手動の更新まで原文のまま残る
+  if (inserted > 0 && feed.translate) {
+    await translatePending(env.DB, feed, { ai: env.AI, budget: { remaining: 1 } });
+  }
   return { kind: 'stored', feedId: feed.id, inserted: inserted > 0 };
 }
 

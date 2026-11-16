@@ -1,4 +1,5 @@
-import { htmlResponse } from '../crawler/rewriter';
+import { elementScope, htmlResponse } from '../crawler/rewriter';
+import { httpUrl } from '../crawler/url';
 import { escapeHtml } from '../crawler/sanitize';
 import { normalizeText } from '../crawler/title';
 
@@ -52,8 +53,8 @@ export async function cleanMailHtml(html: string): Promise<CleanedMail> {
         const height = Number(element.getAttribute('height') ?? NaN);
         const tiny = (width <= 2 && width >= 0) || (height <= 2 && height >= 0);
         const src = element.getAttribute('src') ?? '';
-        const hidden = HIDDEN_STYLE.test(element.getAttribute('style') ?? '');
-        if (tiny || hidden || TRACKING_SRC.test(src)) element.remove();
+        // 隠してある画像は下の `*` が落とす
+        if (tiny || TRACKING_SRC.test(src)) element.remove();
       },
     })
     .on('*', {
@@ -73,36 +74,25 @@ export async function cleanMailHtml(html: string): Promise<CleanedMail> {
     .on('a[href]', {
       element(element) {
         if (webUrl !== null) return;
-        pendingHref = element.getAttribute('href');
-        pendingText = '';
-        try {
-          element.onEndTag(() => {
-            if (
-              webUrl === null &&
-              pendingHref !== null &&
-              WEB_VERSION.test(normalizeText(pendingText))
-            ) {
-              webUrl = httpUrl(normalizeText(pendingHref));
+        const href = element.getAttribute('href');
+        elementScope(
+          element,
+          () => {
+            pendingHref = href;
+            pendingText = '';
+          },
+          () => {
+            if (webUrl === null && href !== null && WEB_VERSION.test(normalizeText(pendingText))) {
+              webUrl = httpUrl(normalizeText(href))?.href ?? null;
             }
             pendingHref = null;
-          });
-        } catch {
-          pendingHref = null;
-        }
+          },
+        );
       },
     });
 
   const out = await rewriter.transform(htmlResponse(html)).text();
   return { html: out, webUrl };
-}
-
-function httpUrl(value: string): string | null {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
-  } catch {
-    return null;
-  }
 }
 
 /** テキストだけのメールを HTML にする。空行で段落を分け、行の折り返しは残す */

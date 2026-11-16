@@ -1,19 +1,12 @@
 import { selectRobots, upsertRobots, type StoredRobots } from '../db/robots';
 import { errorMessage } from '../lib/errors';
+import { readBoundedMarkup, TIMEOUT_MS, USER_AGENT, type FetchBudget } from './fetch';
 import {
-  readBoundedMarkup,
-  reserveBudget,
-  TIMEOUT_MS,
-  USER_AGENT,
-  type FetchBudget,
-} from './fetch';
-import {
-  DISALLOW_ALL,
   isAllowed,
   MAX_ROBOTS_BYTES,
   parseRobots,
   RobotsDisallowedError,
-  rulesForStatus,
+  stateForStatus,
   type RobotsRules,
 } from './robots';
 
@@ -167,11 +160,11 @@ async function loadRobots(
   }
   if (stored !== null && stored.expiresAt > now) return rulesOf(stored);
 
-  // **枠が尽きていたら取りに行かず、この回は禁じる扱いにする**（控えには残さない）。
-  // 記事ページはどのみち次の回に回るので、取りこぼしにはならない
-  if (options.budget !== undefined && reserveBudget(options.budget, 1) === 0) {
-    return stored !== null && stored.state !== 'disallow_all' ? rulesOf(stored) : DISALLOW_ALL;
-  }
+  // **枠から引くが、尽きていても断らない。** 断ると「枠が足りない」が「禁じられている」に
+  // 化けて、記事に取り直しを止める印が付く。robots.txt を取るのは、既に枠を確保した
+  // 記事ページの前だけ（origin ごとに 1 回）なので、追加は記事ページの数を超えない。
+  // 引いた分は後続の記事ページの枠を減らす
+  if (options.budget !== undefined) options.budget.remaining -= 1;
   const fetched = await fetchRobots(origin, fetchImpl, now);
   // 取れなかったときは、期限切れでも前の控えに従う（RFC 9309 §2.4。相手が一時的に
   // 落ちているだけで全文取得を止めない）。前の控えも無ければ全て禁じる
@@ -216,13 +209,10 @@ async function fetchRobots(
     return failed;
   }
 
-  const byStatus = rulesForStatus(response.status);
-  if (byStatus !== null) {
-    if (byStatus.state === 'allow_all') {
-      return { state: 'allow_all', body: '', expiresAt: now + ROBOTS_TTL };
-    }
-    return failed;
-  }
+  const byStatus = stateForStatus(response.status);
+  if (byStatus === 'allow_all')
+    return { state: 'allow_all', body: '', expiresAt: now + ROBOTS_TTL };
+  if (byStatus === 'disallow_all') return failed;
 
   const read = await readBoundedMarkup(response);
   if (read.kind === 'error') return failed;

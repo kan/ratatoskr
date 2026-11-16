@@ -22,7 +22,19 @@ export type FeedErrorKind =
   | 'other';
 
 /** 取得定義を誰が作ったか（issue #40。migrations/0009_feeds_recipe.sql） */
-export type RecipeSource = 'ai' | 'score' | 'manual';
+/**
+ * メールマガジン（issue #41）の送信者のフィードの URL の頭。`mailto:<送信者>` で作り、
+ * これで見分ける（クロールの対象から外す・購読管理画面の説明）。作る側と見分ける側で
+ * 同じ値を見る
+ */
+export const MAIL_FEED_PREFIX = 'mailto:';
+
+export const RECIPE_SOURCES = ['ai', 'score', 'manual'] as const;
+export type RecipeSource = (typeof RECIPE_SOURCES)[number];
+
+export function isRecipeSource(value: unknown): value is RecipeSource {
+  return (RECIPE_SOURCES as readonly unknown[]).includes(value);
+}
 
 export interface Feed {
   id: number;
@@ -109,6 +121,9 @@ export type ReadingEvent =
 export interface ReadingEventsRequest {
   events: ReadingEvent[];
 }
+
+/** POST /api/events が 1 回に受ける件数。送る側（web/src/stores/outbox.ts）も同じ値で区切る */
+export const MAX_EVENTS_PER_REQUEST = 200;
 
 export interface Pin {
   id: number;

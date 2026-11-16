@@ -133,6 +133,36 @@ describe('ingestMail', () => {
     expect(await getEntryRows(env.DB, first.feedId)).toHaveLength(1);
   });
 
+  it('訳すことにした送信者のメールは、届いたその場で訳す（issue #42）', async () => {
+    const first = await deliver(rawMail({ html: NEWSLETTER }));
+    if (first.kind !== 'stored') throw new Error('入っていない');
+    await env.DB.prepare('UPDATE feeds SET translate = 1 WHERE id = ?').bind(first.feedId).run();
+    const ai = {
+      run: (_model: string, input: { messages: { content: string }[] }) => {
+        const texts = JSON.parse(input.messages[1].content) as string[];
+        return Promise.resolve({ response: JSON.stringify(texts.map((t) => `訳:${t}`)) });
+      },
+    } as unknown as Ai;
+
+    await ingestMail(
+      { ...mailEnv, AI: ai },
+      {
+        to: ADDRESS,
+        raw: rawMail({
+          subject: 'Weekly roundup',
+          messageId: '<en@weekly.example.com>',
+          html: '<p>This week we look at squirrels, trees and the forest canopy.</p>',
+        }),
+        rawSize: 100,
+      },
+      NOW,
+    );
+
+    const rows = await getEntryRows(env.DB, first.feedId);
+    const english = rows.find((row) => row.title === 'Weekly roundup');
+    expect(english?.translated_title).toBe('訳:Weekly roundup');
+  });
+
   it('メールのフィードはクロールの対象にしない', async () => {
     await deliver(rawMail({ html: NEWSLETTER }));
     expect(await selectCrawlTargets(env.DB, NOW + 86_400, 20)).toEqual([]);

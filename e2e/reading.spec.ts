@@ -33,8 +33,13 @@ test('記事を移ると表示していた時間を、v で元記事を開いた
   // 新しいタブは開かせて閉じる（元記事の URL はモックしていない）
   context.on('page', (opened) => void opened.close());
   await page.keyboard.press('v');
-  await page.waitForTimeout(1_200);
+  await page.waitForTimeout(1_500);
   await page.keyboard.press('j');
+  // 読み方のデータは溜めてから送る。タブを離れた時点で出し切るので、それを起こす
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
 
   await expect
     .poll(() => api.events.map((event) => event.kind).sort(), { timeout: 10_000 })

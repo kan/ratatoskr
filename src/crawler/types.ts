@@ -1,3 +1,4 @@
+import type { RecipeSource } from '../../shared/types';
 import type { FetchOutcome, FetchTarget } from './fetch';
 
 /**
@@ -40,7 +41,7 @@ export interface SourceContext {
   /** 取得定義を推定し直すときに使う */
   ai?: Ai;
   /** 推定し直した取得定義を覚えさせる */
-  saveRecipe?: (json: string, source: 'ai' | 'score') => Promise<void>;
+  saveRecipe?: (json: string, source: Exclude<RecipeSource, 'manual'>) => Promise<void>;
 }
 
 export interface Source {

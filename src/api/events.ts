@@ -1,4 +1,4 @@
-import type { ReadingEvent } from '../../shared/types';
+import { MAX_EVENTS_PER_REQUEST as MAX_EVENTS, type ReadingEvent } from '../../shared/types';
 import { insertReadingEvents } from '../db/events';
 import { badRequest, readJsonBody } from '../lib/body';
 import { json } from '../lib/errors';
@@ -10,8 +10,6 @@ import { json } from '../lib/errors';
  * id で冪等なので、重複して届いても 1 件になる。
  */
 
-/** 1 リクエストで受ける最大件数 */
-const MAX_EVENTS = 200;
 /** 表示時間の上限（秒）。端末の時計の狂いで桁違いの値が来ても集計を壊さない */
 const MAX_SECONDS = 3600;
 

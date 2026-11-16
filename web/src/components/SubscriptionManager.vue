@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import type { Feed, FeedCandidate, FeedErrorKind } from '@shared/types';
-import { REPOSITORY_URL } from '@shared/types';
+import { MAIL_FEED_PREFIX, REPOSITORY_URL } from '@shared/types';
 import { bookmarkTemplate, DEFAULT_BOOKMARK_TEMPLATE, saveBookmarkTemplate } from '@/lib/bookmark';
 import { bookmarkletFor } from '@/lib/bookmarklet';
 import { confirmUnsubscribe, isStalled, UNCATEGORIZED } from '@/lib/subscriptions';
@@ -482,7 +482,7 @@ async function onOpmlSelected(event: Event): Promise<void> {
           <ul
             v-if="candidate.preview"
             class="ml-4 list-disc text-xs text-neutral-500"
-            :data-testid="`feed-candidate-preview`"
+            data-testid="feed-candidate-preview"
           >
             <li v-for="title in candidate.preview" :key="title">{{ title }}</li>
           </ul>
@@ -572,7 +572,7 @@ async function onOpmlSelected(event: Event): Promise<void> {
                   要約しか配信していない。「全文」で記事ページから本文を取ってこられる
                 </p>
                 <p
-                  v-if="feed.url.startsWith('mailto:')"
+                  v-if="feed.url.startsWith(MAIL_FEED_PREFIX)"
                   class="text-neutral-500"
                   :data-testid="`manage-mail-${feed.id}`"
                 >

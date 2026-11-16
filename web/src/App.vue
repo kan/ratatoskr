@@ -53,9 +53,12 @@ watch(
   () => feeds.currentEntry?.id,
   () => (showOriginal.value = false),
 );
+const showingTranslation = computed(
+  () => feeds.currentEntry?.translation !== undefined && !showOriginal.value,
+);
 const readerEntry = computed(() => {
   const entry = feeds.currentEntry;
-  if (entry === null || entry.translation === undefined || showOriginal.value) return entry;
+  if (entry?.translation === undefined || !showingTranslation.value) return entry;
   return { ...entry, title: entry.translation.title, body: entry.translation.body };
 });
 
@@ -874,7 +877,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
         ref="reader"
         class="min-h-0 flex-1"
         :entry="readerEntry"
-        :translated="feeds.currentEntry?.translation !== undefined && !showOriginal"
+        :translated="showingTranslation"
         :empty-label="emptyLabel"
         :pinned="currentPinned"
         @next="feeds.nextEntry()"

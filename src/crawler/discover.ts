@@ -7,6 +7,7 @@ import {
 } from './fetch';
 import { parseFeed } from './parse';
 import { knownSource } from './source';
+import { siteName } from './url';
 
 /**
  * フィードの自動検出（docs/API.md の POST /api/feeds）。
@@ -339,11 +340,6 @@ function feedLikeUrl(href: string, base: URL): string | null {
   url.hash = '';
   // ページ自身へのリンク（<a href="#main">）は候補にしない
   return url.href === base.href ? null : url.href;
-}
-
-/** www の有無を無視したホスト名。同じサイトかどうかの判定に使う */
-function siteName(url: URL): string {
-  return url.hostname.replace(/^www\./i, '');
 }
 
 function absoluteUrl(href: string, baseUrl: string): string | null {

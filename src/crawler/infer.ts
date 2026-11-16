@@ -1,6 +1,15 @@
 import { asObject, parseJson } from '../lib/json';
-import { readAnswer, parseChoice } from './choose';
-import { recipeFeed, RECIPE_VERSION, scriptText, type Recipe, type RecipeField } from './recipe';
+import type { RecipeSource } from '../../shared/types';
+import { parseChoice, readAnswer, TEXT_MODEL } from './choose';
+import {
+  cachedScript,
+  recipeFeed,
+  RECIPE_VERSION,
+  type Recipe,
+  type RecipeField,
+  type ScriptCache,
+} from './recipe';
+import { httpUrl, siteName } from './url';
 import { elementScope, htmlResponse } from './rewriter';
 import type { ParsedFeed } from './types';
 
@@ -24,13 +33,14 @@ import type { ParsedFeed } from './types';
  * 開発時に調べて定義を書く（docs/DESIGN.md「取得定義」）。
  */
 
-const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
-
 /** 一覧と見なす最小の記事数。2 件ではナビゲーションと見分けが付かない */
 export const MIN_ITEMS = 3;
 
 /** AI に見せる候補の数 */
 const MAX_CANDIDATES = 6;
+
+/** 確かめる HTML の候補の数（日付の取り方の違いで、実際にはこの倍をなぞる） */
+const MAX_HTML_CANDIDATES = 8;
 
 /** 候補ごとに AI へ見せる見出しの数 */
 const PREVIEW_TITLES = 4;
@@ -39,11 +49,12 @@ const PREVIEW_TITLES = 4;
 const MAX_JSON_DEPTH = 12;
 const MAX_JSON_ARRAYS = 200;
 
-export type RecipeSource = 'ai' | 'score';
+/** 推定で決まる作り手（手で書いた manual はここからは出ない） */
+export type InferredSource = Exclude<RecipeSource, 'manual'>;
 
 export interface InferredRecipe {
   recipe: Recipe;
-  source: RecipeSource;
+  source: InferredSource;
   /** 手元のページでなぞった結果。購読の追加で、何が取れるかを見せるのに使う */
   feed: ParsedFeed;
 }
@@ -74,15 +85,16 @@ export async function inferRecipe(
     version: RECIPE_VERSION,
     ...(pageTitle === '' ? {} : { title: pageTitle }),
   };
+  const scripts: ScriptCache = new Map();
   const drafts = [
-    ...(await jsonCandidates(html, pageUrl, base)),
+    ...(await jsonCandidates(html, pageUrl, base, scripts)),
     ...(await htmlCandidates(html, pageUrl, base)),
   ];
 
   // 確かめる。日付まで取れたものは点を上げる
   const scored: (Candidate & { feed: ParsedFeed })[] = [];
   for (const draft of drafts) {
-    const feed = await recipeFeed(draft.recipe, html, pageUrl, now);
+    const feed = await recipeFeed(draft.recipe, html, pageUrl, now, scripts);
     if (feed.items.length < MIN_ITEMS) continue;
     const dated = feed.items.some((item) => item.publishedAt !== null) ? 1.5 : 1;
     scored.push({ ...draft, feed, score: draft.score * dated });
@@ -109,7 +121,7 @@ export async function inferRecipe(
 
   let answer: string;
   try {
-    const result = await ai.run(MODEL, {
+    const result = await ai.run(TEXT_MODEL, {
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: describe(shortlist, pageUrl) },
@@ -223,7 +235,10 @@ async function htmlCandidates(
       },
     });
   }
-  return withDateFallbacks(out);
+  // 確かめる（なぞる）のは点の高い方から数本だけ。リンクの並びは 1 ページに数十あり、
+  // 全てを確かめるとページの走査が並びの数だけ増える
+  out.sort((a, b) => b.score - a.score);
+  return withDateFallbacks(out.slice(0, MAX_HTML_CANDIDATES));
 }
 
 /**
@@ -309,12 +324,8 @@ async function scanAnchors(html: string, pageUrl: string): Promise<Anchor[]> {
   const open: Anchor[] = [];
   let serial = 0;
   let hidden = 0;
-  let origin: string;
-  try {
-    origin = new URL(pageUrl).host;
-  } catch {
-    return [];
-  }
+  const page = httpUrl(pageUrl);
+  if (page === null) return [];
 
   const rewriter = new HTMLRewriter().on('*', {
     element(element) {
@@ -341,7 +352,7 @@ async function scanAnchors(html: string, pageUrl: string): Promise<Anchor[]> {
       let anchor: Anchor | null = null;
       if (tag === 'a') {
         const href = element.getAttribute('href');
-        const resolved = href === null ? null : sameSiteArticle(href, pageUrl, origin);
+        const resolved = href === null ? null : sameSiteArticle(href, page);
         if (resolved !== null) {
           anchor = { href: resolved, path: [...stack], className: frame.className, text: '' };
         }
@@ -378,15 +389,9 @@ async function scanAnchors(html: string, pageUrl: string): Promise<Anchor[]> {
 }
 
 /** 同じサイトの、記事らしいページへのリンクか。トップ・ページ内・ファイルへのリンクは除く */
-function sameSiteArticle(href: string, pageUrl: string, host: string): string | null {
-  let url: URL;
-  try {
-    url = new URL(href, pageUrl);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
-  if (url.host.replace(/^www\./, '') !== host.replace(/^www\./, '')) return null;
+function sameSiteArticle(href: string, page: URL): string | null {
+  const url = httpUrl(href, page);
+  if (url === null || siteName(url) !== siteName(page)) return null;
   if (url.pathname === '/' || /\.(jpe?g|png|gif|webp|pdf|zip)$/i.test(url.pathname)) return null;
   url.hash = '';
   return url.href;
@@ -417,11 +422,11 @@ async function jsonCandidates(
   html: string,
   pageUrl: string,
   base: Pick<Recipe, 'version' | 'title' | 'siteUrl'>,
+  scripts: ScriptCache,
 ): Promise<Candidate[]> {
-  const scripts = await jsonScripts(html);
   const out: Candidate[] = [];
-  for (const selector of scripts) {
-    const text = await scriptText(html, selector);
+  for (const selector of await jsonScripts(html)) {
+    const text = await cachedScript(html, selector, scripts);
     if (text === null) continue;
     const root = parseJson(text);
     for (const array of findArrays(root)) {
@@ -479,8 +484,7 @@ function findArrays(root: unknown): FoundArray[] {
       if (objects.length >= MIN_ITEMS && objects.length === value.length) {
         found.push({ path: path.join('.'), length: value.length, sample: objects.slice(0, 5) });
       }
-      // 配列の中の配列（記事ごとのタグ）まで追う意味は薄いので、先頭だけ見る
-      if (value.length > 0) walk(value[0], [...path, '0'], depth + 1);
+      // 配列の要素の中（記事ごとのタグの配列）までは追わない。記事の一覧ではない
       return;
     }
     const object = asObject(value);
@@ -491,8 +495,7 @@ function findArrays(root: unknown): FoundArray[] {
     }
   };
   walk(root, [], 0);
-  // `0` を通るパスは「先頭の要素の中の配列」なので、一覧ではない
-  return found.filter((array) => !array.path.split('.').includes('0'));
+  return found;
 }
 
 /** 配列の要素の形から、取得定義の値の取り方を決める。見出しと URL が無ければ null */
@@ -503,18 +506,11 @@ function mapFields(
   const keyOf = (keys: string[], ok: (value: unknown) => boolean): string | null =>
     keys.find((key) => sample.every((item) => ok(item[key]))) ?? null;
   const isText = (value: unknown): boolean => typeof value === 'string' && value.trim() !== '';
-  const isUrl = (value: unknown): boolean => {
-    if (typeof value !== 'string') return false;
-    try {
-      const url = new URL(value, pageUrl);
-      return (
-        (url.protocol === 'http:' || url.protocol === 'https:') &&
-        (value.startsWith('/') || /^https?:/i.test(value))
-      );
-    } catch {
-      return false;
-    }
-  };
+  // 相対パスは `/` で始まるものだけ。`slug-only` のような値は URL に組み立てられない
+  const isUrl = (value: unknown): boolean =>
+    typeof value === 'string' &&
+    (value.startsWith('/') || /^https?:/i.test(value)) &&
+    httpUrl(value, pageUrl) !== null;
 
   const title = keyOf(TITLE_KEYS, isText);
   const url = keyOf(URL_KEYS, isUrl);

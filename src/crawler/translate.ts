@@ -1,5 +1,7 @@
 import { selectUntranslated, updateTranslations } from '../db/entries';
-import { readAnswer } from './choose';
+import { errorMessage } from '../lib/errors';
+import { parseJson } from '../lib/json';
+import { readAnswer, TEXT_MODEL } from './choose';
 import { releaseBudget, reserveBudget, type FetchBudget } from './fetch';
 import { elementScope, htmlResponse } from './rewriter';
 import { escapeHtml, sanitizeHtml } from './sanitize';
@@ -21,12 +23,10 @@ import { normalizeText } from './title';
  * 前後の断片は LLM から見えている。
  */
 
-const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
-
 /** 1 回の問い合わせに載せるテキストの量（文字数）。超える本文は分けて訳す */
 const CHUNK_CHARS = 3000;
 
-/** 1 記事に使う問い合わせの上限。長すぎる記事は頭から訳せた分だけ訳す */
+/** 1 記事に使う問い合わせの上限。収まらない長さの記事は訳さない（too_long） */
 const MAX_CHUNKS = 4;
 
 /** 訳さない要素。中のテキストは断片として拾わない */
@@ -80,35 +80,47 @@ export async function translateEntry(
   bodyHtml: string,
   baseUrl: string | null,
   ai: Ai,
+  /** 本文の断片。言語の判定で既に拾ってあれば渡す（本文を走査し直さない） */
+  fragments?: readonly string[],
 ): Promise<Translation | TranslationFailure> {
-  const fragments = await collectFragments(bodyHtml);
-  const sources = [title, ...fragments.map((fragment) => fragment.text)];
+  const sources = [title, ...(fragments ?? (await collectFragments(bodyHtml)))];
+  // 文字数で見て収まらないものは問い合わせる前に断る（断片は割らないので、1 つの断片が
+  // 長すぎると塊の数だけでは見抜けない）。断片の切れ目で塊を分けるので、文字数では
+  // 収まっても塊の数が増えることもある
   if (sources.join('').length > CHUNK_CHARS * MAX_CHUNKS) return 'too_long';
+  const chunks = chunksOf(sources);
+  if (chunks.length > MAX_CHUNKS) return 'too_long';
 
-  const translated: (string | null)[] = new Array<string | null>(sources.length).fill(null);
-  let start = 0;
-  for (let chunk = 0; start < sources.length; chunk += 1) {
-    // 断片の切れ目で塊を分けるので、文字数で見積もった上限より塊が増えることがある
-    if (chunk >= MAX_CHUNKS) return 'too_long';
-    let end = start;
-    let size = 0;
-    while (end < sources.length && (end === start || size + sources[end].length <= CHUNK_CHARS)) {
-      size += sources[end].length;
-      end += 1;
-    }
-    const result = await translateBatch(sources.slice(start, end), ai);
-    // 1 塊でも訳せなければ訳さない扱いにする。頭だけ訳した記事より、全部原文の方が
-    // 読み手が戸惑わない（どこまでが訳なのか分からなくなる）
-    if (typeof result === 'string') return result;
-    result.forEach((text, offset) => (translated[start + offset] = text));
-    start = end;
-  }
+  // 塊は互いに依存しないので並べて問い合わせる（待ちは CPU 時間に計上されない）
+  const results = await Promise.all(chunks.map((chunk) => translateBatch(chunk, ai)));
+  // 1 塊でも訳せなければ訳さない扱いにする。頭だけ訳した記事より、全部原文の方が
+  // 読み手が戸惑わない（どこまでが訳なのか分からなくなる）。取り直してよい失敗を優先して返す
+  const failures = results.filter((result) => typeof result === 'string');
+  if (failures.length > 0) return failures.includes('unavailable') ? 'unavailable' : 'unreadable';
 
-  const body = await replaceFragments(bodyHtml, translated.slice(1));
+  const [translatedTitle, ...translatedFragments] = results.flat();
   return {
-    title: translated[0] ?? title,
-    body: await sanitizeHtml(body, baseUrl),
+    title: translatedTitle,
+    body: await sanitizeHtml(await replaceFragments(bodyHtml, translatedFragments), baseUrl),
   };
+}
+
+/** 断片を CHUNK_CHARS ごとの塊に分ける。断片は割らない（1 つで超えるものはそれだけで 1 塊） */
+function chunksOf(sources: readonly string[]): string[][] {
+  const chunks: string[][] = [];
+  let current: string[] = [];
+  let size = 0;
+  for (const source of sources) {
+    if (current.length > 0 && size + source.length > CHUNK_CHARS) {
+      chunks.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(source);
+    size += source.length;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
 }
 
 async function translateBatch(
@@ -117,7 +129,7 @@ async function translateBatch(
 ): Promise<string[] | 'unavailable' | 'unreadable'> {
   let answer: string;
   try {
-    const result = await ai.run(MODEL, {
+    const result = await ai.run(TEXT_MODEL, {
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: JSON.stringify(sources) },
@@ -128,7 +140,7 @@ async function translateBatch(
     });
     answer = readAnswer(result);
   } catch (err) {
-    console.warn('翻訳に失敗', err instanceof Error ? err.message : String(err));
+    console.warn('翻訳に失敗', errorMessage(err));
     return 'unavailable';
   }
   return parseTranslations(answer, sources.length) ?? 'unreadable';
@@ -142,20 +154,10 @@ export function parseTranslations(answer: string, count: number): string[] | nul
   const from = answer.indexOf('[');
   const to = answer.lastIndexOf(']');
   if (from < 0 || to <= from) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(answer.slice(from, to + 1));
-  } catch {
-    return null;
-  }
+  const parsed = parseJson(answer.slice(from, to + 1));
   if (!Array.isArray(parsed) || parsed.length !== count) return null;
   if (!parsed.every((item) => typeof item === 'string')) return null;
   return parsed as string[];
-}
-
-interface Fragment {
-  /** 空白を畳んだ本文。LLM に渡す */
-  text: string;
 }
 
 /**
@@ -164,24 +166,23 @@ interface Fragment {
  * **差し戻し（replaceFragments）と同じ規則で数える。** 同じ HTML を同じ規則で 2 度
  * 走査するので、n 番目の断片は両方で同じものを指す
  */
-async function collectFragments(html: string): Promise<Fragment[]> {
-  const fragments: Fragment[] = [];
+async function collectFragments(html: string): Promise<string[]> {
+  const fragments: string[] = [];
   await walkText(html, (raw) => {
+    // 空白を畳んだものを LLM に渡す
     const text = normalizeText(raw);
-    if (text === '') return null;
-    fragments.push({ text });
+    if (text !== '') fragments.push(text);
     return null;
   });
   return fragments;
 }
 
-async function replaceFragments(html: string, translated: (string | null)[]): Promise<string> {
+async function replaceFragments(html: string, translated: readonly string[]): Promise<string> {
   let index = 0;
   return walkText(html, (raw) => {
     if (normalizeText(raw) === '') return null;
     const text = translated[index];
     index += 1;
-    if (text === null || text === undefined) return null;
     // 前後の空白は残す。インラインの要素の境目の空白が消えると、語がくっつく
     const lead = /^\s*/.exec(raw)?.[0] ?? '';
     const trail = /\s*$/.exec(raw)?.[0] ?? '';
@@ -256,36 +257,27 @@ export async function translatePending(
   const targets = await selectUntranslated(db, feed.id, limit);
   releaseBudget(options.budget, limit - targets.length);
 
-  const rows: { id: number; title: string; body: string }[] = [];
-  for (const target of targets) {
-    const text = `${target.title}\n${await textOf(target.body)}`;
-    // 日本語の記事は訳さない印を付ける。訳すフィードにも日本語の記事は混ざる
-    if (!needsTranslation(text)) {
-      rows.push({ id: target.id, title: '', body: '' });
-      continue;
-    }
-    const translated = await translateEntry(target.title, target.body, target.url, options.ai);
-    // **AI が使えないときは印を付けない。** 付けると、障害や無料枠切れの間に回ってきた
-    // 記事が二度と訳されない。残りの記事も同じ結果になるので、この回はここでやめる
-    if (translated === 'unavailable') break;
-    // 読めない応答・長すぎる記事には印を付けて取り直しを止める（同じ記事は同じ結果に
-    // なりやすく、付けないと毎回この記事で枠を使い切る）
-    rows.push(
-      typeof translated === 'string'
+  const ai = options.ai;
+  // 記事は互いに依存しないので並べて訳す（1 フィード 5 件まで。待ちは CPU 時間に計上されない）
+  const outcomes = await Promise.all(
+    targets.map(async (target) => {
+      const fragments = await collectFragments(target.body);
+      // 日本語の記事は訳さない印を付ける。訳すフィードにも日本語の記事は混ざる
+      if (!needsTranslation(`${target.title}\n${fragments.slice(0, 50).join(' ')}`)) {
+        return { id: target.id, title: '', body: '' };
+      }
+      const translated = await translateEntry(target.title, target.body, target.url, ai, fragments);
+      // **AI が使えないときは印を付けない。** 付けると、障害や無料枠切れの間に回ってきた
+      // 記事が二度と訳されない
+      if (translated === 'unavailable') return null;
+      // 読めない応答・長すぎる記事には印を付けて取り直しを止める（同じ記事は同じ結果に
+      // なりやすく、付けないと毎回この記事で枠を使い切る）
+      return typeof translated === 'string'
         ? { id: target.id, title: '', body: '' }
-        : { id: target.id, title: translated.title, body: translated.body },
-    );
-  }
+        : { id: target.id, title: translated.title, body: translated.body };
+    }),
+  );
+  const rows = outcomes.filter((row) => row !== null);
   await updateTranslations(db, rows);
   return rows.filter((row) => row.body !== '').map((row) => row.id);
-}
-
-/** 本文の HTML から、言語の判定に使うテキストを取り出す */
-async function textOf(html: string): Promise<string> {
-  const parts: string[] = [];
-  await walkText(html, (raw) => {
-    if (parts.length < 50) parts.push(raw);
-    return null;
-  });
-  return normalizeText(parts.join(' '));
 }

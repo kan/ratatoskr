@@ -4,6 +4,8 @@ import { parseDate } from './date';
 import { fetchFeed, type FetchOutcome, type FetchTarget } from './fetch';
 import { extractHtmlItems } from './recipe-html';
 import { escapeHtml } from './sanitize';
+import { htmlResponse } from './rewriter';
+import { httpUrl } from './url';
 import type { ParsedFeed, ParsedItem, SourceOutcome } from './types';
 
 /**
@@ -265,12 +267,13 @@ export async function recipeFeed(
   body: string,
   listUrl: string,
   now: number,
+  scripts?: ScriptCache,
 ): Promise<ParsedFeed> {
   const base = recipe.siteUrl ?? listUrl;
   const raws =
     recipe.list.format === 'html'
       ? await extractHtmlItems(body, recipe.list.items, recipe.list.fields)
-      : await jsonItems(recipe, body);
+      : await jsonItems(recipe, body, scripts);
 
   const items: ParsedItem[] = [];
   const seen = new Set<string>();
@@ -296,9 +299,30 @@ export async function recipeFeed(
 /** 取り出したままの値。null は「無かった」 */
 export type RawItem = Partial<Record<FieldName, string | number | null>>;
 
-async function jsonItems(recipe: Recipe, body: string): Promise<RawItem[]> {
+/**
+ * 同じページの `<script>` の中身の控え（セレクタ → 中身）。推定は 1 ページに対して候補の数だけ
+ * なぞるので、埋め込み JSON の候補ごとにページを走査し直さないために渡す
+ */
+export type ScriptCache = Map<string, Promise<string | null>>;
+
+export function cachedScript(
+  html: string,
+  selector: string,
+  scripts: ScriptCache | undefined,
+): Promise<string | null> {
+  if (scripts === undefined) return scriptText(html, selector);
+  let text = scripts.get(selector);
+  if (text === undefined) {
+    text = scriptText(html, selector);
+    scripts.set(selector, text);
+  }
+  return text;
+}
+
+async function jsonItems(recipe: Recipe, body: string, scripts?: ScriptCache): Promise<RawItem[]> {
   const { list } = recipe;
-  const text = list.format === 'embedded-json' ? await scriptText(body, list.script ?? '') : body;
+  const text =
+    list.format === 'embedded-json' ? await cachedScript(body, list.script ?? '', scripts) : body;
   if (text === null) return [];
   const array = atPath(parseJson(text), list.items);
   if (!Array.isArray(array)) return [];
@@ -355,18 +379,19 @@ function dateOf(value: string | number | null | undefined, now: number): number 
   const trimmed = value.trim();
   // **日付だけの表記は日本時間の 0 時とする。** 日本のサイトに多い `2026.11.16` /
   // `2026/11/16` / `2026年11月16日` で、Date.parse に任せると UTC の 0 時（日本の 9 時）に
-  // なるか、読めずに落ちる。時刻まで書いてあるものは Date.parse に任せる
-  const dateOnly = /^(\d{4})\s*[./年-]\s*(\d{1,2})\s*[./月-]\s*(\d{1,2})\s*日?$/.exec(trimmed);
-  if (dateOnly !== null) {
-    const [, y, m, d] = dateOnly;
-    return parseDate(`${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}T00:00:00+09:00`, now);
-  }
-  const parsed = parseDate(trimmed, now);
-  if (parsed !== null) return parsed;
-  // 前後に文字の付いた日付（`公開日: 2026.11.16`）
-  const embedded = /(\d{4})\s*[./年-]\s*(\d{1,2})\s*[./月-]\s*(\d{1,2})/.exec(trimmed);
-  if (embedded === null) return null;
-  const [, y, m, d] = embedded;
+  // なるか、読めずに落ちる。時刻まで書いてあるものは Date.parse に任せ、読めなければ
+  // 前後に文字の付いた日付（`公開日: 2026.11.16`）として拾う
+  const match = JP_DATE.exec(trimmed);
+  const dateOnly = match !== null && /^\s*日?$/.test(trimmed.slice(match.index + match[0].length));
+  if (match !== null && match.index === 0 && dateOnly) return jstMidnight(match, now);
+  return parseDate(trimmed, now) ?? (match === null ? null : jstMidnight(match, now));
+}
+
+/** `2026.11.16` / `2026/11/16` / `2026年11月16日` / `2026-11-16` */
+const JP_DATE = /(\d{4})\s*[./年-]\s*(\d{1,2})\s*[./月-]\s*(\d{1,2})/;
+
+function jstMidnight(match: RegExpExecArray, now: number): number | null {
+  const [, y, m, d] = match;
   return parseDate(`${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}T00:00:00+09:00`, now);
 }
 
@@ -377,13 +402,7 @@ function text(value: string | number | null | undefined): string | null {
 }
 
 function absolute(url: string | null, base: string): string | null {
-  if (url === null) return null;
-  try {
-    const resolved = new URL(url, base);
-    return resolved.protocol === 'http:' || resolved.protocol === 'https:' ? resolved.href : null;
-  } catch {
-    return null;
-  }
+  return url === null ? null : (httpUrl(url, base)?.href ?? null);
 }
 
 /** `{}` に値を埋める。値は URL の一部として埋まるのでエンコードする */
@@ -456,6 +475,6 @@ export async function scriptText(html: string, selector: string): Promise<string
       }
     },
   });
-  await rewriter.transform(new Response(html)).text();
+  await rewriter.transform(htmlResponse(html)).text();
   return found;
 }

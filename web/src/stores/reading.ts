@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia';
 import { watch } from 'vue';
-import type { Entry } from '@shared/types';
+import type { Entry, ReadingEvent } from '@shared/types';
 import { createDwellClock } from '@/lib/dwell';
+import { httpHref } from '@/lib/url';
 import { useFeedsStore } from './feeds';
 import { useOutboxStore } from './outbox';
 
@@ -20,17 +21,30 @@ import { useOutboxStore } from './outbox';
 /** これより短い表示は積まない。j を連打して素通りした記事でデータを埋めないため */
 const MIN_SECONDS = 1;
 
+/** 積む中身の違う部分。id・時刻・記事は log が埋める */
+type EventDetail =
+  { kind: 'dwell'; seconds: number } | { kind: 'link'; url: string } | { kind: 'open' };
+
 export const useReadingStore = defineStore('reading', () => {
   const feeds = useFeedsStore();
   const outbox = useOutboxStore();
   const clock = createDwellClock();
   let current: Entry | null = null;
+  /** 最後に操作を数えた秒。スクロールは毎フレーム来るので、同じ秒の間は数え直さない */
+  let lastActivity = 0;
 
   // 時刻は全て Unix 秒（CLAUDE.md）。時計にも同じ値を渡す
   const nowSeconds = (): number => Math.floor(Date.now() / 1000);
 
-  function newId(): string {
-    return crypto.randomUUID();
+  function log(entry: Entry, detail: EventDetail, at = nowSeconds()): void {
+    const event = {
+      id: crypto.randomUUID(),
+      at,
+      feedId: entry.feedId,
+      entryId: entry.id,
+      ...detail,
+    } as ReadingEvent;
+    outbox.queueEvent(event);
   }
 
   /**
@@ -42,16 +56,7 @@ export const useReadingStore = defineStore('reading', () => {
     const seconds = clock.stop(at);
     const closed = current;
     current = null;
-    if (seconds >= MIN_SECONDS) {
-      outbox.queueEvent({
-        id: newId(),
-        kind: 'dwell',
-        at: nowSeconds(),
-        feedId: closed.feedId,
-        entryId: closed.id,
-        seconds,
-      });
-    }
+    if (seconds >= MIN_SECONDS) log(closed, { kind: 'dwell', seconds }, at);
   }
 
   /**
@@ -73,33 +78,22 @@ export const useReadingStore = defineStore('reading', () => {
   /** 本文中のリンクを開いた */
   function logLink(url: string): void {
     const entry = feeds.currentEntry;
-    if (entry === null || !/^https?:\/\//i.test(url)) return;
-    outbox.queueEvent({
-      id: newId(),
-      kind: 'link',
-      at: nowSeconds(),
-      feedId: entry.feedId,
-      entryId: entry.id,
-      url,
-    });
+    const href = httpHref(url);
+    if (entry !== null && href !== null) log(entry, { kind: 'link', url: href });
   }
 
   /** 元記事を開いた（v） */
   function logOpen(): void {
     const entry = feeds.currentEntry;
-    if (entry === null) return;
-    outbox.queueEvent({
-      id: newId(),
-      kind: 'open',
-      at: nowSeconds(),
-      feedId: entry.feedId,
-      entryId: entry.id,
-    });
+    if (entry !== null) log(entry, { kind: 'open' });
   }
 
   /** 何か操作した（キー・スクロール・タップ） */
   function activity(): void {
-    clock.activity(nowSeconds());
+    const at = nowSeconds();
+    if (at === lastActivity) return;
+    lastActivity = at;
+    clock.activity(at);
   }
 
   /**
@@ -116,6 +110,8 @@ export const useReadingStore = defineStore('reading', () => {
         close(at);
         open(entry, at);
       },
+      // **次の記事を描いてから積む。** 記録は急がないので、記事送りの描画の前に割り込ませない
+      { flush: 'post' },
     );
     document.addEventListener('visibilitychange', () => {
       const at = nowSeconds();

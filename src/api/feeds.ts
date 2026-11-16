@@ -8,6 +8,7 @@ import type {
   FetchFeedResponse,
   UpdateFeedRequest,
 } from '../../shared/types';
+import { isRecipeSource, RECIPE_SOURCES } from '../../shared/types';
 import { crawl } from '../crawler';
 import { discoverFeed } from '../crawler/discover';
 import { fetchArticlePage } from '../crawler/fetch';
@@ -161,8 +162,8 @@ async function inferFromPage(env: Env, url: string): Promise<SharedFeedCandidate
 
 function parseRecipeSource(value: unknown): RecipeSource {
   if (value === undefined) return 'manual';
-  if (value === 'ai' || value === 'score' || value === 'manual') return value;
-  return badRequest('recipeSource は ai / score / manual のいずれか');
+  if (isRecipeSource(value)) return value;
+  return badRequest(`recipeSource は ${RECIPE_SOURCES.join(' / ')} のいずれか`);
 }
 
 async function register(

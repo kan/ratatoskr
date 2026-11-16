@@ -168,22 +168,16 @@ describe('createPoliteFetch', () => {
       expect((await stale.page('https://b.example.com/a')).status).toBe(200);
     });
 
-    it('robots.txt も取得の枠から引き、尽きていたら取りに行かずに禁じる扱いにする', async () => {
+    it('robots.txt も取得の枠から引く。尽きていても禁じる扱いにはしない', async () => {
       const stub = controlledFetch(() => new Response('User-agent: *\nDisallow:'));
       const budget = { remaining: 1 };
       const polite = createPoliteFetch(stub.impl, { db: env.DB, now: NOW, budget });
 
       expect((await polite.page('https://a.example.com/x')).status).toBe(200);
       expect(budget.remaining).toBe(0);
-      await expect(polite.page('https://b.example.com/x')).rejects.toBeInstanceOf(
-        RobotsDisallowedError,
-      );
-      expect(stub.calls.map((c) => c.url)).toEqual([
-        'https://a.example.com/robots.txt',
-        'https://a.example.com/x',
-      ]);
-      // 枠切れで決めた扱いは控えに残さない（次の回に取りに行く）
-      expect(await selectRobots(env.DB, 'https://b.example.com')).toBeNull();
+      // 枠が足りないことを「禁じられている」に化けさせない（記事に取り直しを止める印が付く）
+      expect((await polite.page('https://b.example.com/x')).status).toBe(200);
+      expect(budget.remaining).toBe(-1);
     });
 
     it('フィード用の fetch は robots.txt を見ない', async () => {

@@ -15,11 +15,10 @@ export async function insertReadingEvents(db: D1Database, events: ReadingEvent[]
   const statement = db.prepare(
     `INSERT OR IGNORE INTO reading_events
        (id, kind, at, feed_id, entry_id, feed_title, entry_title, entry_url, target_url, seconds)
-     SELECT ?1, ?2, ?3, ?4, ?5,
-            (SELECT title FROM feeds WHERE id = ?4),
-            (SELECT title FROM entries WHERE id = ?5),
-            (SELECT url FROM entries WHERE id = ?5),
-            ?6, ?7`,
+     SELECT ?1, ?2, ?3, ?4, ?5, f.title, e.title, e.url, ?6, ?7
+       FROM (SELECT 1)
+       LEFT JOIN feeds f ON f.id = ?4
+       LEFT JOIN entries e ON e.id = ?5`,
   );
   await db.batch(
     events.map((event) =>
@@ -53,25 +52,31 @@ export const SKIM_RATIO = 0.9;
  * **記事ごとに合計してから数える。** 表示時間はタブを隠すたびに区切って積むので
  * （stores/reading.ts）、1 記事が複数の行になる。行のまま数えると、区切られた短い行が
  * 「送っただけ」に数えられる
+ *
+ * **印の変わるフィードだけを書く。** 毎日全てのフィードの行を書き直さない
  */
 export async function refreshSkimmedFeeds(db: D1Database, since: number): Promise<void> {
   await db
     .prepare(
-      `UPDATE feeds SET skimmed = COALESCE((
-         SELECT CASE
-                  WHEN COUNT(*) >= ?2
-                   AND SUM(CASE WHEN viewed.seconds < ?3 THEN 1 ELSE 0 END) >= COUNT(*) * ?4
-                   AND NOT EXISTS (
-                         SELECT 1 FROM reading_events o
-                          WHERE o.feed_id = feeds.id AND o.at >= ?1 AND o.kind IN ('link', 'open'))
-                   AND NOT EXISTS (
-                         SELECT 1 FROM pins p JOIN entries e ON e.id = p.entry_id
-                          WHERE e.feed_id = feeds.id)
-                  THEN 1 ELSE 0 END
-           FROM (SELECT SUM(ev.seconds) AS seconds
-                   FROM reading_events ev
-                  WHERE ev.feed_id = feeds.id AND ev.kind = 'dwell' AND ev.at >= ?1
-                  GROUP BY ev.entry_id) viewed), 0)`,
+      `UPDATE feeds SET skimmed = calc.value
+         FROM (SELECT f.id, COALESCE((
+                 SELECT CASE
+                          WHEN COUNT(*) >= ?2
+                           AND SUM(CASE WHEN viewed.seconds < ?3 THEN 1 ELSE 0 END) >= COUNT(*) * ?4
+                           AND NOT EXISTS (
+                                 SELECT 1 FROM reading_events o
+                                  WHERE o.feed_id = f.id AND o.at >= ?1
+                                    AND o.kind IN ('link', 'open'))
+                           AND NOT EXISTS (
+                                 SELECT 1 FROM pins p JOIN entries e ON e.id = p.entry_id
+                                  WHERE e.feed_id = f.id)
+                          THEN 1 ELSE 0 END
+                   FROM (SELECT SUM(ev.seconds) AS seconds
+                           FROM reading_events ev
+                          WHERE ev.feed_id = f.id AND ev.kind = 'dwell' AND ev.at >= ?1
+                          GROUP BY ev.entry_id) viewed), 0) AS value
+                 FROM feeds f) AS calc
+        WHERE calc.id = feeds.id AND feeds.skimmed <> calc.value`,
     )
     .bind(since, SKIM_MIN_VIEWS, SKIM_SECONDS, SKIM_RATIO)
     .run();

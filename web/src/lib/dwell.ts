@@ -48,10 +48,9 @@ export function createDwellClock(): DwellClock {
       running = true;
       last = now;
     },
-    // 止まっている間の操作では再開しない。再開はフォーカスと可視性（resume）が決める。
-    // ここで再開すると、見えていない窓へのホイールやタッチで数え始めてしまう
+    // 止まっている間（last が null）の操作では再開しない。再開はフォーカスと可視性
+    // （resume）が決める。ここで再開すると、見えていない窓へのホイールやタッチで数え始める
     activity(now) {
-      if (!running) return;
       accrue(now);
     },
     pause(now) {

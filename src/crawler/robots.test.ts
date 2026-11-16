@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ALLOW_ALL, DISALLOW_ALL, isAllowed, parseRobots, rulesForStatus } from './robots';
+import { isAllowed, parseRobots, stateForStatus } from './robots';
 
 /**
  * robots.txt の解釈（RFC 9309）。例は RFC の本文と、実際のサイトでよく見る形から採った。
@@ -97,12 +97,12 @@ Disallow: /tmp/*/draft`;
   });
 });
 
-describe('rulesForStatus', () => {
+describe('stateForStatus', () => {
   it('2xx は本文を読み、4xx は全て許し、5xx と 429 は全て禁じる', () => {
-    expect(rulesForStatus(200)).toBeNull();
-    expect(rulesForStatus(404)).toEqual(ALLOW_ALL);
-    expect(rulesForStatus(403)).toEqual(ALLOW_ALL);
-    expect(rulesForStatus(429)).toEqual(DISALLOW_ALL);
-    expect(rulesForStatus(503)).toEqual(DISALLOW_ALL);
+    expect(stateForStatus(200)).toBeNull();
+    expect(stateForStatus(404)).toBe('allow_all');
+    expect(stateForStatus(403)).toBe('allow_all');
+    expect(stateForStatus(429)).toBe('disallow_all');
+    expect(stateForStatus(503)).toBe('disallow_all');
   });
 });

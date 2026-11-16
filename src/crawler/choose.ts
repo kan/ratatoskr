@@ -16,8 +16,12 @@ import type { Candidate } from './extract';
  * サイトのための保険であって、無いと動かないものではない。
  */
 
-/** 選ぶだけの仕事なので、速くて安いモデルで足りる */
-const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+/**
+ * Workers AI のモデル。本文の位置決め・取得定義の推定・翻訳（src/crawler/infer.ts、
+ * translate.ts）で共有する。選ぶだけの仕事には速くて安いモデルで足り、翻訳も
+ * 日本語を書ける多言語モデルなら同じもので足りる
+ */
+export const TEXT_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 
 /** AI に見せる候補の数。増やしても選びやすくはならず、外れを混ぜる余地が増える */
 const MAX_CANDIDATES = 8;
@@ -56,7 +60,7 @@ export async function chooseBodySelector(
 
   let answer: string;
   try {
-    const result = await ai.run(MODEL, {
+    const result = await ai.run(TEXT_MODEL, {
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: describeCandidates(shortlist) },

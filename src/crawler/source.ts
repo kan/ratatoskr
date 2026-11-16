@@ -1,4 +1,4 @@
-import { MAIL_FEED_PREFIX } from '../db/feeds';
+import { MAIL_FEED_PREFIX } from '../../shared/types';
 import { errorMessage } from '../lib/errors';
 import { withFeed } from './api-feed';
 import { asobiTicket } from './asobiticket';
