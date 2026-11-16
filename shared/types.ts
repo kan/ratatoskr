@@ -21,6 +21,9 @@ export type FeedErrorKind =
   | 'connection_lost'
   | 'other';
 
+/** 取得定義を誰が作ったか（issue #40。migrations/0009_feeds_recipe.sql） */
+export type RecipeSource = 'ai' | 'score' | 'manual';
+
 export interface Feed {
   id: number;
   url: string;
@@ -49,6 +52,12 @@ export interface Feed {
    * 全文取得を入れたのに本文が埋まらない理由を、購読管理画面で見せるのに使う
    */
   fullTextBlocked: boolean;
+  /**
+   * RSS を出さないサイトを、取得定義で読んでいるか（issue #40）。誰が作った定義か。
+   * ai / score は購読の追加でページから推定したもの、manual は手で書いて貼ったもの。
+   * RSS や既知のソースで読んでいるフィードは null
+   */
+  recipeSource: RecipeSource | null;
   /**
    * 表示を有効にした端末でしか出さない（issue #23）。**隠すのは画面側。**
    * サーバは全ての端末に同じものを配り、どの端末で出すかは端末ごとの設定で決まる
@@ -161,6 +170,15 @@ export interface CreateFeedRequest {
   url: string;
   rate?: number;
   folder?: string;
+  /**
+   * RSS を出さないサイトの取得定義（issue #40）。指定すると自動検出をせず、この定義で
+   * 読むフィードとして登録する。中身はサーバが確かめる（src/crawler/recipe.ts の parseRecipe）
+   *
+   * 候補（FeedCandidatesResponse）に付いてきた定義をそのまま返すか、開発時に書いた
+   * 定義を貼る。前者は recipeSource に候補の値（ai / score）を添える
+   */
+  recipe?: unknown;
+  recipeSource?: RecipeSource;
 }
 
 /** 登録できた場合。登録直後に読めるよう、同期的な初回クロールの結果を添える */
@@ -170,8 +188,21 @@ export interface CreateFeedResponse {
 }
 
 /** フィードが複数見つかった場合（HTTP 300）。どれを購読するかはユーザが選ぶ */
+export interface FeedCandidate {
+  url: string;
+  title: string | null;
+  /**
+   * フィードが見つからず、ページから取得定義を推定した候補（issue #40）。
+   * 選んだら CreateFeedRequest にそのまま載せて送り返す
+   */
+  recipe?: unknown;
+  recipeSource?: RecipeSource;
+  /** 推定した定義で取れた記事の見出し。何を購読することになるかを見せる */
+  preview?: string[];
+}
+
 export interface FeedCandidatesResponse {
-  candidates: { url: string; title: string | null }[];
+  candidates: FeedCandidate[];
   /**
    * 候補を見つけたページ。**貼られた URL と違うことがある。**
    *

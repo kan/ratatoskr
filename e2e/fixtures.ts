@@ -42,6 +42,7 @@ function feed(id: number, title: string, rate: number, unreadCount: number): Fee
     fullText: false,
     fullTextSuggested: false,
     fullTextBlocked: false,
+    recipeSource: null,
     nsfw: false,
   };
 }

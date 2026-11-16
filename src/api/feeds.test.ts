@@ -10,6 +10,7 @@ import type {
 import { markFullTextSuggested, selectFeedById } from '../db/feeds';
 import { apiJson, apiSend } from '../test/request';
 import { getEntryRows, getFeedRow, seedEntry, seedFeed, seedPin } from '../test/seed';
+import newsListHtml from '../crawler/__fixtures__/news-list.html?raw';
 
 /**
  * 購読管理。フィードの自動検出と初回クロールが絡むので、外向きの fetch は
@@ -149,6 +150,41 @@ describe('POST /api/feeds', () => {
     stubFetch({ 'https://blog.example.com/': { body: html(''), type: HTML } });
     const response = await apiSend('POST', '/api/feeds', { url: 'https://blog.example.com/' });
     expect(response.status).toBe(404);
+  });
+
+  it('フィードが無いページは、記事の一覧を推定して候補にする（issue #40）', async () => {
+    stubFetch({ 'https://www.example.co.jp/news/': { body: newsListHtml, type: HTML } });
+    const response = await apiSend('POST', '/api/feeds', {
+      url: 'https://www.example.co.jp/news/',
+    });
+
+    expect(response.status).toBe(300);
+    const body = (await response.json()) as FeedCandidatesResponse;
+    expect(body.candidates).toHaveLength(1);
+    const [candidate] = body.candidates;
+    expect(candidate.recipeSource).toBe('score');
+    expect(candidate.preview?.[0]).toBe('冬季休業のお知らせ & 窓口の受付時間について');
+    // 登録はまだしない
+    expect(await selectFeedById(env.DB, 1)).toBeNull();
+
+    // 候補の定義をそのまま送り返すと、その定義で読むフィードとして登録される
+    const created = await apiSend('POST', '/api/feeds', {
+      url: candidate.url,
+      recipe: candidate.recipe,
+      recipeSource: candidate.recipeSource,
+    });
+    expect(created.status).toBe(201);
+    const { feed, entries } = (await created.json()) as CreateFeedResponse;
+    expect(feed.recipeSource).toBe('score');
+    expect(entries.map((entry) => entry.title)).toContain('秋の展示会に出展します');
+  });
+
+  it('壊れた取得定義は 400', async () => {
+    const response = await apiSend('POST', '/api/feeds', {
+      url: 'https://www.example.co.jp/news/',
+      recipe: { version: 1 },
+    });
+    expect(response.status).toBe(400);
   });
 
   it('取得そのものに失敗したら 502', async () => {

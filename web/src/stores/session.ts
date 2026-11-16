@@ -12,6 +12,7 @@ import {
   updateFeed,
 } from '@/lib/api';
 import type {
+  FeedCandidate,
   BootstrapResponse,
   CreateFeedRequest,
   Entry,
@@ -477,7 +478,7 @@ export const useSessionStore = defineStore('session', () => {
     | { kind: 'created' }
     | {
         kind: 'candidates';
-        candidates: { url: string; title: string | null }[];
+        candidates: FeedCandidate[];
         foundAt: string;
       }
   > {

@@ -21,6 +21,8 @@ export interface FeedSeed {
   disabled: number;
   fullText: number;
   fullTextSelector: string | null;
+  recipe: string | null;
+  recipeSource: string | null;
 }
 
 export interface FeedRow {
@@ -46,6 +48,8 @@ export interface FeedRow {
   full_text_selector: string | null;
   full_text_source: string | null;
   full_text_blocked: number;
+  recipe: string | null;
+  recipe_source: string | null;
 }
 
 export interface EntryRow {
@@ -96,6 +100,8 @@ export async function seedFeed(
     disabled: 0,
     fullText: 0,
     fullTextSelector: null,
+    recipe: null,
+    recipeSource: null,
     ...overrides,
   };
 
@@ -104,8 +110,8 @@ export async function seedFeed(
       `INSERT INTO feeds
          (url, title, site_url, rate, folder, read_seq, etag, last_modified, content_hash,
           next_fetch_at, fetch_interval, consecutive_failures, disabled, created_at,
-          full_text, full_text_selector)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          full_text, full_text_selector, recipe, recipe_source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING id`,
     )
     .bind(
@@ -125,6 +131,8 @@ export async function seedFeed(
       0,
       seed.fullText,
       seed.fullTextSelector,
+      seed.recipe,
+      seed.recipeSource,
     )
     .first<{ id: number }>();
 

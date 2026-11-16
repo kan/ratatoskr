@@ -33,8 +33,23 @@ export type SourceOutcome =
       feed: ParsedFeed;
     });
 
+/** 取り込み口に渡す道具。RSS と既知のソースは使わない（取得定義だけが使う） */
+export interface SourceContext {
+  /** robots.txt を見る fetch（src/crawler/polite.ts の page）。HTML のページを取りに行くときに使う */
+  fetchPage?: typeof fetch;
+  /** 取得定義を推定し直すときに使う */
+  ai?: Ai;
+  /** 推定し直した取得定義を覚えさせる */
+  saveRecipe?: (json: string, source: 'ai' | 'score') => Promise<void>;
+}
+
 export interface Source {
-  fetch(target: FetchTarget, fetchImpl: typeof fetch, now: number): Promise<SourceOutcome>;
+  fetch(
+    target: FetchTarget,
+    fetchImpl: typeof fetch,
+    now: number,
+    context?: SourceContext,
+  ): Promise<SourceOutcome>;
   /**
    * 更新の無いフィードの取得間隔を、どこまで延ばしてよいか（秒）。
    * 省けば既定の上限（src/crawler/schedule.ts の MAX_INTERVAL）

@@ -326,6 +326,11 @@ export async function fetchFeed(
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (err) {
+    // 取得定義の一覧のページ（issue #40）は robots.txt を見る。購読を消してよい失敗では
+    // ない（サイトは生きている）ので、一括解除の対象にならない other に分ける
+    if (err instanceof RobotsDisallowedError) {
+      return { kind: 'error', message: err.message, reason: 'other' };
+    }
     return { ...describeNetworkError(err), kind: 'error' };
   }
 

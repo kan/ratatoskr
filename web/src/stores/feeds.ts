@@ -443,6 +443,7 @@ export const useFeedsStore = defineStore('feeds', () => {
     local.fullText = feed.fullText;
     local.fullTextSuggested = feed.fullTextSuggested;
     local.fullTextBlocked = feed.fullTextBlocked;
+    local.recipeSource = feed.recipeSource;
     syncUnreadCount(local);
     if (index === feedIndex.value) absorbNewEntries();
   }

@@ -30,6 +30,7 @@ function feed(id: number, overrides: Partial<Feed> = {}): Feed {
     fullText: false,
     fullTextSuggested: false,
     fullTextBlocked: false,
+    recipeSource: null,
     nsfw: false,
     ...overrides,
   };

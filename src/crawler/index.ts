@@ -6,6 +6,7 @@ import {
   markFullTextSuggested,
   selectCrawlTargets,
   selectCrawlTargetsByIds,
+  updateRecipe,
   type CrawlTarget,
 } from '../db/feeds';
 import { insertEntries, selectKnownGuidHashes, type NewEntry } from '../db/entries';
@@ -150,8 +151,12 @@ async function crawlFeed(
   now: number,
   options: FullTextOptions,
 ): Promise<FeedResult> {
-  const source = sourceFor(target.url);
-  const outcome = await source.fetch(target, options.fetchImpl, now);
+  const source = sourceFor(target);
+  const outcome = await source.fetch(target, options.fetchImpl, now, {
+    fetchPage: options.fetchPage,
+    ai: options.ai,
+    saveRecipe: (json, recipeSource) => updateRecipe(db, target.id, json, recipeSource),
+  });
 
   if (outcome.kind === 'error') {
     await recordFailure(db, target, now, outcome.message, outcome.reason, outcome.retryAfter);

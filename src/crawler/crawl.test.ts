@@ -6,6 +6,7 @@ import { getEntryRows, getFeedRow, seedFeed, setReadSeq } from '../test/seed';
 import asobiReceptionsJson from './__fixtures__/asobiticket-receptions.json?raw';
 import idolmasterNewsJson from './__fixtures__/idolmaster-news.json?raw';
 import rss2Xml from './__fixtures__/rss2.xml?raw';
+import newsListHtml from './__fixtures__/news-list.html?raw';
 
 const NOW = Math.floor(Date.parse('2026-08-05T00:00:00Z') / 1000);
 
@@ -484,5 +485,63 @@ describe('crawl（RSS を出さないサイト）', () => {
     const feed = await getFeedRow(env.DB, id);
     expect(feed.fetch_interval).toBe(3600);
     expect(feed.next_fetch_at).toBe(NOW + 3600);
+  });
+});
+
+/** 取得定義で読むフィード（issue #40） */
+describe('crawl（取得定義）', () => {
+  const PAGE = 'https://www.example.co.jp/news/';
+  /** サイトの作り替えで、もう当たらなくなった定義 */
+  const STALE = JSON.stringify({
+    version: 1,
+    list: {
+      url: PAGE,
+      format: 'html',
+      items: 'div.old-list > div.old-item',
+      fields: { url: { selector: 'a', attr: 'href' }, title: { selector: 'a' } },
+    },
+  });
+  const site = () =>
+    stubFetch(({ url }) =>
+      url.endsWith('/robots.txt')
+        ? new Response('', { status: 404 })
+        : new Response(newsListHtml, { headers: { 'content-type': 'text/html' } }),
+    );
+
+  it('推定した定義が当たらなくなったら、取れたページから推定し直して覚える', async () => {
+    const id = await seedFeed(env.DB, PAGE, { recipe: STALE, recipeSource: 'score' });
+
+    const summary = await crawl(env, { now: NOW, feedIds: [id], fetchImpl: site().fetch });
+
+    expect(summary.inserted).toBe(4);
+    const feed = await getFeedRow(env.DB, id);
+    expect(feed.recipe).not.toBe(STALE);
+    expect(feed.recipe_source).toBe('score');
+    expect(feed.last_error).toBeNull();
+  });
+
+  it('手で書いた定義は推定し直さず、失敗として残す', async () => {
+    const id = await seedFeed(env.DB, PAGE, { recipe: STALE, recipeSource: 'manual' });
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: site().fetch });
+
+    const feed = await getFeedRow(env.DB, id);
+    expect(feed.recipe).toBe(STALE);
+    expect(feed.last_error).toContain('取得定義で記事が 1 件も取れない');
+    expect(feed.last_error_kind).toBe('other');
+  });
+
+  it('一覧のページが robots.txt に禁じられていたら取りに行かない', async () => {
+    const id = await seedFeed(env.DB, PAGE, { recipe: STALE, recipeSource: 'score' });
+    const stub = stubFetch(({ url }) =>
+      url.endsWith('/robots.txt')
+        ? new Response('User-agent: *\nDisallow: /news/')
+        : new Response(newsListHtml),
+    );
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+
+    expect(stub.calls.map((call) => call.url)).toEqual(['https://www.example.co.jp/robots.txt']);
+    expect((await getFeedRow(env.DB, id)).last_error).toContain('robots.txt');
   });
 });

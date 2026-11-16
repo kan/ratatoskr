@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import type { Feed, FeedErrorKind } from '@shared/types';
+import type { Feed, FeedCandidate, FeedErrorKind } from '@shared/types';
 import { REPOSITORY_URL } from '@shared/types';
 import { bookmarkTemplate, DEFAULT_BOOKMARK_TEMPLATE, saveBookmarkTemplate } from '@/lib/bookmark';
 import { bookmarkletFor } from '@/lib/bookmarklet';
@@ -73,7 +73,13 @@ const busy = ref(false);
 const message = ref<string | null>(null);
 const error = ref<string | null>(null);
 /** フィードが複数見つかったときの選択肢。選ぶまで登録しない */
-const candidates = ref<{ url: string; title: string | null }[]>([]);
+const candidates = ref<FeedCandidate[]>([]);
+/**
+ * 手で書いた取得定義（issue #40）。RSS を出さないサイトのうち、ページから推定できない
+ * もの（裏の API を叩く SPA）は、開発時に調べて書いた定義をここに貼って購読する
+ */
+const recipeText = ref('');
+const recipeOpen = ref(false);
 
 // 並びは左ペインと同じ読む順序にする。ここだけ別の規則で並べると、
 // 「上にあるものから読まれる」という前提が画面ごとに食い違う。
@@ -189,15 +195,24 @@ async function run(action: () => Promise<void>): Promise<void> {
   }
 }
 
-function add(feedUrl: string): Promise<void> {
+function add(feedUrl: string, chosen?: FeedCandidate): Promise<void> {
   return run(async () => {
+    const recipe = chosen?.recipe ?? manualRecipe();
     const result = await session.subscribe({
       url: feedUrl,
       rate: rate.value,
       folder: folder.value.trim(),
+      ...(recipe === undefined ? {} : { recipe, recipeSource: chosen?.recipeSource ?? 'manual' }),
     });
     if (result.kind === 'candidates') {
       candidates.value = result.candidates;
+      if (result.candidates.some((candidate) => candidate.recipe !== undefined)) {
+        // フィードが無く、ページから記事の一覧を推定した。外れることがあるので、
+        // 何が取れたかを見せて選ばせる
+        message.value =
+          'フィードが無かったので、ページから記事の一覧を推定した。見出しを確かめて購読する';
+        return;
+      }
       // **どこで見つけたかを言う。** 貼った URL にフィードが無いときは上の階層まで
       // 遡るので（note の記事ページなど）、黙って 1 件だけ並べると
       // 「頼んでいないものを勧められている」ようにしか見えない
@@ -209,8 +224,20 @@ function add(feedUrl: string): Promise<void> {
     }
     candidates.value = [];
     url.value = '';
+    recipeText.value = '';
     message.value = '購読を追加した';
   });
+}
+
+/** 貼られた取得定義。空なら undefined。JSON として読めなければその場で止める */
+function manualRecipe(): unknown {
+  const text = recipeText.value.trim();
+  if (!recipeOpen.value || text === '') return undefined;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new Error('取得定義が JSON として読めない');
+  }
 }
 
 function remove(feed: Feed): Promise<void> | undefined {
@@ -425,12 +452,40 @@ async function onOpmlSelected(event: Event): Promise<void> {
 
       <ul v-if="candidates.length > 0" class="mt-2 space-y-1" data-testid="feed-candidates">
         <li v-for="candidate in candidates" :key="candidate.url">
-          <button class="text-left text-xs hover:underline" @click="add(candidate.url)">
+          <button class="text-left text-xs hover:underline" @click="add(candidate.url, candidate)">
             {{ candidate.title ?? candidate.url }}
             <span class="text-neutral-500">{{ candidate.url }}</span>
+            <span v-if="candidate.recipe !== undefined" class="text-neutral-500">
+              （ページから推定した記事の一覧）
+            </span>
           </button>
+          <ul
+            v-if="candidate.preview"
+            class="ml-4 list-disc text-xs text-neutral-500"
+            :data-testid="`feed-candidate-preview`"
+          >
+            <li v-for="title in candidate.preview" :key="title">{{ title }}</li>
+          </ul>
         </li>
       </ul>
+
+      <details
+        class="mt-2 text-xs"
+        :open="recipeOpen"
+        @toggle="recipeOpen = ($event.target as HTMLDetailsElement).open"
+      >
+        <summary class="cursor-pointer text-neutral-500">取得定義を貼って追加する</summary>
+        <p class="mt-1 text-neutral-500">
+          RSS を出さず、ページから推定もできないサイト向け。上の URL 欄に購読の URL を入れ、
+          開発時に調べて書いた取得定義（JSON）をここに貼って「追加」する
+        </p>
+        <textarea
+          v-model="recipeText"
+          rows="6"
+          class="mt-1 w-full rounded border border-neutral-300 px-2 py-1 font-mono dark:border-neutral-700 dark:bg-neutral-800"
+          data-testid="feed-recipe"
+        ></textarea>
+      </details>
 
       <div class="mt-5 flex items-center gap-3 text-xs">
         <input
@@ -495,6 +550,17 @@ async function onOpmlSelected(event: Event): Promise<void> {
                   :data-testid="`manage-full-text-hint-${feed.id}`"
                 >
                   要約しか配信していない。「全文」で記事ページから本文を取ってこられる
+                </p>
+                <p
+                  v-if="feed.recipeSource !== null"
+                  class="text-neutral-500"
+                  :data-testid="`manage-recipe-${feed.id}`"
+                >
+                  {{
+                    feed.recipeSource === 'manual'
+                      ? '貼った取得定義で読んでいる'
+                      : 'RSS が無いので、ページから推定した取得定義で読んでいる'
+                  }}
                 </p>
                 <p
                   v-if="feed.fullText && feed.fullTextBlocked"

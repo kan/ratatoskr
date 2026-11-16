@@ -95,7 +95,7 @@ function describeCandidates(candidates: Candidate[]): string {
  * あり（llama-3.3-70b-instruct-fp8-fast は実測で後者だった）、前者しか見ていないと
  * 黙って空文字になって、AI を呼んだのに毎回点数へ落ちる。
  */
-function readAnswer(result: unknown): string {
+export function readAnswer(result: unknown): string {
   if (typeof result === 'string') return result;
   if (typeof result !== 'object' || result === null) return '';
 
@@ -113,7 +113,7 @@ function readAnswer(result: unknown): string {
  * `The answer is 2` とも返ってくるので、最初に出てくる数字を採る。
  * 範囲外なら null にして点数の 1 位に落とす。
  */
-function parseChoice(answer: string, count: number): number | null {
+export function parseChoice(answer: string, count: number): number | null {
   const match = /\d+/.exec(answer);
   if (match === null) return null;
 
