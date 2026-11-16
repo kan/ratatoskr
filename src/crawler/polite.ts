@@ -6,6 +6,7 @@ import {
   MAX_ROBOTS_BYTES,
   parseRobots,
   RobotsDisallowedError,
+  RobotsUnavailableError,
   stateForStatus,
   type RobotsRules,
 } from './robots';
@@ -43,7 +44,8 @@ export interface PoliteFetch {
   fetch: typeof fetch;
   /**
    * 記事ページ。`fetch` の決まりに加えて robots.txt を見る。
-   * 禁じられていれば `RobotsDisallowedError` を投げる（src/crawler/fetch.ts の fetchArticlePage）
+   * 禁じられていれば `RobotsDisallowedError`、robots.txt を取れなければ
+   * `RobotsUnavailableError` を投げる（src/crawler/fetch.ts の fetchArticlePage と fetchFeed）
    */
   page: typeof fetch;
 }
@@ -68,7 +70,17 @@ export function createPoliteFetch(fetchImpl: typeof fetch, options: PoliteOption
   /** robots.txt の読み込み。同じ回に同じサイトを何度も見に行かない */
   const robots = new Map<string, Promise<RobotsRules>>();
 
-  const politeFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  /**
+   * @param coolOn503 503 を受けたらホストを冷やすか（429 は常に冷やす）。robots.txt の
+   *   取得では冷やさない。robots.txt だけが 503 を返すサイトで、同じホストのフィード本体まで
+   *   失敗に数えないため（robots.txt を取れなかったことは、控えの方で 1 時間覚えている）。
+   *   429 は「こちらの要求が多い」という明示なので、どの要求で受けても従う
+   */
+  const send = async (
+    input: RequestInfo | URL,
+    init: RequestInit | undefined,
+    coolOn503: boolean,
+  ): Promise<Response> => {
     const host = hostOf(input);
     if (host === null) return fetchImpl(input, init);
 
@@ -88,7 +100,7 @@ export function createPoliteFetch(fetchImpl: typeof fetch, options: PoliteOption
       // **応答の頭が返った時点で次に譲る。** 本文を読み終えるまで握ると、エラー応答の
       // ように本文を読まずに捨てる経路で、同じホストの後続が打ち切りまで詰まる
       const response = await fetchImpl(input, init);
-      if (response.status === 429 || response.status === 503) {
+      if (response.status === 429 || (coolOn503 && response.status === 503)) {
         cooled.set(host, {
           status: response.status,
           retryAfter: response.headers.get('retry-after'),
@@ -100,11 +112,13 @@ export function createPoliteFetch(fetchImpl: typeof fetch, options: PoliteOption
       if (tails.get(host) === tail) tails.delete(host);
     }
   };
+  const politeFetch = (input: RequestInfo | URL, init?: RequestInit) => send(input, init, true);
+  const robotsFetch = (input: RequestInfo | URL, init?: RequestInit) => send(input, init, false);
 
   const rulesFor = (origin: string): Promise<RobotsRules> => {
     let loading = robots.get(origin);
     if (loading === undefined) {
-      loading = loadRobots(origin, politeFetch, options);
+      loading = loadRobots(origin, robotsFetch as typeof fetch, options);
       robots.set(origin, loading);
     }
     return loading;
@@ -118,7 +132,11 @@ export function createPoliteFetch(fetchImpl: typeof fetch, options: PoliteOption
     } catch {
       return politeFetch(input, init);
     }
-    if (!isAllowed(await rulesFor(origin), url)) throw new RobotsDisallowedError(url);
+    const rules = await rulesFor(origin);
+    // disallow_all は取れなかったときにしか付かない（stateForStatus）。本文で全て
+    // 禁じたサイトは state が ok で、規則の方に `Disallow: /` が入る
+    if (rules.state === 'disallow_all') throw new RobotsUnavailableError(url, ROBOTS_FAILURE_TTL);
+    if (!isAllowed(rules, url)) throw new RobotsDisallowedError(url);
     return politeFetch(input, init);
   };
 

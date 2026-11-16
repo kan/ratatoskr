@@ -393,6 +393,24 @@ describe('crawl', () => {
     expect(entries.every((entry) => entry.full_body === '')).toBe(true);
   });
 
+  it('robots.txt を一時的に取れないだけなら、記事に印を付けず、禁じられたとも出さない（issue #39）', async () => {
+    const id = await seedFeed(env.DB, 'https://example.com/feed.xml', { fullText: 1 });
+    const stub = stubFetch(({ url }) => {
+      if (url.endsWith('/robots.txt')) return new Response('', { status: 503 });
+      return xmlResponse(rss2Xml);
+    });
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+
+    expect(stub.calls.some((call) => call.url.includes('/posts/'))).toBe(false);
+    const feed = await getFeedRow(env.DB, id);
+    expect(feed.full_text_blocked).toBe(0);
+    expect(feed.consecutive_failures).toBe(0);
+    // 次の機会に取り直せるよう、印（''）は付けない
+    const entries = await getEntryRows(env.DB, id);
+    expect(entries.every((entry) => entry.full_body === null)).toBe(true);
+  });
+
   it('期限が来ていないフィードは取りに行かない', async () => {
     const due = await seedFeed(env.DB, 'https://due.example.com/feed.xml', { nextFetchAt: NOW });
     const notDue = await seedFeed(env.DB, 'https://notdue.example.com/feed.xml', {
@@ -543,6 +561,19 @@ describe('crawl（取得定義）', () => {
 
     expect(stub.calls.map((call) => call.url)).toEqual(['https://www.example.co.jp/robots.txt']);
     expect((await getFeedRow(env.DB, id)).last_error).toContain('robots.txt');
+  });
+
+  it('一覧のページの robots.txt を取れなければ、控えが切れるまで待つ', async () => {
+    const id = await seedFeed(env.DB, PAGE, { recipe: STALE, recipeSource: 'score' });
+    const stub = stubFetch(({ url }) =>
+      url.endsWith('/robots.txt') ? new Response('', { status: 503 }) : new Response(newsListHtml),
+    );
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+
+    const feed = await getFeedRow(env.DB, id);
+    expect(feed.last_error).toContain('robots.txt を取れない');
+    expect(feed.next_fetch_at).toBe(NOW + 3_600);
   });
 
   it('一覧のページの Retry-After を引き継ぐ（issue #39）', async () => {

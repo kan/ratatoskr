@@ -2,7 +2,7 @@ import { REPOSITORY_URL, type FeedErrorKind } from '../../shared/types';
 import { errorMessage } from '../lib/errors';
 import { sha256Hex } from '../lib/hash';
 import { decodeMarkup } from './charset';
-import { RobotsDisallowedError } from './robots';
+import { RobotsDisallowedError, RobotsUnavailableError } from './robots';
 
 /**
  * フィードの取得。条件付き GET と content_hash による差分判定までを担当し、
@@ -100,7 +100,8 @@ export type FetchOutcome =
       message: string;
       reason: FeedErrorKind;
       /**
-       * 相手が `Retry-After` で指定した待ち時間（秒）。429 / 503 のときだけ付く（issue #39）。
+       * 相手が `Retry-After` で指定した待ち時間（秒）。429 / 503 のときと、robots.txt を
+       * 取れずにページを取りに行かなかったとき（控えの寿命）だけ付く（issue #39）。
        * 次の取得時刻をこれより前にしない（src/crawler/index.ts の recordFailure）
        */
       retryAfter?: number;
@@ -269,6 +270,11 @@ export type ArticlePageOutcome =
   | { kind: 'gone' }
   /** robots.txt に禁じられている（issue #39）。取りに行っていない */
   | { kind: 'disallowed' }
+  /**
+   * robots.txt を取れなかったので取りに行っていない（issue #39）。次の機会に回す。
+   * `retry` と分けるのは、ネットワークに出ていないので取得の枠を返せるから
+   */
+  | { kind: 'unavailable' }
   /** 一時的な失敗。次の機会に回す */
   | { kind: 'retry' };
 
@@ -296,6 +302,7 @@ export async function fetchArticlePage(
     });
   } catch (err) {
     if (err instanceof RobotsDisallowedError) return { kind: 'disallowed' };
+    if (err instanceof RobotsUnavailableError) return { kind: 'unavailable' };
     // 記事 1 本が取れなくてもフィードの取得は成功している。
     // feeds.last_error に書くとフィード自体が壊れているように見えるので書かない
     console.warn('全文の取得に失敗', url, describeNetworkError(err).message);
@@ -330,6 +337,10 @@ export async function fetchFeed(
     // ない（サイトは生きている）ので、一括解除の対象にならない other に分ける
     if (err instanceof RobotsDisallowedError) {
       return { kind: 'error', message: err.message, reason: 'other' };
+    }
+    // robots.txt を取れなかった。控えが切れるまでは何度来ても同じなので、それまで待たせる
+    if (err instanceof RobotsUnavailableError) {
+      return { kind: 'error', message: err.message, reason: 'other', retryAfter: err.retryAfter };
     }
     return { ...describeNetworkError(err), kind: 'error' };
   }

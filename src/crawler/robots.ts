@@ -191,3 +191,22 @@ export class RobotsDisallowedError extends Error {
     this.name = 'RobotsDisallowedError';
   }
 }
+
+/**
+ * robots.txt を取れなかったので、今はそのサイトのページを取りに行かない
+ * （src/crawler/polite.ts が投げる）。
+ *
+ * **`RobotsDisallowedError` と分けるのは、こちらが一時的だから。** RFC 9309 §2.3.1.4 で
+ * 全て禁じる扱いになるが、相手が直れば取りに行ける。禁じられたときと同じに扱うと、
+ * 記事に取り直しを止める印が付き、購読管理画面にも誤った理由が出る
+ */
+export class RobotsUnavailableError extends Error {
+  /** この秒数より前には robots.txt を取り直さない（控えの寿命） */
+  readonly retryAfter: number;
+
+  constructor(url: string, retryAfter: number) {
+    super(`robots.txt を取れないので取りに行かなかった: ${url}`);
+    this.name = 'RobotsUnavailableError';
+    this.retryAfter = retryAfter;
+  }
+}

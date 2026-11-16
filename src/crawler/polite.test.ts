@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { selectRobots, upsertRobots } from '../db/robots';
 import { resetDb } from '../test/seed';
 import { createPoliteFetch } from './polite';
-import { RobotsDisallowedError } from './robots';
+import { RobotsDisallowedError, RobotsUnavailableError } from './robots';
 
 /**
  * クロール中の行儀（issue #39）。見るのは「同じホストへ同時に 2 本出さない」
@@ -148,15 +148,15 @@ describe('createPoliteFetch', () => {
       expect((await polite.page('https://a.example.com/a')).status).toBe(200);
     });
 
-    it('robots.txt が 5xx なら全て禁じる。前の控えがあればそれに従う', async () => {
+    it('robots.txt が 5xx なら取りに行かない（禁じられたとは分ける）。前の控えがあればそれに従う', async () => {
       const stub = controlledFetch((url) =>
         url.endsWith('/robots.txt') ? new Response('', { status: 500 }) : new Response('x'),
       );
 
       const none = createPoliteFetch(stub.impl, { db: env.DB, now: NOW });
-      await expect(none.page('https://a.example.com/a')).rejects.toBeInstanceOf(
-        RobotsDisallowedError,
-      );
+      const error = await none.page('https://a.example.com/a').catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(RobotsUnavailableError);
+      expect((error as RobotsUnavailableError).retryAfter).toBe(3_600);
 
       await upsertRobots(
         env.DB,
@@ -166,6 +166,37 @@ describe('createPoliteFetch', () => {
       );
       const stale = createPoliteFetch(stub.impl, { db: env.DB, now: NOW });
       expect((await stale.page('https://b.example.com/a')).status).toBe(200);
+    });
+
+    it('robots.txt の 503 では、同じホストのフィード本体を止めない', async () => {
+      const stub = controlledFetch((url) =>
+        url.endsWith('/robots.txt') ? new Response('', { status: 503 }) : new Response('x'),
+      );
+      const polite = createPoliteFetch(stub.impl, { db: env.DB, now: NOW });
+
+      await expect(polite.page('https://a.example.com/a')).rejects.toBeInstanceOf(
+        RobotsUnavailableError,
+      );
+      const feed = await polite.fetch('https://a.example.com/feed.xml');
+
+      expect(feed.status).toBe(200);
+      expect(stub.calls.map((c) => c.url)).toEqual([
+        'https://a.example.com/robots.txt',
+        'https://a.example.com/feed.xml',
+      ]);
+    });
+
+    it('robots.txt の 429 では、同じホストへはその回もう出さない', async () => {
+      const stub = controlledFetch((url) =>
+        url.endsWith('/robots.txt') ? new Response('', { status: 429 }) : new Response('x'),
+      );
+      const polite = createPoliteFetch(stub.impl, { db: env.DB, now: NOW });
+
+      await expect(polite.page('https://a.example.com/a')).rejects.toBeInstanceOf(
+        RobotsUnavailableError,
+      );
+      expect((await polite.fetch('https://a.example.com/feed.xml')).status).toBe(429);
+      expect(stub.calls.map((c) => c.url)).toEqual(['https://a.example.com/robots.txt']);
     });
 
     it('robots.txt も取得の枠から引く。尽きていても禁じる扱いにはしない', async () => {

@@ -199,10 +199,13 @@ async function fillFromArticlePages(
 ): Promise<FillOutcome> {
   if (targets.length === 0) return { updates: [], filled: [] };
 
-  const { pages, gone, disallowed } = await fetchArticles(
+  const { pages, gone, disallowed, unavailable } = await fetchArticles(
     targets,
     options.fetchPage ?? options.fetchImpl,
   );
+  // robots.txt を取れずに取りに行かなかった記事の分は枠を返す。控えが切れるまでの
+  // 1 時間、同じ記事が毎回の cron で枠を握り、他のフィードの全文取得を締め出すため
+  releaseBudget(options.budget, unavailable);
   // robots.txt に禁じられたかどうかを購読管理画面に出す（issue #39）。全文取得を
   // 入れたのに埋まらない理由が、他に知りようがない。1 枚でも取れたら下ろす
   // （サイトが robots.txt を緩めた、または禁じられているのが一部のパスだけ）
@@ -354,7 +357,7 @@ interface ArticlePage {
 async function fetchArticles(
   targets: FullTextTarget[],
   fetchImpl: typeof fetch,
-): Promise<{ pages: ArticlePage[]; gone: number[]; disallowed: number }> {
+): Promise<{ pages: ArticlePage[]; gone: number[]; disallowed: number; unavailable: number }> {
   const byPage = new Map<string, FullTextTarget[]>();
   for (const target of targets) {
     const url = pageUrlOf(target.url);
@@ -366,6 +369,8 @@ async function fetchArticles(
   const pages: ArticlePage[] = [];
   const gone: number[] = [];
   let disallowed = 0;
+  /** 記事の数（枠は記事数で確保している） */
+  let unavailable = 0;
   const urls = [...byPage.keys()];
 
   for (let i = 0; i < urls.length; i += CONCURRENCY) {
@@ -387,10 +392,12 @@ async function fetchArticles(
         // 拾い直せないのは、記事が保持期間で入れ替わることで吸収する
         disallowed += 1;
         for (const target of group) gone.push(target.id);
+      } else if (outcome.kind === 'unavailable') {
+        unavailable += group.length;
       }
     }
   }
-  return { pages, gone, disallowed };
+  return { pages, gone, disallowed, unavailable };
 }
 
 /**
