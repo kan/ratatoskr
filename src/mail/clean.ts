@@ -41,8 +41,35 @@ export interface CleanedMail {
   webUrl: string | null;
 }
 
-export async function cleanMailHtml(html: string): Promise<CleanedMail> {
+/**
+ * クリックの計測を挟んだリンクを、本来の行き先に戻す。
+ *
+ * Amazon SES のクリック計測は `https://<配信元>/CL0/<エンコードした行き先>/1/<id>/<署名>` の
+ * 形にリンクを書き換える（theLetter が実際にこれだった）。**戻さないと、読む画面で
+ * リンクを開くたびに送り手へクリックが知らされる。** 保存する URL も本来のものにしたい
+ * （記事の URL・ピン・リンク一覧）。行き先が http(s) でなければ書き換えない
+ */
+export function unwrapTrackedLink(href: string): string {
+  const url = httpUrl(href);
+  const match = url === null ? null : /^\/CL\d\/([^/]+)\//.exec(url.pathname);
+  if (match === null) return href;
+  let target: string;
+  try {
+    target = decodeURIComponent(match[1]);
+  } catch {
+    return href;
+  }
+  return httpUrl(target)?.href ?? href;
+}
+
+/**
+ * @param subject 件名。「ブラウザで見る」が無いメールでは、**件名と同じ文字のリンク**を
+ *   Web 版とみなす（theLetter は見出しが Web 版の記事へのリンクになっている）
+ */
+export async function cleanMailHtml(html: string, subject = ''): Promise<CleanedMail> {
   let webUrl: string | null = null;
+  let titleUrl: string | null = null;
+  const title = normalizeText(subject);
   let pendingHref: string | null = null;
   let pendingText = '';
 
@@ -73,8 +100,11 @@ export async function cleanMailHtml(html: string): Promise<CleanedMail> {
     })
     .on('a[href]', {
       element(element) {
+        const raw = element.getAttribute('href');
+        if (raw === null) return;
+        const href = unwrapTrackedLink(normalizeText(raw));
+        if (href !== normalizeText(raw)) element.setAttribute('href', href);
         if (webUrl !== null) return;
-        const href = element.getAttribute('href');
         elementScope(
           element,
           () => {
@@ -82,8 +112,11 @@ export async function cleanMailHtml(html: string): Promise<CleanedMail> {
             pendingText = '';
           },
           () => {
-            if (webUrl === null && href !== null && WEB_VERSION.test(normalizeText(pendingText))) {
-              webUrl = httpUrl(normalizeText(href))?.href ?? null;
+            const text = normalizeText(pendingText);
+            if (webUrl === null && WEB_VERSION.test(text)) {
+              webUrl = httpUrl(href)?.href ?? null;
+            } else if (titleUrl === null && title !== '' && text === title) {
+              titleUrl = httpUrl(href)?.href ?? null;
             }
             pendingHref = null;
           },
@@ -92,7 +125,9 @@ export async function cleanMailHtml(html: string): Promise<CleanedMail> {
     });
 
   const out = await rewriter.transform(htmlResponse(html)).text();
-  return { html: out, webUrl };
+  // 「ブラウザで見る」が見つかればそちらを優先する。見出しのリンクは、同じ文字の
+  // 別の記事（過去の号の紹介）を指していることがあるので、あくまで代わり
+  return { html: out, webUrl: webUrl ?? titleUrl };
 }
 
 /** テキストだけのメールを HTML にする。空行で段落を分け、行の折り返しは残す */

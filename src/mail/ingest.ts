@@ -76,16 +76,21 @@ export async function ingestMail(
   );
   if (feed.disabled) return { kind: 'dropped' };
 
+  const subject = (parsed.subject ?? '').replace(/\s+/g, ' ').trim();
   const cleaned =
     parsed.html !== undefined && parsed.html.trim() !== ''
-      ? await cleanMailHtml(parsed.html)
+      ? await cleanMailHtml(parsed.html, subject)
       : { html: textToHtml(parsed.text ?? ''), webUrl: null };
   let body = await sanitizeHtml(cleaned.html, cleaned.webUrl);
   if (body.length > MAX_BODY) {
-    body = await sanitizeHtml(textToHtml((parsed.text ?? '').slice(0, MAX_BODY / 2)));
+    // **HTML 版しか無いメールもある**（theLetter がそう）。テキスト版が無ければ、
+    // 空の記事にせず、取り込めなかったことを書いておく（Web 版があればそちらで読める）
+    const text = textToHtml((parsed.text ?? '').slice(0, MAX_BODY / 2));
+    body = await sanitizeHtml(
+      text === '' ? '<p>本文が大きすぎて取り込めなかった。元の記事で読む。</p>' : text,
+    );
   }
 
-  const subject = (parsed.subject ?? '').replace(/\s+/g, ' ').trim();
   // Message-ID が無いメールは、送信者・件名・日付で同一性を決める（転送の重複を潰す）
   const identity = parsed.messageId ?? `${address}\n${subject}\n${parsed.date ?? ''}`;
   const inserted = await insertEntries(

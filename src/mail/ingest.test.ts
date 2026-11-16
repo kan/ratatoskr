@@ -163,6 +163,30 @@ describe('ingestMail', () => {
     expect(english?.translated_title).toBe('訳:Weekly roundup');
   });
 
+  it('「ブラウザで見る」が無ければ、件名と同じ見出しのリンクを記事の URL にする（theLetter の形）', async () => {
+    // theLetter の実物の形を、本文を差し替えて再現したもの。HTML 版しか無く、見出しが
+    // Web 版の記事へのリンクで、全てのリンクに Amazon SES のクリック計測が挟まっている
+    const tracked = (url: string) =>
+      `https://mt.example.jp/CL0/${encodeURIComponent(url)}/1/0106-abc/sig=`;
+    const html = `<html><body><table><tr><td>
+      <h1><a href="${tracked('https://author.example.jp/posts/123?utm_source=newsletter')}">号の見出し</a></h1>
+      <p>本文の段落。</p>
+      <a href="${tracked('https://author.example.jp/posts/123')}">コメントする</a>
+      <img src="https://author.example.jp/logging/mail/open/abc" alt="" style="width: 1px; height: 1px;">
+    </td></tr></table></body></html>`;
+    const outcome = await deliver(
+      rawMail({ from: '書き手 <author@theletter.example>', subject: '号の見出し', html }),
+    );
+    if (outcome.kind !== 'stored') throw new Error('入っていない');
+
+    const [entry] = await getEntryRows(env.DB, outcome.feedId);
+    expect(entry.url).toBe('https://author.example.jp/posts/123?utm_source=newsletter');
+    // 読む画面でリンクを開いても、送り手にクリックが知らされない
+    expect(entry.body).not.toContain('mt.example.jp');
+    expect(entry.body).toContain('href="https://author.example.jp/posts/123"');
+    expect(entry.body).not.toContain('logging/mail/open');
+  });
+
   it('メールのフィードはクロールの対象にしない', async () => {
     await deliver(rawMail({ html: NEWSLETTER }));
     expect(await selectCrawlTargets(env.DB, NOW + 86_400, 20)).toEqual([]);
