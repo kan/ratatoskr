@@ -222,6 +222,18 @@ describe('inferRecipe', () => {
     expect(typeof parseRecipe(inferred?.recipe)).toBe('object');
   });
 
+  it('<time> を使わないサイトでも、日付のクラスから日付を取る', async () => {
+    const html = newsListHtml.replace(
+      /<time datetime="[^"]*">([^<]*)<\/time>/g,
+      '<span class="post-date">$1</span>',
+    );
+    const inferred = await inferRecipe(html, PAGE, '', undefined, NOW);
+    expect(inferred?.feed.items).toHaveLength(4);
+    expect(inferred?.feed.items[0].publishedAt).toBe(
+      Math.floor(Date.parse('2026-11-13T15:00:00Z') / 1000),
+    );
+  });
+
   it('埋め込まれた JSON（__NEXT_DATA__）の記事の配列を見つける', async () => {
     const page = 'https://example.com/blog';
     const inferred = await inferRecipe(nextDataHtml, page, 'Blog', undefined, NOW);

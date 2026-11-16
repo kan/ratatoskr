@@ -138,6 +138,14 @@ async function inferFromPage(env: Env, url: string): Promise<SharedFeedCandidate
   const now = Math.floor(Date.now() / 1000);
   const polite = createPoliteFetch(fetch, { db: env.DB, now });
   const page = await fetchArticlePage(url, polite.page);
+  // 禁じられているのに「フィードが無い」と返すと、理由が分からないまま諦めることになる
+  if (page.kind === 'disallowed') {
+    throw new ApiError(
+      'feed_not_found',
+      'このページにフィードが無く、記事の一覧を推定しようとしたが、サイトの robots.txt で取得が禁じられている',
+      404,
+    );
+  }
   if (page.kind !== 'ok') return null;
   const title = (await titleFromHtml(page.html)) ?? '';
   const inferred = await inferRecipe(page.html, url, title, env.AI, now);

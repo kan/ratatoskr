@@ -1,4 +1,5 @@
 import PostalMime from 'postal-mime';
+import { parseDate } from '../crawler/date';
 import { sanitizeHtml } from '../crawler/sanitize';
 import { titleFromBody } from '../crawler/title';
 import { insertEntries } from '../db/entries';
@@ -103,12 +104,12 @@ export async function ingestMail(
   return { kind: 'stored', feedId: feed.id, inserted: inserted > 0 };
 }
 
+/**
+ * Date ヘッダを Unix 秒にする。読み方はフィードの日付と同じ（src/crawler/date.ts）。
+ * 送り手の時計がずれて少し未来の日付になることがある。順序は id で決まるので実害は
+ * 無いが、画面に未来の日付が出ないように受信時刻で頭打ちにする
+ */
 function dateOf(value: string | undefined, now: number): number | null {
-  if (value === undefined) return null;
-  const ms = Date.parse(value);
-  if (Number.isNaN(ms)) return null;
-  const seconds = Math.floor(ms / 1000);
-  // 送り手の時計がずれて未来の日付になることがある。順序は id で決まるので実害は無いが、
-  // 画面に未来の日付が出ないように受信時刻で頭打ちにする
-  return Math.min(seconds, now);
+  const seconds = parseDate(value, now);
+  return seconds === null ? null : Math.min(seconds, now);
 }

@@ -9,8 +9,13 @@
  * 足せば同じ値になり、記事送りの経路に定期処理を挟まずに済む。
  */
 
-/** 操作が無いまま、読んでいると数え続ける上限（ミリ秒） */
-export const IDLE_LIMIT = 60_000;
+/**
+ * 操作が無いまま、読んでいると数え続ける上限（秒）。
+ *
+ * 時刻は全て Unix 秒（整数）で受ける（CLAUDE.md）。1 秒未満の端数は落ちるが、
+ * 1 秒未満の表示はもともと数えない（stores/reading.ts の MIN_SECONDS）
+ */
+export const IDLE_LIMIT = 60;
 
 export interface DwellClock {
   /** 記事の表示を始めた */
@@ -21,7 +26,7 @@ export interface DwellClock {
   pause(now: number): void;
   /** 見えるようになった・フォーカスを得た */
   resume(now: number): void;
-  /** 表示を終えた。数えた秒数（整数）を返して止まる */
+  /** 表示を終えた。数えた秒数を返して止まり、数えた分を捨てる（二度返さない） */
   stop(now: number): number;
 }
 
@@ -43,12 +48,10 @@ export function createDwellClock(): DwellClock {
       running = true;
       last = now;
     },
+    // 止まっている間の操作では再開しない。再開はフォーカスと可視性（resume）が決める。
+    // ここで再開すると、見えていない窓へのホイールやタッチで数え始めてしまう
     activity(now) {
       if (!running) return;
-      if (last === null) {
-        last = now;
-        return;
-      }
       accrue(now);
     },
     pause(now) {
@@ -62,7 +65,9 @@ export function createDwellClock(): DwellClock {
       accrue(now);
       running = false;
       last = null;
-      return Math.round(total / 1000);
+      const seconds = total;
+      total = 0;
+      return seconds;
     },
   };
 }

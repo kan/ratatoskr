@@ -26,31 +26,44 @@ export const useReadingStore = defineStore('reading', () => {
   const clock = createDwellClock();
   let current: Entry | null = null;
 
+  // 時刻は全て Unix 秒（CLAUDE.md）。時計にも同じ値を渡す
   const nowSeconds = (): number => Math.floor(Date.now() / 1000);
 
   function newId(): string {
     return crypto.randomUUID();
   }
 
-  /** いま表示している記事の分を締めて積む */
+  /**
+   * いま表示している記事の分を締めて積む。**締めたら記事を手放す。** 隠れている間に
+   * カーソルが動くと、もう一度締めに来る（同じ記事の分を二度積まない）
+   */
   function close(at: number): void {
     if (current === null) return;
     const seconds = clock.stop(at);
+    const closed = current;
+    current = null;
     if (seconds >= MIN_SECONDS) {
       outbox.queueEvent({
         id: newId(),
         kind: 'dwell',
         at: nowSeconds(),
-        feedId: current.feedId,
-        entryId: current.id,
+        feedId: closed.feedId,
+        entryId: closed.id,
         seconds,
       });
     }
   }
 
+  /**
+   * 記事の表示を始める。**見えていなければ止まった状態で始める。** フォーカスの無い窓で
+   * 記事が変わった（背景の同期がカーソルを座らせ直した）ときも、フォーカスが戻った時点から
+   * 数えられるように
+   */
   function open(entry: Entry | null, at: number): void {
     current = entry;
-    if (entry !== null && visible()) clock.start(at);
+    if (entry === null) return;
+    clock.start(at);
+    if (!visible()) clock.pause(at);
   }
 
   function visible(): boolean {
@@ -86,7 +99,7 @@ export const useReadingStore = defineStore('reading', () => {
 
   /** 何か操作した（キー・スクロール・タップ） */
   function activity(): void {
-    clock.activity(Date.now());
+    clock.activity(nowSeconds());
   }
 
   /**
@@ -94,18 +107,18 @@ export const useReadingStore = defineStore('reading', () => {
    * outbox が送る」の順でなければ、最後に読んでいた記事の分が送られない（stores/session.ts）
    */
   function install(): void {
-    open(feeds.currentEntry, Date.now());
+    open(feeds.currentEntry, nowSeconds());
     watch(
       () => feeds.currentEntry,
       (entry, previous) => {
         if (entry?.id === previous?.id) return;
-        const at = Date.now();
+        const at = nowSeconds();
         close(at);
         open(entry, at);
       },
     );
     document.addEventListener('visibilitychange', () => {
-      const at = Date.now();
+      const at = nowSeconds();
       if (document.visibilityState === 'hidden') {
         // 一度締める。隠れたまま閉じられても、そこまで読んだ分は残る
         close(at);
@@ -113,8 +126,8 @@ export const useReadingStore = defineStore('reading', () => {
       }
       open(feeds.currentEntry, at);
     });
-    window.addEventListener('blur', () => clock.pause(Date.now()));
-    window.addEventListener('focus', () => clock.resume(Date.now()));
+    window.addEventListener('blur', () => clock.pause(nowSeconds()));
+    window.addEventListener('focus', () => clock.resume(nowSeconds()));
     // 読んでいる最中の操作。キーは App.vue の keydown が activity を呼ぶ（キーの判定は
     // keymap.ts に寄せてあり、ここで keydown を別に聞かない）
     for (const type of ['pointerdown', 'wheel', 'touchmove'] as const) {

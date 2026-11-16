@@ -197,7 +197,9 @@ async function run(action: () => Promise<void>): Promise<void> {
 
 function add(feedUrl: string, chosen?: FeedCandidate): Promise<void> {
   return run(async () => {
-    const recipe = chosen?.recipe ?? manualRecipe();
+    // **候補を選んだときは貼った定義を使わない。** 貼ったまま検出に回った URL の候補
+    // （ふつうの RSS）を選ぶと、その RSS が定義で読むフィードとして登録されてしまう
+    const recipe = chosen === undefined ? manualRecipe() : chosen.recipe;
     const result = await session.subscribe({
       url: feedUrl,
       rate: rate.value,

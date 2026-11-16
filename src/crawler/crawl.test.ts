@@ -587,6 +587,18 @@ describe('crawl（翻訳）', () => {
     expect((await getEntryRows(env.DB, id)).every((e) => e.translated_body === null)).toBe(true);
   });
 
+  it('AI が使えない回は印を付けず、次の回に訳す', async () => {
+    const id = await seedFeed(env.DB, 'https://en.example.com/feed', { translate: 1 });
+    const down = { run: () => Promise.reject(new Error('quota')) } as unknown as Ai;
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: english().fetch, ai: down });
+    expect((await getEntryRows(env.DB, id)).every((e) => e.translated_body === null)).toBe(true);
+
+    await crawl(env, { now: NOW + 3600, feedIds: [id], fetchImpl: english().fetch, ai });
+    const after = await getEntryRows(env.DB, id);
+    expect(after.every((e) => e.translated_body?.includes('訳:'))).toBe(true);
+  });
+
   it('回の上限を超えた分は残し、次の回に訳す', async () => {
     const id = await seedFeed(env.DB, 'https://en.example.com/feed', { translate: 1 });
 

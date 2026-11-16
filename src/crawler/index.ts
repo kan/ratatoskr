@@ -98,9 +98,12 @@ export interface CrawlSummary {
 
 export async function crawl(env: Env, options: CrawlOptions = {}): Promise<CrawlSummary> {
   const now = options.now ?? Math.floor(Date.now() / 1000);
+  // フィードをまたいで減っていく。1 本のフィードが使い切ることがある
+  const budget: FetchBudget = { remaining: options.fullTextLimit ?? MAX_FULL_TEXT_PER_RUN };
   // 外向きの要求は全てこの包みを通す（issue #39）。同じホストへは 1 本ずつ、
-  // 流量の制限を受けたホストにはその回もう出さない、記事ページは robots.txt を見る
-  const polite = createPoliteFetch(options.fetchImpl ?? fetch, { db: env.DB, now });
+  // 流量の制限を受けたホストにはその回もう出さない、記事ページは robots.txt を見る。
+  // robots.txt を取りに行く分も、記事ページと同じ枠から引く
+  const polite = createPoliteFetch(options.fetchImpl ?? fetch, { db: env.DB, now, budget });
   const fetchImpl = polite.fetch;
   const concurrency = options.concurrency ?? CONCURRENCY;
 
@@ -115,8 +118,6 @@ export async function crawl(env: Env, options: CrawlOptions = {}): Promise<Crawl
     failed: 0,
     filledEntryIds: [],
   };
-  // フィードをまたいで減っていく。1 本のフィードが使い切ることがある
-  const budget: FetchBudget = { remaining: options.fullTextLimit ?? MAX_FULL_TEXT_PER_RUN };
   const translateBudget: FetchBudget = {
     remaining: options.translateLimit ?? MAX_TRANSLATIONS_PER_RUN,
   };

@@ -179,6 +179,21 @@ describe('POST /api/feeds', () => {
     expect(entries.map((entry) => entry.title)).toContain('秋の展示会に出展します');
   });
 
+  it('推定しようとしたページが robots.txt で禁じられていたら、その理由を返す', async () => {
+    stubFetch({
+      'https://www.example.co.jp/news/': { body: newsListHtml, type: HTML },
+      'https://www.example.co.jp/robots.txt': {
+        body: 'User-agent: *\nDisallow: /news/',
+        type: 'text/plain',
+      },
+    });
+    const response = await apiSend('POST', '/api/feeds', {
+      url: 'https://www.example.co.jp/news/',
+    });
+    expect(response.status).toBe(404);
+    expect(JSON.stringify(await response.json())).toContain('robots.txt');
+  });
+
   it('壊れた取得定義は 400', async () => {
     const response = await apiSend('POST', '/api/feeds', {
       url: 'https://www.example.co.jp/news/',

@@ -60,7 +60,18 @@ export interface Translation {
 }
 
 /**
- * 記事を訳す。訳せなければ null（AI が使えない・応答が読めない）。
+ * 訳せなかった理由。**取り直してよいかで分ける。**
+ *
+ * - unavailable … Workers AI が使えなかった（障害・無料枠切れ）。時間を置けば訳せる
+ * - unreadable … 応答の形が読めなかった。同じ記事は同じ応答になりやすく、取り直しても
+ *   無料枠を使い続けるだけ
+ * - too_long … 1 記事に使える問い合わせ（MAX_CHUNKS）に収まらない。頭だけ訳した記事は
+ *   どこまでが訳なのか分からなくなるので、訳さない
+ */
+export type TranslationFailure = 'unavailable' | 'unreadable' | 'too_long';
+
+/**
+ * 記事を訳す。
  *
  * @param baseUrl サニタイズで相対 URL を解く基準（記事の URL）
  */
@@ -69,13 +80,16 @@ export async function translateEntry(
   bodyHtml: string,
   baseUrl: string | null,
   ai: Ai,
-): Promise<Translation | null> {
+): Promise<Translation | TranslationFailure> {
   const fragments = await collectFragments(bodyHtml);
   const sources = [title, ...fragments.map((fragment) => fragment.text)];
+  if (sources.join('').length > CHUNK_CHARS * MAX_CHUNKS) return 'too_long';
 
   const translated: (string | null)[] = new Array<string | null>(sources.length).fill(null);
   let start = 0;
-  for (let chunk = 0; chunk < MAX_CHUNKS && start < sources.length; chunk += 1) {
+  for (let chunk = 0; start < sources.length; chunk += 1) {
+    // 断片の切れ目で塊を分けるので、文字数で見積もった上限より塊が増えることがある
+    if (chunk >= MAX_CHUNKS) return 'too_long';
     let end = start;
     let size = 0;
     while (end < sources.length && (end === start || size + sources[end].length <= CHUNK_CHARS)) {
@@ -83,9 +97,9 @@ export async function translateEntry(
       end += 1;
     }
     const result = await translateBatch(sources.slice(start, end), ai);
-    // 1 塊でも読めなければ訳さない扱いにする。頭だけ訳した記事より、全部原文の方が
+    // 1 塊でも訳せなければ訳さない扱いにする。頭だけ訳した記事より、全部原文の方が
     // 読み手が戸惑わない（どこまでが訳なのか分からなくなる）
-    if (result === null) return null;
+    if (typeof result === 'string') return result;
     result.forEach((text, offset) => (translated[start + offset] = text));
     start = end;
   }
@@ -97,7 +111,10 @@ export async function translateEntry(
   };
 }
 
-async function translateBatch(sources: string[], ai: Ai): Promise<string[] | null> {
+async function translateBatch(
+  sources: string[],
+  ai: Ai,
+): Promise<string[] | 'unavailable' | 'unreadable'> {
   let answer: string;
   try {
     const result = await ai.run(MODEL, {
@@ -112,9 +129,9 @@ async function translateBatch(sources: string[], ai: Ai): Promise<string[] | nul
     answer = readAnswer(result);
   } catch (err) {
     console.warn('翻訳に失敗', err instanceof Error ? err.message : String(err));
-    return null;
+    return 'unavailable';
   }
-  return parseTranslations(answer, sources.length);
+  return parseTranslations(answer, sources.length) ?? 'unreadable';
 }
 
 /**
@@ -248,10 +265,13 @@ export async function translatePending(
       continue;
     }
     const translated = await translateEntry(target.title, target.body, target.url, options.ai);
-    // 読めない応答だった。印を付けて取り直しを止める（同じ記事は同じ応答になりやすく、
-    // 付けないと毎回この記事で枠を使い切る）
+    // **AI が使えないときは印を付けない。** 付けると、障害や無料枠切れの間に回ってきた
+    // 記事が二度と訳されない。残りの記事も同じ結果になるので、この回はここでやめる
+    if (translated === 'unavailable') break;
+    // 読めない応答・長すぎる記事には印を付けて取り直しを止める（同じ記事は同じ結果に
+    // なりやすく、付けないと毎回この記事で枠を使い切る）
     rows.push(
-      translated === null
+      typeof translated === 'string'
         ? { id: target.id, title: '', body: '' }
         : { id: target.id, title: translated.title, body: translated.body },
     );

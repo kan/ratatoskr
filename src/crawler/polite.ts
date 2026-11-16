@@ -1,7 +1,14 @@
 import { selectRobots, upsertRobots, type StoredRobots } from '../db/robots';
 import { errorMessage } from '../lib/errors';
-import { readBoundedMarkup, TIMEOUT_MS, USER_AGENT } from './fetch';
 import {
+  readBoundedMarkup,
+  reserveBudget,
+  TIMEOUT_MS,
+  USER_AGENT,
+  type FetchBudget,
+} from './fetch';
+import {
+  DISALLOW_ALL,
   isAllowed,
   MAX_ROBOTS_BYTES,
   parseRobots,
@@ -52,6 +59,12 @@ export interface PoliteOptions {
   /** robots.txt の控え。無ければ毎回取りに行く（テスト用） */
   db?: D1Database;
   now: number;
+  /**
+   * robots.txt を取りに行くときに引く枠（全文取得と共有。src/crawler/index.ts）。
+   * サブリクエスト上限のため、記事ページと同じく数える（docs/DESIGN.md §5）。
+   * 省けば上限なし（購読の追加のような 1 回きりの経路）
+   */
+  budget?: FetchBudget;
 }
 
 export function createPoliteFetch(fetchImpl: typeof fetch, options: PoliteOptions): PoliteFetch {
@@ -154,6 +167,11 @@ async function loadRobots(
   }
   if (stored !== null && stored.expiresAt > now) return rulesOf(stored);
 
+  // **枠が尽きていたら取りに行かず、この回は禁じる扱いにする**（控えには残さない）。
+  // 記事ページはどのみち次の回に回るので、取りこぼしにはならない
+  if (options.budget !== undefined && reserveBudget(options.budget, 1) === 0) {
+    return stored !== null && stored.state !== 'disallow_all' ? rulesOf(stored) : DISALLOW_ALL;
+  }
   const fetched = await fetchRobots(origin, fetchImpl, now);
   // 取れなかったときは、期限切れでも前の控えに従う（RFC 9309 §2.4。相手が一時的に
   // 落ちているだけで全文取得を止めない）。前の控えも無ければ全て禁じる

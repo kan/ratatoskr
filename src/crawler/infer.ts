@@ -79,21 +79,28 @@ export async function inferRecipe(
     ...(await htmlCandidates(html, pageUrl, base)),
   ];
 
-  // 確かめる。取れた記事数で点数を付け直す（一覧の長さは、走査の点数より確か）
-  const verified: (Candidate & { feed: ParsedFeed })[] = [];
-  const seen = new Set<string>();
+  // 確かめる。日付まで取れたものは点を上げる
+  const scored: (Candidate & { feed: ParsedFeed })[] = [];
   for (const draft of drafts) {
     const feed = await recipeFeed(draft.recipe, html, pageUrl, now);
     if (feed.items.length < MIN_ITEMS) continue;
-    // 同じ記事の並びを指す候補は 1 つにする（JSON と HTML の両方で見つかることがある）
-    const key = feed.items.map((item) => item.url).join('\n');
+    const dated = feed.items.some((item) => item.publishedAt !== null) ? 1.5 : 1;
+    scored.push({ ...draft, feed, score: draft.score * dated });
+  }
+  scored.sort((a, b) => b.score - a.score);
+
+  // 同じ記事の並びを指す候補は 1 つにする（JSON と HTML の両方で見つかる、日付の取り方
+  // だけが違う）。**点の高い順に並べてから**残す。見つけた順に残すと、日付の取れない
+  // 版が先に来たとき、日付の取れる版が捨てられる
+  const verified: (Candidate & { feed: ParsedFeed })[] = [];
+  const seen = new Set<string>();
+  for (const candidate of scored) {
+    const key = candidate.feed.items.map((item) => item.url).join('\n');
     if (seen.has(key)) continue;
     seen.add(key);
-    const dated = feed.items.some((item) => item.publishedAt !== null) ? 1.5 : 1;
-    verified.push({ ...draft, feed, score: draft.score * dated });
+    verified.push(candidate);
   }
   if (verified.length === 0) return null;
-  verified.sort((a, b) => b.score - a.score);
 
   const shortlist = verified.slice(0, MAX_CANDIDATES);
   const top = shortlist[0];
