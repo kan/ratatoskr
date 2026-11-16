@@ -42,6 +42,22 @@ const reader = ref<InstanceType<typeof EntryReader> | null>(null);
 const linkList = ref<InstanceType<typeof LinkList> | null>(null);
 
 /**
+ * 訳した記事で原文を出しているか（issue #42。t キー）。**記事を移ったら訳文に戻す。**
+ * 既定はフィードの設定（訳すと決めたなら訳文）で、原文はその記事だけ覗くもの。
+ * カーソルは持たない（不変条件 2）。出し分けは表示の都合なのでここに置く
+ */
+const showOriginal = ref(false);
+watch(
+  () => feeds.currentEntry?.id,
+  () => (showOriginal.value = false),
+);
+const readerEntry = computed(() => {
+  const entry = feeds.currentEntry;
+  if (entry === null || entry.translation === undefined || showOriginal.value) return entry;
+  return { ...entry, title: entry.translation.title, body: entry.translation.body };
+});
+
+/**
  * 狭い画面では記事ビューが既定で、フィード一覧はヘッダから開く引き出しになる
  * （docs/UX.md「画面構成（スマホ）」）。左ペインを常に出しておける幅が無いため。
  */
@@ -301,6 +317,9 @@ function handle(binding: KeyBinding): boolean {
       break;
     case 'openOriginal':
       openOriginal();
+      break;
+    case 'toggleTranslation':
+      showOriginal.value = !showOriginal.value;
       break;
     case 'bookmarkEntry':
       bookmarkCurrentEntry();
@@ -845,7 +864,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
         v-else
         ref="reader"
         class="min-h-0 flex-1"
-        :entry="feeds.currentEntry"
+        :entry="readerEntry"
+        :translated="feeds.currentEntry?.translation !== undefined && !showOriginal"
         :empty-label="emptyLabel"
         :pinned="currentPinned"
         @next="feeds.nextEntry()"

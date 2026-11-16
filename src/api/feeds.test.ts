@@ -294,6 +294,32 @@ describe('PATCH /api/feeds/:id の nsfw', () => {
   });
 });
 
+describe('PATCH /api/feeds/:id の translate（issue #42）', () => {
+  it('訳文は記事に添えて配り、訳すのをやめたら捨てて原文に戻す', async () => {
+    const feedId = await seedFeed(env.DB, 'https://en.example.com/feed');
+    const entryId = await seedEntry(env.DB, feedId, { title: 'Hello', body: '<p>World</p>' });
+    await env.DB.prepare(
+      `UPDATE entries SET translated_title = '訳題', translated_body = '<p>訳文</p>' WHERE id = ?`,
+    )
+      .bind(entryId)
+      .run();
+    await apiSend('PATCH', `/api/feeds/${feedId}`, { translate: true });
+
+    const before = await apiJson<BootstrapResponse>('/api/bootstrap');
+    const entry = before.entries.find((e) => e.id === entryId);
+    expect(entry?.title).toBe('Hello');
+    expect(entry?.translation).toEqual({ title: '訳題', body: '<p>訳文</p>' });
+    expect(before.feeds.find((f) => f.id === feedId)?.translate).toBe(true);
+
+    await apiSend('PATCH', `/api/feeds/${feedId}`, { translate: false });
+    const after = await apiJson<BootstrapResponse>('/api/bootstrap');
+    expect(after.entries.find((e) => e.id === entryId)?.translation).toBeUndefined();
+    const [row] = await getEntryRows(env.DB, feedId);
+    expect(row.translated_body).toBeNull();
+    expect(row.body_updated_at).not.toBeNull();
+  });
+});
+
 describe('DELETE /api/feeds/:id', () => {
   it('記事ごと消す', async () => {
     const id = await seedFeed(env.DB, 'https://gone.example.com/feed');

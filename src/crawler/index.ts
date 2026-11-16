@@ -4,6 +4,7 @@ import {
   markFetchSuccess,
   markFetchUnchanged,
   markFullTextSuggested,
+  markTranslateSuggested,
   selectCrawlTargets,
   selectCrawlTargetsByIds,
   updateRecipe,
@@ -15,6 +16,7 @@ import { mayHaveTweetEmbed, resolveTweetEmbeds } from './embed';
 import type { FetchBudget } from './fetch';
 import { fillFullText, looksSummaryOnly, type FullTextOptions } from './fulltext';
 import { createPoliteFetch } from './polite';
+import { needsTranslation, translatePending } from './translate';
 import { sanitizeHtml } from './sanitize';
 import { sourceFor } from './source';
 import { titleFromBody } from './title';
@@ -51,6 +53,14 @@ const MAX_ERROR_LENGTH = 500;
  */
 const MAX_FULL_TEXT_PER_RUN = 20;
 
+/**
+ * 1 回の cron で訳す記事数の上限（全フィード合わせて。issue #42）。
+ *
+ * 1 記事に Workers AI を 1〜数回呼ぶ。5 分毎の実行なので 1 日に最大 2,880 記事ぶんになるが、
+ * 実際には訳すフィードの新着の数で決まる。無料枠を食い潰さない程度に抑える
+ */
+const MAX_TRANSLATIONS_PER_RUN = 10;
+
 export interface CrawlOptions {
   now?: number;
   limit?: number;
@@ -63,6 +73,8 @@ export interface CrawlOptions {
   ai?: Ai;
   /** 記事ページを取りに行ける数の上限。既定は MAX_FULL_TEXT_PER_RUN */
   fullTextLimit?: number;
+  /** 訳せる記事数の上限。既定は MAX_TRANSLATIONS_PER_RUN */
+  translateLimit?: number;
 }
 
 export interface CrawlSummary {
@@ -105,6 +117,9 @@ export async function crawl(env: Env, options: CrawlOptions = {}): Promise<Crawl
   };
   // フィードをまたいで減っていく。1 本のフィードが使い切ることがある
   const budget: FetchBudget = { remaining: options.fullTextLimit ?? MAX_FULL_TEXT_PER_RUN };
+  const translateBudget: FetchBudget = {
+    remaining: options.translateLimit ?? MAX_TRANSLATIONS_PER_RUN,
+  };
 
   // Promise.allSettled をチャンクに分けて回す。1 本の失敗で他を巻き込まない
   for (let i = 0; i < targets.length; i += concurrency) {
@@ -116,6 +131,7 @@ export async function crawl(env: Env, options: CrawlOptions = {}): Promise<Crawl
           fetchPage: polite.page,
           ai: options.ai ?? env.AI,
           budget,
+          translateBudget,
         }),
       ),
     );
@@ -145,11 +161,15 @@ interface FeedResult {
   filled: number[];
 }
 
+interface CrawlFeedOptions extends FullTextOptions {
+  translateBudget: FetchBudget;
+}
+
 async function crawlFeed(
   db: D1Database,
   target: CrawlTarget,
   now: number,
-  options: FullTextOptions,
+  options: CrawlFeedOptions,
 ): Promise<FeedResult> {
   const source = sourceFor(target);
   const outcome = await source.fetch(target, options.fetchImpl, now, {
@@ -174,7 +194,11 @@ async function crawlFeed(
     // 新着が無くても、まだ全文の入っていない未読は埋める。設定を入れた直後に
     // 手持ちの未読が置き去りになるのを防ぐ
     const { filled } = await fillFullText(db, target, options);
-    return { inserted: 0, failed: false, filled };
+    return {
+      inserted: 0,
+      failed: false,
+      filled: [...filled, ...(await translate(db, target, options))],
+    };
   }
 
   const parsed = outcome.feed;
@@ -224,9 +248,33 @@ async function crawlFeed(
   // 勧めるだけで取りには行かない。相手のサーバに記事の数だけ取りに行く動作なので、
   // 始めるかどうかはユーザが決める（migrations/0003_full_text.sql）
   if (summaryOnly) await markFullTextSuggested(db, target.id);
+  // 日本語でないなら訳すことを勧める（issue #42）。勧めるだけで、訳すかはユーザが決める
+  if (!target.translate && looksForeign(rows)) await markTranslateSuggested(db, target.id);
 
+  // **全文を取ってから訳す。** 訳文は読み出す本文（全文があれば全文）から作るので、
+  // 逆の順にすると要約を訳した後で全文が入り、訳し直しになる
   const { filled } = await fillFullText(db, target, options);
-  return { inserted, failed: false, filled };
+  return {
+    inserted,
+    failed: false,
+    filled: [...filled, ...(await translate(db, target, options))],
+  };
+}
+
+function translate(
+  db: D1Database,
+  target: CrawlTarget,
+  options: CrawlFeedOptions,
+): Promise<number[]> {
+  return translatePending(db, target, { ai: options.ai, budget: options.translateBudget });
+}
+
+/**
+ * 取り込んだ記事が日本語でないか。見出しを繋げて見る（本文は要約しか無いことがあり、
+ * 見出し 1 本では短すぎて判定できない）
+ */
+function looksForeign(rows: NewEntry[]): boolean {
+  return needsTranslation(rows.map((row) => row.title).join(' '));
 }
 
 /**

@@ -21,6 +21,8 @@ const props = defineProps<{
    * 文言そのものを受け取る（起動の途中は「無い」と断定しない。issue #10）
    */
   emptyLabel: string;
+  /** 訳文を出しているか（issue #42）。原文に切り替えられることを知らせるだけ */
+  translated?: boolean;
 }>();
 
 /**
@@ -262,6 +264,7 @@ defineExpose({ pageDown, pageUp, scrollToBottom, links });
             <span v-if="entry.publishedAt">{{
               new Date(entry.publishedAt * 1000).toLocaleString('ja-JP')
             }}</span>
+            <span v-if="translated" data-testid="entry-translated"> / 訳文（t で原文）</span>
           </p>
           <hr class="my-4 border-neutral-300 dark:border-neutral-700" />
           <!-- body は取り込み時にサーバ側でサニタイズ済み（CLAUDE.md の不変条件 4） -->

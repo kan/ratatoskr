@@ -5,7 +5,7 @@ import type {
   ReadMark,
   RecipeSource,
 } from '../../shared/types';
-import { CLEAR_FULL_BODIES } from './entries';
+import { CLEAR_FULL_BODIES, CLEAR_TRANSLATIONS } from './entries';
 import { COPY_NSFW_TO_PINS } from './pins';
 import { UNREAD_COUNT_SUBQUERY } from './unread';
 
@@ -32,6 +32,8 @@ interface FeedRow {
   full_text_suggested: number;
   full_text_blocked: number;
   recipe_source: string | null;
+  translate: number;
+  translate_suggested: number;
   nsfw: number;
 }
 
@@ -56,6 +58,8 @@ function toFeed(row: FeedRow): Feed {
     fullTextSuggested: row.full_text_suggested === 1,
     fullTextBlocked: row.full_text_blocked === 1,
     recipeSource: isRecipeSource(row.recipe_source) ? row.recipe_source : null,
+    translate: row.translate === 1,
+    translateSuggested: row.translate_suggested === 1,
     nsfw: row.nsfw === 1,
   };
 }
@@ -63,7 +67,7 @@ function toFeed(row: FeedRow): Feed {
 const FEED_COLUMNS = `f.id, f.url, f.site_url, f.title, f.icon_url, f.rate, f.folder, f.read_seq,
               f.last_fetched_at, f.last_error, f.last_error_kind, f.consecutive_failures,
               f.disabled, f.full_text, f.full_text_suggested, f.full_text_blocked,
-              f.recipe_source, f.nsfw`;
+              f.recipe_source, f.translate, f.translate_suggested, f.nsfw`;
 
 /**
  * 全フィードを未読数付きで返す。
@@ -251,6 +255,8 @@ export interface FeedSettings {
   fullText?: boolean;
   /** 表示を有効にした端末でしか出さないか（issue #23） */
   nsfw?: boolean;
+  /** 日本語以外の記事を訳すか（issue #42） */
+  translate?: boolean;
 }
 
 /**
@@ -301,6 +307,10 @@ export async function updateFeedSettings(
     assignments.push('nsfw = ?');
     params.push(settings.nsfw ? 1 : 0);
   }
+  if (settings.translate !== undefined) {
+    assignments.push('translate = ?', 'translate_suggested = 2');
+    params.push(settings.translate ? 1 : 0);
+  }
   // 無効化を解除したら次の cron で拾えるようにする。
   // 連続失敗で自動的に無効化されたフィードを、手で戻せるようにするため
   if (settings.disabled === false) {
@@ -319,6 +329,11 @@ export async function updateFeedSettings(
   const statements = [update];
   if (settings.fullText === false) {
     statements.push(db.prepare(CLEAR_FULL_BODIES).bind(Math.floor(Date.now() / 1000), id));
+  }
+  // 訳すのをやめたら訳文も捨てる。読み出しは訳文があれば添えて返すので、捨てないと
+  // 他の端末には訳文が出続ける。入れ直したときは訳し直す
+  if (settings.translate === false) {
+    statements.push(db.prepare(CLEAR_TRANSLATIONS).bind(Math.floor(Date.now() / 1000), id));
   }
   // NSFW の印はピンにも写してある。フィードの側だけ変えると、隠したはずのフィードの
   // 記事がピンの一覧に残る
@@ -356,6 +371,8 @@ export interface CrawlTarget {
   fullTextSelector: string | null;
   /** 記事ページの取得が robots.txt に禁じられていた（issue #39） */
   fullTextBlocked: boolean;
+  /** 日本語以外の記事を訳すか（issue #42） */
+  translate: boolean;
   /** 取得定義の JSON（issue #40）。検証は取り込み側（src/crawler/source.ts）が行う */
   recipe: string | null;
   recipeSource: RecipeSource | null;
@@ -376,6 +393,7 @@ interface CrawlTargetRow {
   full_text_blocked: number;
   recipe: string | null;
   recipe_source: string | null;
+  translate: number;
 }
 
 function toCrawlTarget(row: CrawlTargetRow): CrawlTarget {
@@ -392,6 +410,7 @@ function toCrawlTarget(row: CrawlTargetRow): CrawlTarget {
     fullText: row.full_text === 1,
     fullTextSelector: row.full_text_selector,
     fullTextBlocked: row.full_text_blocked === 1,
+    translate: row.translate === 1,
     recipe: row.recipe,
     recipeSource: isRecipeSource(row.recipe_source) ? row.recipe_source : null,
   };
@@ -403,7 +422,7 @@ function isRecipeSource(value: string | null): value is RecipeSource {
 
 const CRAWL_COLUMNS = `id, url, title, site_url, etag, last_modified, content_hash,
          fetch_interval, consecutive_failures, full_text, full_text_selector,
-         full_text_blocked, recipe, recipe_source`;
+         full_text_blocked, recipe, recipe_source, translate`;
 
 /**
  * 期限が来たフィードを古い順に取る。LIMIT は必ず付ける
@@ -585,6 +604,14 @@ export async function updateFullTextSelector(
  * 既にユーザが決めた後（full_text_suggested = 2）は触らない。触ると、勧めを断った
  * フィードで次のクロックごとに勧めが復活する。
  */
+/** 「日本語ではない」と見えたことを覚える（issue #42）。勧めるだけで訳しはしない */
+export async function markTranslateSuggested(db: D1Database, id: number): Promise<void> {
+  await db
+    .prepare('UPDATE feeds SET translate_suggested = 1 WHERE id = ? AND translate_suggested = 0')
+    .bind(id)
+    .run();
+}
+
 export async function markFullTextSuggested(db: D1Database, id: number): Promise<void> {
   await db
     .prepare('UPDATE feeds SET full_text_suggested = 1 WHERE id = ? AND full_text_suggested = 0')

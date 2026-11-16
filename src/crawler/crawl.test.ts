@@ -545,3 +545,63 @@ describe('crawl（取得定義）', () => {
     expect((await getFeedRow(env.DB, id)).last_error).toContain('robots.txt');
   });
 });
+
+/** 翻訳（issue #42） */
+describe('crawl（翻訳）', () => {
+  const ENGLISH = `<?xml version="1.0"?>
+<rss version="2.0"><channel><title>Squirrel News</title><link>https://en.example.com/</link>
+  <item><title>Squirrels found storing nuts in parked cars</title><link>https://en.example.com/2</link>
+    <guid>https://en.example.com/2</guid><description>&lt;p&gt;Residents were surprised to find acorns in their engines.&lt;/p&gt;</description></item>
+  <item><title>A quiet week in the forest canopy</title><link>https://en.example.com/1</link>
+    <guid>https://en.example.com/1</guid><description>&lt;p&gt;Nothing much happened, and that is good news.&lt;/p&gt;</description></item>
+</channel></rss>`;
+  const ai = {
+    run: (_model: string, input: { messages: { content: string }[] }) => {
+      const texts = JSON.parse(input.messages[1].content) as string[];
+      return Promise.resolve({ response: JSON.stringify(texts.map((text) => `訳:${text}`)) });
+    },
+  } as unknown as Ai;
+  const english = () => stubFetch(() => xmlResponse(ENGLISH));
+
+  it('訳すフィードは、取り込んだその回に訳して訳文を残す。原文は上書きしない', async () => {
+    const id = await seedFeed(env.DB, 'https://en.example.com/feed', { translate: 1 });
+
+    const summary = await crawl(env, { now: NOW, feedIds: [id], fetchImpl: english().fetch, ai });
+
+    const entries = await getEntryRows(env.DB, id);
+    expect(entries.map((entry) => entry.translated_title)).toEqual([
+      '訳:A quiet week in the forest canopy',
+      '訳:Squirrels found storing nuts in parked cars',
+    ]);
+    expect(entries[0].translated_body).toContain('訳:Nothing much happened');
+    expect(entries[0].title).toBe('A quiet week in the forest canopy');
+    expect(summary.filledEntryIds).toHaveLength(2);
+  });
+
+  it('訳さないフィードでも、日本語でなければ訳すことを勧めるだけにする', async () => {
+    const id = await seedFeed(env.DB, 'https://en.example.com/feed');
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: english().fetch, ai });
+
+    expect((await getFeedRow(env.DB, id)).translate_suggested).toBe(1);
+    expect((await getEntryRows(env.DB, id)).every((e) => e.translated_body === null)).toBe(true);
+  });
+
+  it('回の上限を超えた分は残し、次の回に訳す', async () => {
+    const id = await seedFeed(env.DB, 'https://en.example.com/feed', { translate: 1 });
+
+    await crawl(env, {
+      now: NOW,
+      feedIds: [id],
+      fetchImpl: english().fetch,
+      ai,
+      translateLimit: 1,
+    });
+    const once = await getEntryRows(env.DB, id);
+    expect(once.filter((e) => e.translated_body !== null)).toHaveLength(1);
+
+    await crawl(env, { now: NOW + 3600, feedIds: [id], fetchImpl: english().fetch, ai });
+    const twice = await getEntryRows(env.DB, id);
+    expect(twice.filter((e) => e.translated_body !== null)).toHaveLength(2);
+  });
+});

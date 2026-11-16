@@ -59,6 +59,13 @@ export interface Feed {
    */
   recipeSource: RecipeSource | null;
   /**
+   * 日本語以外の記事を訳すか（issue #42）。既定は false で、決めるのはユーザ
+   * （Workers AI の無料枠を記事の数だけ使うため）
+   */
+  translate: boolean;
+  /** クロール時に「日本語ではない」と見えた。購読管理画面で勧めるのに使う */
+  translateSuggested: boolean;
+  /**
    * 表示を有効にした端末でしか出さない（issue #23）。**隠すのは画面側。**
    * サーバは全ての端末に同じものを配り、どの端末で出すかは端末ごとの設定で決まる
    * （web/src/stores/nsfw.ts）
@@ -75,6 +82,11 @@ export interface Entry {
   body: string; // サニタイズ済み HTML
   publishedAt: number | null;
   storedAt: number;
+  /**
+   * 訳文（issue #42）。訳したものだけに付く。原文（title / body）はそのまま残し、
+   * どちらを出すかは画面が決める（既定は訳文。t キーで原文と切り替える）
+   */
+  translation?: { title: string; body: string };
 }
 
 export interface Pin {
@@ -222,6 +234,8 @@ export interface UpdateFeedRequest {
   disabled?: boolean;
   fullText?: boolean;
   nsfw?: boolean;
+  /** 日本語以外の記事を訳すか（issue #42） */
+  translate?: boolean;
 }
 
 export interface FeedResponse {

@@ -26,6 +26,7 @@ export type Action =
   | 'pageDown'
   | 'pageUp'
   | 'openOriginal'
+  | 'toggleTranslation'
   | 'bookmarkEntry'
   | 'toggleHelp'
   | 'openSubscriptions'
@@ -110,6 +111,13 @@ export const KEYMAP: readonly KeyBinding[] = [
     label: 'v',
     action: 'openOriginal',
     description: '元記事を新しいタブで開く',
+    group: 'read',
+  },
+  {
+    key: 't',
+    label: 't',
+    action: 'toggleTranslation',
+    description: '訳した記事で、訳文と原文を切り替える',
     group: 'read',
   },
   {

@@ -310,6 +310,24 @@ async function toggleFullText(feed: Feed): Promise<void> {
 }
 
 /**
+ * 翻訳の入切（issue #42）。全文取得と同じく、入れた直後に手動更新の経路で訳させる。
+ * 切ったときはサーバが訳文を捨てているので、手元も取り直して原文に戻す
+ */
+async function toggleTranslate(feed: Feed): Promise<void> {
+  const translate = !feed.translate;
+  await run(async () => {
+    await session.editFeed(feed.id, { translate });
+    if (!translate) {
+      await session.reloadFeedEntries(feed.id);
+      message.value = '翻訳を止めて、原文に戻した';
+      return;
+    }
+    await session.refresh(feed.id);
+    message.value = '翻訳を入れて、未読を訳した（多いときは次の取得で続きを訳す）';
+  });
+}
+
+/**
  * NSFW の印の付け外し（issue #23）。
  *
  * **隠している端末で付けると、その行はこの場で消える。** 何も言わないと消えた理由が
@@ -570,6 +588,13 @@ async function onOpmlSelected(event: Event): Promise<void> {
                   }}
                 </p>
                 <p
+                  v-if="feed.translateSuggested && !feed.translate"
+                  class="text-amber-700 dark:text-amber-500"
+                  :data-testid="`manage-translate-hint-${feed.id}`"
+                >
+                  日本語以外の記事が並んでいる。「翻訳」で日本語に訳して読める
+                </p>
+                <p
                   v-if="feed.fullText && feed.fullTextBlocked"
                   class="text-amber-700 dark:text-amber-500"
                   :data-testid="`manage-full-text-blocked-${feed.id}`"
@@ -633,6 +658,20 @@ async function onOpmlSelected(event: Event): Promise<void> {
                   全文
                 </button>
                 <!-- 全文と同じ形のトグル。入切の状態そのものを見せる -->
+                <button
+                  :class="toggleClass(feed.translate)"
+                  :disabled="busy"
+                  :aria-pressed="feed.translate"
+                  :title="
+                    feed.translate
+                      ? '日本語以外の記事を訳す（入）。t で原文と切り替える'
+                      : '日本語以外の記事を日本語に訳す（切）'
+                  "
+                  :data-testid="`manage-translate-${feed.id}`"
+                  @click="toggleTranslate(feed)"
+                >
+                  翻訳
+                </button>
                 <button
                   :class="toggleClass(feed.nsfw)"
                   :disabled="busy"

@@ -208,6 +208,9 @@ export async function updateFeed(request: Request, env: Env, id: number): Promis
     ...(input.disabled === undefined ? {} : { disabled: parseBoolean(input.disabled, 'disabled') }),
     ...(input.fullText === undefined ? {} : { fullText: parseBoolean(input.fullText, 'fullText') }),
     ...(input.nsfw === undefined ? {} : { nsfw: parseBoolean(input.nsfw, 'nsfw') }),
+    ...(input.translate === undefined
+      ? {}
+      : { translate: parseBoolean(input.translate, 'translate') }),
   };
 
   if (!(await updateFeedSettings(env.DB, id, settings))) {

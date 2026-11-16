@@ -14,10 +14,12 @@ interface EntryRow {
   body: string;
   published_at: number | null;
   stored_at: number;
+  translated_title: string | null;
+  translated_body: string | null;
 }
 
 function toEntry(row: EntryRow): Entry {
-  return {
+  const entry: Entry = {
     id: row.id,
     feedId: row.feed_id,
     url: row.url,
@@ -27,6 +29,11 @@ function toEntry(row: EntryRow): Entry {
     publishedAt: row.published_at,
     storedAt: row.stored_at,
   };
+  // 訳文は訳したものにだけ付ける。訳していない記事の応答を太らせない
+  if (row.translated_body !== null) {
+    entry.translation = { title: row.translated_title ?? row.title, body: row.translated_body };
+  }
+  return entry;
 }
 
 // 全文が取れていればそちらを body として返す。フィードが配信した本文（e.body）は
@@ -34,7 +41,9 @@ function toEntry(row: EntryRow): Entry {
 // full_body の '' は「取りに行ったが採らなかった」印なので、本文としては使わない
 const ENTRY_COLUMNS = `e.id, e.feed_id, e.url, e.title, e.author,
          COALESCE(NULLIF(e.full_body, ''), e.body) AS body,
-         e.published_at, e.stored_at`;
+         e.published_at, e.stored_at,
+         NULLIF(e.translated_title, '') AS translated_title,
+         NULLIF(e.translated_body, '') AS translated_body`;
 
 /**
  * 保持期間を過ぎた記事を消す（docs/DESIGN.md §3「保持期間」）。
@@ -295,7 +304,10 @@ export async function updateFullBodies(
   const statement = db.prepare(
     `UPDATE entries
         SET full_body = ?1,
-            body_updated_at = CASE WHEN ?1 = '' THEN body_updated_at ELSE ?2 END
+            body_updated_at = CASE WHEN ?1 = '' THEN body_updated_at ELSE ?2 END,
+            -- 訳文は要約から作ったものなので、全文が入ったら訳し直す（issue #42）
+            translated_title = CASE WHEN ?1 = '' THEN translated_title ELSE NULL END,
+            translated_body = CASE WHEN ?1 = '' THEN translated_body ELSE NULL END
       WHERE id = ?3`,
   );
   for (let i = 0; i < bodies.length; i += BATCH_SIZE) {
@@ -377,8 +389,83 @@ export async function clearRejectedFullText(db: D1Database, feedId: number): Pro
  */
 export const CLEAR_FULL_BODIES = `UPDATE entries
     SET body_updated_at = CASE WHEN full_body <> '' THEN ? ELSE body_updated_at END,
+        translated_title = CASE WHEN full_body <> '' THEN NULL ELSE translated_title END,
+        translated_body = CASE WHEN full_body <> '' THEN NULL ELSE translated_body END,
         full_body = NULL
   WHERE feed_id = ?`;
+
+/**
+ * そのフィードの訳文を全て捨てる文（issue #42）。訳すのをやめたときに、設定の更新と
+ * 同じ batch に混ぜて使う。訳文が付いていた記事は body_updated_at を刻んで、他の端末にも
+ * 原文に戻ったことを届ける。バインドは (時刻, feed_id)
+ */
+export const CLEAR_TRANSLATIONS = `UPDATE entries
+    SET body_updated_at = CASE WHEN translated_body <> '' THEN ? ELSE body_updated_at END,
+        translated_title = NULL,
+        translated_body = NULL
+  WHERE feed_id = ?`;
+
+export interface TranslationTarget {
+  id: number;
+  url: string | null;
+  title: string;
+  /** 読み出しと同じ本文（全文があれば全文） */
+  body: string;
+}
+
+/**
+ * まだ訳していない未読記事を、新しい順に返す（issue #42）。全文取得と同じく、
+ * 上限で打ち切られるときは新しい記事を先に訳す。
+ *
+ * **全文を待っている記事は飛ばす。** 全文取得を入れたフィードで、全文がまだ入って
+ * いない（full_body IS NULL）記事を訳すと、全文が入った時点で訳し直しになり、
+ * 無料枠を 2 回使う
+ */
+export async function selectUntranslated(
+  db: D1Database,
+  feedId: number,
+  limit: number,
+): Promise<TranslationTarget[]> {
+  if (limit <= 0) return [];
+  const { results } = await db
+    .prepare(
+      `SELECT e.id, e.url, e.title, COALESCE(NULLIF(e.full_body, ''), e.body) AS body
+         FROM entries e
+         JOIN feeds f ON f.id = e.feed_id
+         ${UNREAD_JOIN}
+        WHERE e.feed_id = ? AND e.translated_body IS NULL
+          AND (f.full_text = 0 OR e.full_body IS NOT NULL OR e.url IS NULL)
+          AND ${UNREAD_PREDICATE}
+        ORDER BY e.id DESC
+        LIMIT ?`,
+    )
+    .bind(feedId, limit)
+    .all<TranslationTarget>();
+  return results;
+}
+
+/**
+ * 訳文を書き込む。body に '' を渡すと「訳さないと決めた」印になる。
+ * 訳文を入れた記事には body_updated_at を刻み、差分同期で届け直させる
+ */
+export async function updateTranslations(
+  db: D1Database,
+  rows: { id: number; title: string; body: string }[],
+): Promise<void> {
+  if (rows.length === 0) return;
+  const statement = db.prepare(
+    `UPDATE entries
+        SET translated_title = ?1, translated_body = ?2,
+            body_updated_at = CASE WHEN ?2 = '' THEN body_updated_at ELSE ?3 END
+      WHERE id = ?4`,
+  );
+  const now = Math.floor(Date.now() / 1000);
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    await db.batch(
+      rows.slice(i, i + BATCH_SIZE).map((row) => statement.bind(row.title, row.body, now, row.id)),
+    );
+  }
+}
 
 /**
  * 既に取り込み済みの guid_hash を返す。
