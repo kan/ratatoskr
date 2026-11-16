@@ -41,6 +41,7 @@ function feed(id: number, title: string, rate: number, unreadCount: number): Fee
     disabled: false,
     fullText: false,
     fullTextSuggested: false,
+    fullTextBlocked: false,
     nsfw: false,
   };
 }

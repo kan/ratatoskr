@@ -54,7 +54,7 @@ describe('purgeExpiredEntries', () => {
 
     const summary = await purgeExpiredEntries(env, { now: NOW });
 
-    expect(summary).toEqual({ deleted: 1, done: true });
+    expect(summary).toEqual({ deleted: 1, robots: 0, done: true });
     expect(await idsOf(feedId)).toEqual([recent, unread]);
   });
 
@@ -147,12 +147,12 @@ describe('purgeExpiredEntries', () => {
 
     // 初回や長く放置した後は数万件が対象になる。cron の実行時間を使い切るより持ち越す
     const first = await purgeExpiredEntries(env, { now: NOW, maxPerRun: 3 });
-    expect(first).toEqual({ deleted: 3, done: false });
+    expect(first).toEqual({ deleted: 3, robots: 0, done: false });
     // 古いものから消える（id 昇順）
     expect(await idsOf(feedId)).toEqual(ids.slice(3));
 
     const second = await purgeExpiredEntries(env, { now: NOW, maxPerRun: 3 });
-    expect(second).toEqual({ deleted: 2, done: true });
+    expect(second).toEqual({ deleted: 2, robots: 0, done: true });
     expect(await idsOf(feedId)).toEqual([]);
   });
 
@@ -160,6 +160,10 @@ describe('purgeExpiredEntries', () => {
     const feedId = await seedFeed(env.DB, 'https://example.com/feed.xml');
     await seedEntry(env.DB, feedId, { storedAt: RECENT });
 
-    expect(await purgeExpiredEntries(env, { now: NOW })).toEqual({ deleted: 0, done: true });
+    expect(await purgeExpiredEntries(env, { now: NOW })).toEqual({
+      deleted: 0,
+      robots: 0,
+      done: true,
+    });
   });
 });

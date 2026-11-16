@@ -2,6 +2,7 @@ import { REPOSITORY_URL, type FeedErrorKind } from '../../shared/types';
 import { errorMessage } from '../lib/errors';
 import { sha256Hex } from '../lib/hash';
 import { decodeMarkup } from './charset';
+import { RobotsDisallowedError } from './robots';
 
 /**
  * フィードの取得。条件付き GET と content_hash による差分判定までを担当し、
@@ -94,7 +95,16 @@ export type FetchOutcome =
       lastModified: string | null;
       contentHash: string;
     }
-  | { kind: 'error'; message: string; reason: FeedErrorKind };
+  | {
+      kind: 'error';
+      message: string;
+      reason: FeedErrorKind;
+      /**
+       * 相手が `Retry-After` で指定した待ち時間（秒）。429 / 503 のときだけ付く（issue #39）。
+       * 次の取得時刻をこれより前にしない（src/crawler/index.ts の recordFailure）
+       */
+      retryAfter?: number;
+    };
 
 export interface FetchTarget {
   url: string;
@@ -234,10 +244,31 @@ function describeHttpStatus(response: Response): { message: string; reason: Feed
   return { message, reason: 'other' };
 }
 
+/**
+ * 429 / 503 の `Retry-After` を、今から何秒待てばよいかに直す（RFC 9110 §10.2.3）。
+ * 秒数と HTTP 日付の両方を受ける。付いていない・読めない・過去の日付なら null
+ */
+export function rateLimitDelay(response: Response, now: number): number | null {
+  if (response.status !== 429 && response.status !== 503) return null;
+  return parseRetryAfter(response.headers.get('retry-after'), now);
+}
+
+export function parseRetryAfter(value: string | null, now: number): number | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) return Number(trimmed);
+  const date = Date.parse(trimmed);
+  if (Number.isNaN(date)) return null;
+  const delay = Math.ceil(date / 1000) - now;
+  return delay > 0 ? delay : null;
+}
+
 export type ArticlePageOutcome =
   | { kind: 'ok'; html: string }
   /** 記事ページが消えている。取り直しても結果は変わらない */
   | { kind: 'gone' }
+  /** robots.txt に禁じられている（issue #39）。取りに行っていない */
+  | { kind: 'disallowed' }
   /** 一時的な失敗。次の機会に回す */
   | { kind: 'retry' };
 
@@ -264,6 +295,7 @@ export async function fetchArticlePage(
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (err) {
+    if (err instanceof RobotsDisallowedError) return { kind: 'disallowed' };
     // 記事 1 本が取れなくてもフィードの取得は成功している。
     // feeds.last_error に書くとフィード自体が壊れているように見えるので書かない
     console.warn('全文の取得に失敗', url, describeNetworkError(err).message);
@@ -298,7 +330,11 @@ export async function fetchFeed(
   }
 
   if (response.status === 304) return { kind: 'notModified' };
-  if (!response.ok) return { ...describeHttpStatus(response), kind: 'error' };
+  if (!response.ok) {
+    const failure = { ...describeHttpStatus(response), kind: 'error' as const };
+    const retryAfter = rateLimitDelay(response, Math.floor(Date.now() / 1000));
+    return retryAfter === null ? failure : { ...failure, retryAfter };
+  }
 
   // content_hash は戻した後の文字列から作る。読み方を変えた最初の 1 回だけ、
   // UTF-8 以外のフィードは前回と食い違って取り込み直しになるが、INSERT OR IGNORE で

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { bytesOf, EUCJP_NIHONGO, SJIS_NIHONGO } from '../test/bytes';
-import { describeNetworkError, fetchArticlePage, fetchFeed, MAX_BYTES } from './fetch';
+import {
+  describeNetworkError,
+  fetchArticlePage,
+  fetchFeed,
+  MAX_BYTES,
+  parseRetryAfter,
+} from './fetch';
 
 /**
  * 取得の失敗を、人が読める文言と機械的な分類の両方に落とせること。
@@ -164,5 +170,34 @@ describe('fetchArticlePage の文字コード', () => {
     expect(await fetchArticlePage('https://example.jp/4', fetchImpl)).toEqual({ kind: 'retry' });
     // 超えた時点でやめ、残りの塊は引かない
     expect(pulled).toBeLessThan(chunks);
+  });
+});
+
+describe('parseRetryAfter（issue #39）', () => {
+  const now = Math.floor(Date.parse('2026-11-16T00:00:00Z') / 1000);
+
+  it('秒数と HTTP 日付の両方を読む', () => {
+    expect(parseRetryAfter('120', now)).toBe(120);
+    expect(parseRetryAfter('Mon, 16 Nov 2026 01:00:00 GMT', now)).toBe(3600);
+  });
+
+  it('無い・読めない・過去の日付は null', () => {
+    expect(parseRetryAfter(null, now)).toBeNull();
+    expect(parseRetryAfter('soon', now)).toBeNull();
+    expect(parseRetryAfter('Sun, 15 Nov 2026 00:00:00 GMT', now)).toBeNull();
+  });
+});
+
+describe('fetchFeed の Retry-After（issue #39）', () => {
+  it('429 / 503 なら待ち時間を添える。それ以外の失敗には付けない', async () => {
+    const respond = (status: number) =>
+      (() =>
+        Promise.resolve(
+          new Response('', { status, headers: { 'retry-after': '600' } }),
+        )) as unknown as typeof fetch;
+
+    expect(await fetchFeed(TARGET, respond(429))).toMatchObject({ kind: 'error', retryAfter: 600 });
+    expect(await fetchFeed(TARGET, respond(503))).toMatchObject({ kind: 'error', retryAfter: 600 });
+    expect(await fetchFeed(TARGET, respond(500))).not.toHaveProperty('retryAfter');
   });
 });

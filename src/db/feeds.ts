@@ -24,6 +24,7 @@ interface FeedRow {
   disabled: number;
   full_text: number;
   full_text_suggested: number;
+  full_text_blocked: number;
   nsfw: number;
 }
 
@@ -46,13 +47,14 @@ function toFeed(row: FeedRow): Feed {
     fullText: row.full_text === 1,
     // 2 は「ユーザが決めた」。勧めるのは 1 のときだけ（migrations/0003_full_text.sql）
     fullTextSuggested: row.full_text_suggested === 1,
+    fullTextBlocked: row.full_text_blocked === 1,
     nsfw: row.nsfw === 1,
   };
 }
 
 const FEED_COLUMNS = `f.id, f.url, f.site_url, f.title, f.icon_url, f.rate, f.folder, f.read_seq,
               f.last_fetched_at, f.last_error, f.last_error_kind, f.consecutive_failures,
-              f.disabled, f.full_text, f.full_text_suggested, f.nsfw`;
+              f.disabled, f.full_text, f.full_text_suggested, f.full_text_blocked, f.nsfw`;
 
 /**
  * 全フィードを未読数付きで返す。
@@ -246,7 +248,11 @@ export async function updateFeedSettings(
     // 切るときは本文の位置も忘れる。覚えたままだと、入れ直しても同じセレクタを
     // そのまま使うので、抽出を仕損じたフィードをやり直す道が無くなる
     if (!settings.fullText) {
-      assignments.push('full_text_selector = NULL', 'full_text_source = NULL');
+      assignments.push(
+        'full_text_selector = NULL',
+        'full_text_source = NULL',
+        'full_text_blocked = 0',
+      );
     }
     // 勧める必要はもう無い。入れたのであれ断ったのであれ、ユーザが決めた。
     // 0 に戻すと次のクロールで同じ判定が出て勧めが復活するので、2 を入れる
@@ -309,6 +315,8 @@ export interface CrawlTarget {
   fullText: boolean;
   /** 記事ページのどこが本文か。NULL なら次の取得時に判定する */
   fullTextSelector: string | null;
+  /** 記事ページの取得が robots.txt に禁じられていた（issue #39） */
+  fullTextBlocked: boolean;
 }
 
 interface CrawlTargetRow {
@@ -323,6 +331,7 @@ interface CrawlTargetRow {
   consecutive_failures: number;
   full_text: number;
   full_text_selector: string | null;
+  full_text_blocked: number;
 }
 
 function toCrawlTarget(row: CrawlTargetRow): CrawlTarget {
@@ -338,11 +347,13 @@ function toCrawlTarget(row: CrawlTargetRow): CrawlTarget {
     consecutiveFailures: row.consecutive_failures,
     fullText: row.full_text === 1,
     fullTextSelector: row.full_text_selector,
+    fullTextBlocked: row.full_text_blocked === 1,
   };
 }
 
 const CRAWL_COLUMNS = `id, url, title, site_url, etag, last_modified, content_hash,
-         fetch_interval, consecutive_failures, full_text, full_text_selector`;
+         fetch_interval, consecutive_failures, full_text, full_text_selector,
+         full_text_blocked`;
 
 /**
  * 期限が来たフィードを古い順に取る。LIMIT は必ず付ける
@@ -468,6 +479,18 @@ export async function markFetchFailure(db: D1Database, p: FetchFailureParams): P
         WHERE id = ?`,
     )
     .bind(p.nextFetchAt, p.failures, p.message, p.reason, p.now, p.disabled ? 1 : 0, p.id)
+    .run();
+}
+
+/** 記事ページの取得が robots.txt に禁じられていたかを覚える（issue #39） */
+export async function markFullTextBlocked(
+  db: D1Database,
+  id: number,
+  blocked: boolean,
+): Promise<void> {
+  await db
+    .prepare('UPDATE feeds SET full_text_blocked = ? WHERE id = ?')
+    .bind(blocked ? 1 : 0, id)
     .run();
 }
 

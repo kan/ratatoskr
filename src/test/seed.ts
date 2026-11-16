@@ -45,6 +45,7 @@ export interface FeedRow {
   full_text_suggested: number;
   full_text_selector: string | null;
   full_text_source: string | null;
+  full_text_blocked: number;
 }
 
 export interface EntryRow {
@@ -67,7 +68,11 @@ export interface EntryRow {
  * entries は feeds の CASCADE で消える。
  */
 export async function resetDb(db: D1Database): Promise<void> {
-  await db.batch([db.prepare('DELETE FROM feeds'), db.prepare('DELETE FROM pins')]);
+  await db.batch([
+    db.prepare('DELETE FROM feeds'),
+    db.prepare('DELETE FROM pins'),
+    db.prepare('DELETE FROM robots_txt'),
+  ]);
 }
 
 export async function seedFeed(

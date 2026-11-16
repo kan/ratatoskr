@@ -13,11 +13,12 @@ import { sha256Hex } from '../lib/hash';
 import { mayHaveTweetEmbed, resolveTweetEmbeds } from './embed';
 import type { FetchBudget } from './fetch';
 import { fillFullText, looksSummaryOnly, type FullTextOptions } from './fulltext';
+import { createPoliteFetch } from './polite';
 import { sanitizeHtml } from './sanitize';
 import { sourceFor } from './source';
 import { titleFromBody } from './title';
 import {
-  backoffAfterFailure,
+  delayAfterFailure,
   intervalAfterNoUpdate,
   intervalAfterUpdate,
   shouldDisable,
@@ -84,7 +85,10 @@ export interface CrawlSummary {
 
 export async function crawl(env: Env, options: CrawlOptions = {}): Promise<CrawlSummary> {
   const now = options.now ?? Math.floor(Date.now() / 1000);
-  const fetchImpl = options.fetchImpl ?? fetch;
+  // 外向きの要求は全てこの包みを通す（issue #39）。同じホストへは 1 本ずつ、
+  // 流量の制限を受けたホストにはその回もう出さない、記事ページは robots.txt を見る
+  const polite = createPoliteFetch(options.fetchImpl ?? fetch, { db: env.DB, now });
+  const fetchImpl = polite.fetch;
   const concurrency = options.concurrency ?? CONCURRENCY;
 
   const targets = options.feedIds
@@ -106,7 +110,12 @@ export async function crawl(env: Env, options: CrawlOptions = {}): Promise<Crawl
     const chunk = targets.slice(i, i + concurrency);
     const results = await Promise.allSettled(
       chunk.map((target) =>
-        crawlFeed(env.DB, target, now, { fetchImpl, ai: options.ai ?? env.AI, budget }),
+        crawlFeed(env.DB, target, now, {
+          fetchImpl,
+          fetchPage: polite.page,
+          ai: options.ai ?? env.AI,
+          budget,
+        }),
       ),
     );
 
@@ -145,7 +154,7 @@ async function crawlFeed(
   const outcome = await source.fetch(target, options.fetchImpl, now);
 
   if (outcome.kind === 'error') {
-    await recordFailure(db, target, now, outcome.message, outcome.reason);
+    await recordFailure(db, target, now, outcome.message, outcome.reason, outcome.retryAfter);
     return { inserted: 0, failed: true, filled: [] };
   }
 
@@ -309,12 +318,13 @@ async function recordFailure(
   now: number,
   message: string,
   reason: FeedErrorKind,
+  retryAfter: number | undefined,
 ): Promise<void> {
   const failures = target.consecutiveFailures + 1;
   await markFetchFailure(db, {
     id: target.id,
     now,
-    nextFetchAt: now + backoffAfterFailure(failures),
+    nextFetchAt: now + delayAfterFailure(failures, retryAfter),
     failures,
     message: message.slice(0, MAX_ERROR_LENGTH),
     reason,

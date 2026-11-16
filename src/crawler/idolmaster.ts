@@ -208,7 +208,8 @@ export async function fetchIdolmasterArticles(
     // **一時的な失敗が出たら残りは取りに行かない。** サイトが落ちている、ページの作りが
     // 変わった、はどちらも記事によらないので、残りも同じ結果になる
     if (outcome.kind === 'retry') break;
-    if (outcome.kind === 'gone') {
+    // robots.txt に禁じられた記事も、取り直しても同じなので無い扱いにする
+    if (outcome.kind === 'gone' || outcome.kind === 'disallowed') {
       result.missing.add(path);
       continue;
     }

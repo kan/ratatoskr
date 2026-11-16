@@ -207,7 +207,11 @@ describe('crawl', () => {
     await setReadSeq(env.DB, id, read[read.length - 1].id);
 
     const later = NOW + 40 * 86_400;
-    expect(await purgeExpiredEntries(env, { now: later })).toEqual({ deleted: 2, done: true });
+    expect(await purgeExpiredEntries(env, { now: later })).toEqual({
+      deleted: 2,
+      robots: 0,
+      done: true,
+    });
 
     const summary = await crawl(env, {
       now: later,
@@ -345,6 +349,47 @@ describe('crawl', () => {
     expect(feed.consecutive_failures).toBe(21);
     expect(feed.disabled).toBe(1);
     expect(feed.next_fetch_at).toBe(NOW + 86400);
+  });
+
+  it('429 の Retry-After より前には取りに行かない（issue #39）', async () => {
+    const id = await seedFeed(env.DB, 'https://busy.example.com/feed.xml');
+    const stub = stubFetch(
+      () => new Response('', { status: 429, headers: { 'retry-after': '18000' } }),
+    );
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+
+    const feed = await getFeedRow(env.DB, id);
+    // 自前のバックオフ（1 回目は 1 時間）より、相手の指定（5 時間）を採る
+    expect(feed.next_fetch_at).toBe(NOW + 18000);
+  });
+
+  it('同じホストのフィードは、429 を受けた後その回は取りに行かない（issue #39）', async () => {
+    const first = await seedFeed(env.DB, 'https://busy.example.com/a.xml');
+    const second = await seedFeed(env.DB, 'https://busy.example.com/b.xml');
+    const stub = stubFetch(() => new Response('', { status: 429 }));
+
+    await crawl(env, { now: NOW, feedIds: [first, second], fetchImpl: stub.fetch });
+
+    expect(stub.calls).toHaveLength(1);
+    // 取りに行かなかった側も、受けたのと同じ失敗として間隔を空ける
+    expect((await getFeedRow(env.DB, second)).consecutive_failures).toBe(1);
+  });
+
+  it('全文取得の記事ページが robots.txt に禁じられていたら取りに行かず、印を残す（issue #39）', async () => {
+    const id = await seedFeed(env.DB, 'https://example.com/feed.xml', { fullText: 1 });
+    const stub = stubFetch(({ url }) => {
+      if (url.endsWith('/robots.txt')) return new Response('User-agent: *\nDisallow: /posts/');
+      return xmlResponse(rss2Xml);
+    });
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+
+    expect(stub.calls.some((call) => call.url.includes('/posts/'))).toBe(false);
+    expect((await getFeedRow(env.DB, id)).full_text_blocked).toBe(1);
+    // 取り直しを止める印（''）が付く
+    const entries = await getEntryRows(env.DB, id);
+    expect(entries.every((entry) => entry.full_body === '')).toBe(true);
   });
 
   it('期限が来ていないフィードは取りに行かない', async () => {

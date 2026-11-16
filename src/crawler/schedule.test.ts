@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   backoffAfterFailure,
+  delayAfterFailure,
   intervalAfterNoUpdate,
   intervalAfterUpdate,
   INITIAL_INTERVAL,
@@ -46,5 +47,20 @@ describe('失敗バックオフ', () => {
   it('連続 20 回を超えたら無効化する', () => {
     expect(shouldDisable(20)).toBe(false);
     expect(shouldDisable(21)).toBe(true);
+  });
+});
+
+describe('delayAfterFailure（issue #39）', () => {
+  it('Retry-After が無ければバックオフのまま', () => {
+    expect(delayAfterFailure(3)).toBe(backoffAfterFailure(3));
+  });
+
+  it('Retry-After の方が長ければそれに従い、短ければバックオフを採る', () => {
+    expect(delayAfterFailure(1, 7200)).toBe(7200);
+    expect(delayAfterFailure(1, 60)).toBe(INITIAL_INTERVAL);
+  });
+
+  it('極端な指定は上限で頭打ちにする', () => {
+    expect(delayAfterFailure(1, 30 * 86400)).toBe(MAX_BACKOFF);
   });
 });

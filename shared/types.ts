@@ -45,6 +45,11 @@ export interface Feed {
   /** クロール時に「要約しか配信していない」と見えた。購読管理画面で勧めるのに使う */
   fullTextSuggested: boolean;
   /**
+   * 全文取得で、記事ページの取得が robots.txt に禁じられていた（issue #39）。
+   * 全文取得を入れたのに本文が埋まらない理由を、購読管理画面で見せるのに使う
+   */
+  fullTextBlocked: boolean;
+  /**
    * 表示を有効にした端末でしか出さない（issue #23）。**隠すのは画面側。**
    * サーバは全ての端末に同じものを配り、どの端末で出すかは端末ごとの設定で決まる
    * （web/src/stores/nsfw.ts）

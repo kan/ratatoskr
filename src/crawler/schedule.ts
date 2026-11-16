@@ -43,6 +43,18 @@ export function backoffAfterFailure(failures: number): number {
   return Math.min(INITIAL_INTERVAL * 2 ** capped, MAX_BACKOFF);
 }
 
+/**
+ * 失敗後の待ち時間。相手が `Retry-After` を指定していれば、それより前には行かない
+ * （issue #39）。指定が自前のバックオフより短ければバックオフの方を採る。
+ * 極端な指定（数日先など）は MAX_BACKOFF で頭打ちにする。連続失敗でいずれ止まるので、
+ * 待ちすぎて購読が黙って死ぬよりは、上限で様子を見に行く方がよい
+ */
+export function delayAfterFailure(failures: number, retryAfter?: number): number {
+  const backoff = backoffAfterFailure(failures);
+  if (retryAfter === undefined) return backoff;
+  return Math.min(Math.max(backoff, retryAfter), MAX_BACKOFF);
+}
+
 export function shouldDisable(failures: number): boolean {
   return failures > MAX_CONSECUTIVE_FAILURES;
 }

@@ -497,6 +497,13 @@ async function onOpmlSelected(event: Event): Promise<void> {
                   要約しか配信していない。「全文」で記事ページから本文を取ってこられる
                 </p>
                 <p
+                  v-if="feed.fullText && feed.fullTextBlocked"
+                  class="text-amber-700 dark:text-amber-500"
+                  :data-testid="`manage-full-text-blocked-${feed.id}`"
+                >
+                  記事ページの取得がサイトの robots.txt で禁じられているので、全文を取っていない
+                </p>
+                <p
                   v-if="isStalled(feed)"
                   class="text-amber-700 dark:text-amber-500"
                   :data-testid="`manage-stalled-${feed.id}`"

@@ -1,5 +1,6 @@
 import { RETENTION_DAYS } from '../shared/types';
 import { deleteExpiredEntries } from './db/entries';
+import { deleteStaleRobots } from './db/robots';
 
 /**
  * 保持期間による記事削除（docs/DESIGN.md §3「保持期間」）。
@@ -36,6 +37,8 @@ export interface RetentionOptions {
 
 export interface RetentionSummary {
   deleted: number;
+  /** 捨てた robots.txt の控えの数（issue #39） */
+  robots: number;
   /** 対象を消し切ったか。false なら次回に持ち越している */
   done: boolean;
 }
@@ -48,13 +51,17 @@ export async function purgeExpiredEntries(
   const before = now - (options.days ?? RETENTION_DAYS) * 86_400;
   const maxPerRun = options.maxPerRun ?? MAX_PER_RUN;
 
+  // robots.txt の控えは期限が切れても取り直しに失敗したときの拠り所になるので、
+  // 記事と同じ保持期間だけ置いてから捨てる。購読を外したサイトの分が積み上がらないように
+  const robots = await deleteStaleRobots(env.DB, before);
+
   let deleted = 0;
   while (deleted < maxPerRun) {
     const limit = Math.min(CHUNK, maxPerRun - deleted);
     const removed = await deleteExpiredEntries(env.DB, before, limit, now);
     deleted += removed;
     // 取れた件数が上限に届かなければ、対象は尽きている
-    if (removed < limit) return { deleted, done: true };
+    if (removed < limit) return { deleted, robots, done: true };
   }
-  return { deleted, done: false };
+  return { deleted, robots, done: false };
 }

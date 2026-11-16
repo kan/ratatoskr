@@ -4,7 +4,7 @@ import {
   updateFullBodies,
   type FullTextTarget,
 } from '../db/entries';
-import { updateFullTextSelector, type CrawlTarget } from '../db/feeds';
+import { markFullTextBlocked, updateFullTextSelector, type CrawlTarget } from '../db/feeds';
 import { blueskyPostRef, fetchBlueskyPosts, type BlueskyPostRef } from './bluesky';
 import { chooseBodySelector, type BodySelector } from './choose';
 import { resolveTweetEmbeds } from './embed';
@@ -56,6 +56,11 @@ const MAX_SELECTOR_TRIALS = 3;
 
 export interface FullTextOptions {
   fetchImpl: typeof fetch;
+  /**
+   * 記事ページを取りに行く fetch。robots.txt を見る（src/crawler/polite.ts の page）。
+   * 省けば fetchImpl をそのまま使う（robots.txt は見ない。テスト用）
+   */
+  fetchPage?: typeof fetch;
   /** 本文の位置を判定させる。未設定なら点数だけで決める（src/crawler/choose.ts） */
   ai: Ai | undefined;
   /** 記事ページと埋め込みの取得で共有する予算 */
@@ -147,7 +152,7 @@ export async function fillFullText(
   releaseBudget(budget, posts.length + news.length);
   const officialArticles = await fetchIdolmasterArticles(
     official.map((item) => item.key),
-    options.fetchImpl,
+    options.fetchPage ?? options.fetchImpl,
   );
   // 途中で打ち切った回（一時的な失敗）に取りに行かなかった分だけ返す
   releaseBudget(budget, official.length - officialArticles.attempted);
@@ -194,7 +199,17 @@ async function fillFromArticlePages(
 ): Promise<FillOutcome> {
   if (targets.length === 0) return { updates: [], filled: [] };
 
-  const { pages, gone } = await fetchArticles(targets, options.fetchImpl);
+  const { pages, gone, disallowed } = await fetchArticles(
+    targets,
+    options.fetchPage ?? options.fetchImpl,
+  );
+  // robots.txt に禁じられたかどうかを購読管理画面に出す（issue #39）。全文取得を
+  // 入れたのに埋まらない理由が、他に知りようがない。1 枚でも取れたら下ろす
+  // （サイトが robots.txt を緩めた、または禁じられているのが一部のパスだけ）
+  if (disallowed > 0 || pages.length > 0) {
+    const blocked = pages.length === 0;
+    if (blocked !== feed.fullTextBlocked) await markFullTextBlocked(db, feed.id, blocked);
+  }
   // 記事ページが消えている（404 / 410）ものには印を残す。残さないと、サイト移転で
   // URL が全滅したフィードの同じ 10 件を 15 分ごとに叩き続けることになる。
   // 一時的な失敗（打ち切り・5xx・接続断）は印を付けず、次の機会に回す
@@ -339,7 +354,7 @@ interface ArticlePage {
 async function fetchArticles(
   targets: FullTextTarget[],
   fetchImpl: typeof fetch,
-): Promise<{ pages: ArticlePage[]; gone: number[] }> {
+): Promise<{ pages: ArticlePage[]; gone: number[]; disallowed: number }> {
   const byPage = new Map<string, FullTextTarget[]>();
   for (const target of targets) {
     const url = pageUrlOf(target.url);
@@ -350,6 +365,7 @@ async function fetchArticles(
 
   const pages: ArticlePage[] = [];
   const gone: number[] = [];
+  let disallowed = 0;
   const urls = [...byPage.keys()];
 
   for (let i = 0; i < urls.length; i += CONCURRENCY) {
@@ -365,10 +381,16 @@ async function fetchArticles(
         for (const target of group) pages.push({ target, html: outcome.html, pageUrl: url });
       } else if (outcome.kind === 'gone') {
         for (const target of group) gone.push(target.id);
+      } else if (outcome.kind === 'disallowed') {
+        // **取りに行かないと決まった記事にも印を残す。** robots.txt の控えは 1 日もつので、
+        // 印が無いと同じ記事を cron のたびに見ては諦めることになる。緩められたときに
+        // 拾い直せないのは、記事が保持期間で入れ替わることで吸収する
+        disallowed += 1;
+        for (const target of group) gone.push(target.id);
       }
     }
   }
-  return { pages, gone };
+  return { pages, gone, disallowed };
 }
 
 /**

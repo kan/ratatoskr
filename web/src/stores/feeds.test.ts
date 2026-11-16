@@ -29,6 +29,7 @@ function feed(id: number, overrides: Partial<Feed> = {}): Feed {
     disabled: false,
     fullText: false,
     fullTextSuggested: false,
+    fullTextBlocked: false,
     nsfw: false,
     ...overrides,
   };
