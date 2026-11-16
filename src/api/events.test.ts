@@ -70,6 +70,19 @@ describe('POST /api/events', () => {
     expect(rows[1].target_url).toBe('https://other.example/x');
   });
 
+  it('長すぎる URL は断らずに切り詰める（断ると outbox が同じ要求の記録ごと捨てる）', async () => {
+    const feedId = await seedFeed(env.DB, 'https://example.com/feed');
+    const entryId = await seedEntry(env.DB, feedId, { url: 'https://example.com/1' });
+    const url = `https://other.example/x?q=${'a'.repeat(3000)}`;
+    const body = {
+      events: [{ id: 'aaaaaaaa-1', kind: 'link', at: NOW, feedId, entryId, url }],
+    };
+
+    expect((await apiSend('POST', '/api/events', body)).status).toBe(200);
+    const [row] = await events();
+    expect(row.target_url).toBe(url.slice(0, 2048));
+  });
+
   it('形の違うものは 400', async () => {
     const send = (event: unknown) => apiSend('POST', '/api/events', { events: [event] });
     expect((await send({ id: 'x', kind: 'dwell' })).status).toBe(400);

@@ -37,6 +37,9 @@ const emit = defineEmits<{ next: []; prev: []; links: []; link: [url: string] }>
  * 開く動作そのものはブラウザの既定（新しいタブ）に任せて止めない。中ボタンも数える
  */
 function onBodyClick(event: MouseEvent): void {
+  // auxclick は右クリック（button 2）でも来る。コンテキストメニューを出しただけで
+  // 「開いた」と数えると、読み方のデータ（issue #43）がずれる。数えるのは左と中だけ
+  if (event.button !== 0 && event.button !== 1) return;
   const target = event.target instanceof Element ? event.target.closest('a[href]') : null;
   if (target instanceof HTMLAnchorElement) emit('link', target.href);
 }

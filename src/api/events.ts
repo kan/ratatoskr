@@ -10,6 +10,14 @@ import { json } from '../lib/errors';
  * id で冪等なので、重複して届いても 1 件になる。
  */
 
+/**
+ * 開いたリンクの URL として残す長さの上限。
+ *
+ * **超えても断らずに切り詰める。** 1 件を 400 で断ると、outbox は同じ要求に入っていた
+ * 他の記録（最大 200 件）ごと送り直さずに捨てる（web/src/stores/outbox.ts の isPermanent）
+ */
+const MAX_URL_LENGTH = 2048;
+
 /** 表示時間の上限（秒）。端末の時計の狂いで桁違いの値が来ても集計を壊さない */
 const MAX_SECONDS = 3600;
 
@@ -35,10 +43,10 @@ function parseEvent(raw: unknown): ReadingEvent {
   }
   if (kind === 'link') {
     const url = event.url;
-    if (typeof url !== 'string' || !/^https?:\/\//i.test(url) || url.length > 2048) {
+    if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
       badRequest('url は http(s) の URL で送る');
     }
-    return { ...base, kind, url: url as string };
+    return { ...base, kind, url: (url as string).slice(0, MAX_URL_LENGTH) };
   }
   if (kind === 'open') return { ...base, kind };
   return badRequest('kind は dwell / link / open のいずれか');
