@@ -34,7 +34,8 @@ export function notFetched(
   if (outcome.kind !== 'error') return outcome;
   const reason =
     outcome.reason === 'not_found' || outcome.reason === 'forbidden' ? 'other' : outcome.reason;
-  return { kind: 'error', message: `${label}: ${outcome.message}`, reason };
+  // retryAfter を残すため、組み直さずに上書きする（issue #39。落とすと Retry-After が効かない）
+  return { ...outcome, message: `${label}: ${outcome.message}`, reason };
 }
 
 /**

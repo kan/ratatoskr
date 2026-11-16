@@ -1,9 +1,13 @@
+import { MAIL_FEED_PREFIX } from '../../shared/types';
 import { errorMessage } from '../lib/errors';
 import { withFeed } from './api-feed';
 import { asobiTicket } from './asobiticket';
 import { fetchFeed } from './fetch';
 import { idolmasterNews } from './idolmaster';
+import { recipeSource } from './recipe-source';
 import { parseFeed } from './parse';
+import { parseRecipe } from './recipe';
+import type { RecipeSource } from '../../shared/types';
 import type { KnownSource, Source } from './types';
 
 /**
@@ -40,8 +44,39 @@ function sourceKey(url: string): string | null {
   }
 }
 
-export function sourceFor(url: string): Source {
-  return knownSource(url) ?? rssSource;
+/**
+ * フィードの取り込み口を選ぶ。取得定義（issue #40）があればそれが最優先で、
+ * 無ければ URL で決める。
+ *
+ * **定義が読めなければ失敗の取り込み口を返す。** RSS に落とすと、HTML のページを
+ * フィードとして読んで「フィードではない」と記録され、本当の理由（定義が壊れている）が
+ * 見えなくなる
+ */
+export function sourceFor(target: {
+  url: string;
+  recipe: string | null;
+  recipeSource: RecipeSource | null;
+}): Source {
+  if (target.recipe !== null) {
+    const recipe = parseRecipe(target.recipe);
+    if (typeof recipe === 'string') return brokenRecipe(recipe);
+    return recipeSource(recipe, target.recipeSource);
+  }
+  // メールマガジン（issue #41）は届いたときに入る。手動の更新（r キー）で呼ばれても
+  // 取りに行く先が無いので、変わっていない扱いで終える
+  if (target.url.startsWith(MAIL_FEED_PREFIX)) return mailSource;
+  return knownSource(target.url) ?? rssSource;
+}
+
+const mailSource: Source = {
+  fetch: () => Promise.resolve({ kind: 'notModified' }),
+};
+
+function brokenRecipe(reason: string): Source {
+  return {
+    fetch: () =>
+      Promise.resolve({ kind: 'error', message: `取得定義が読めない: ${reason}`, reason: 'other' }),
+  };
 }
 
 /** 既定のソース。フィードの URL を取って RSS 2.0 / Atom / RDF として読む */

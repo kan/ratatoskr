@@ -1,10 +1,11 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
-import type { ReadMark } from '@shared/types';
+import { MAX_EVENTS_PER_REQUEST, type ReadingEvent, type ReadMark } from '@shared/types';
 import {
   ApiError,
   beaconRead,
   deletePin,
+  postEvents,
   postPin,
   postRead,
   sendEntryUnread,
@@ -37,7 +38,15 @@ export type OutboxItem =
       /** 記事のフィードの NSFW の印（issue #23）。立っているときだけ持つ */
       nsfw?: boolean;
     }
-  | { key: string; kind: 'unpin'; pinId: number };
+  | { key: string; kind: 'unpin'; pinId: number }
+  /** 読み方のデータ（issue #43）。1 件ずつ積み、送るときにまとめる */
+  | { key: string; kind: 'event'; event: ReadingEvent };
+
+/**
+ * 読み方のデータは、これだけ溜まるか、タブを離れる・繋がり直すまで送らない。
+ * 急がないデータなので、既読の送信（2 秒ごと）に毎回 1 本ずつ POST を足さない
+ */
+const EVENTS_BATCH = 20;
 
 /** 積んでから送るまでの待ち。j 連打で 1 記事ごとに POST が飛ぶのを防ぐ */
 const FLUSH_DELAY = 2_000;
@@ -116,7 +125,26 @@ export const useOutboxStore = defineStore('outbox', () => {
     items.value.set(item.key, item);
     // 永続化の完了は待たない。UI はサーバどころか IndexedDB も待たせない
     void putOutboxItem(item);
-    schedule(FLUSH_DELAY);
+    if (sendable()) schedule(FLUSH_DELAY);
+  }
+
+  /**
+   * 読み方のデータをこの回に送るか（離脱・復帰で立てる）。溜まるのを待たずに出し切る
+   */
+  let eventsDue = false;
+
+  function eventsReady(count: number): boolean {
+    return count > 0 && (eventsDue || count >= EVENTS_BATCH);
+  }
+
+  /** 送るものがあるか。溜めている途中の読み方のデータだけなら無い */
+  function sendable(): boolean {
+    let events = 0;
+    for (const item of items.value.values()) {
+      if (item.kind !== 'event') return true;
+      events += 1;
+    }
+    return eventsReady(events);
   }
 
   /**
@@ -182,6 +210,14 @@ export const useOutboxStore = defineStore('outbox', () => {
   }
 
   /**
+   * 読み方のデータを積む（issue #43）。**id は積む前に振る**ので、送信が二重になっても
+   * サーバで 1 件になる（冪等）
+   */
+  function queueEvent(event: ReadingEvent): void {
+    enqueue({ key: `event:${event.id}`, kind: 'event', event });
+  }
+
+  /**
    * 1 回の吐き出しで送る単位。既読はまとめて 1 リクエスト、未読戻しとレートは対象ごと。
    * marks が付いているものだけが sendBeacon に載せられる（離脱時の経路）。
    */
@@ -201,6 +237,16 @@ export const useOutboxStore = defineStore('outbox', () => {
         watermark: item.watermark,
       }));
       sends.push({ keys: reads.map((item) => item.key), run: () => postRead(marks), marks });
+    }
+
+    const events = batch.filter((item) => item.kind === 'event');
+    const readyEvents = eventsReady(events.length) ? events : [];
+    for (let i = 0; i < readyEvents.length; i += MAX_EVENTS_PER_REQUEST) {
+      const chunk = readyEvents.slice(i, i + MAX_EVENTS_PER_REQUEST);
+      sends.push({
+        keys: chunk.map((item) => item.key),
+        run: () => postEvents(chunk.map((item) => item.event)),
+      });
     }
 
     for (const item of batch) {
@@ -296,8 +342,10 @@ export const useOutboxStore = defineStore('outbox', () => {
       schedule(Math.min(RETRY_BASE * 2 ** (failures - 1), RETRY_MAX));
     } else {
       failures = 0;
-      // 送信中に積まれた分があれば続けて送る
-      if (items.value.size > 0) schedule(FLUSH_DELAY);
+      // 離脱・復帰の分は出し切った。次からはまた溜めてから送る
+      if (![...items.value.values()].some((item) => item.kind === 'event')) eventsDue = false;
+      // 送信中に積まれた分があれば続けて送る（溜めている途中の読み方のデータは待つ）
+      if (sendable()) schedule(FLUSH_DELAY);
     }
   }
 
@@ -324,6 +372,7 @@ export const useOutboxStore = defineStore('outbox', () => {
    * （次の起動で再送される。冪等なので二重に届いても害が無い）。
    */
   function flushOnUnload(): void {
+    eventsDue = true;
     const marks: ReadMark[] = [];
     for (const send of plan([...items.value.values()])) {
       if (send.marks !== undefined) marks.push(...send.marks);
@@ -346,7 +395,7 @@ export const useOutboxStore = defineStore('outbox', () => {
       // 読めなくても、この起動で積まれる分は送れる。ここで止まらない
       console.error('outbox の読み出しに失敗', err);
     }
-    if (items.value.size > 0) schedule(0);
+    if (sendable()) schedule(0);
   }
 
   /**
@@ -357,11 +406,14 @@ export const useOutboxStore = defineStore('outbox', () => {
     // 復帰したらすぐ送る。バックオフの途中でも待たせない
     window.addEventListener('online', () => {
       failures = 0;
+      eventsDue = true;
       schedule(0);
     });
     // タブを離れる時点で送っておく。戻ってこないまま閉じられることがある
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') schedule(0);
+      if (document.visibilityState !== 'hidden') return;
+      eventsDue = true;
+      schedule(0);
     });
     window.addEventListener('pagehide', flushOnUnload);
   }
@@ -374,6 +426,7 @@ export const useOutboxStore = defineStore('outbox', () => {
     queueRate,
     queuePin,
     queueUnpin,
+    queueEvent,
     pendingRates,
     flush,
     flushOnUnload,

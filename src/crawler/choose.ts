@@ -16,8 +16,12 @@ import type { Candidate } from './extract';
  * サイトのための保険であって、無いと動かないものではない。
  */
 
-/** 選ぶだけの仕事なので、速くて安いモデルで足りる */
-const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+/**
+ * Workers AI のモデル。本文の位置決め・取得定義の推定・翻訳（src/crawler/infer.ts、
+ * translate.ts）で共有する。選ぶだけの仕事には速くて安いモデルで足り、翻訳も
+ * 日本語を書ける多言語モデルなら同じもので足りる
+ */
+export const TEXT_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 
 /** AI に見せる候補の数。増やしても選びやすくはならず、外れを混ぜる余地が増える */
 const MAX_CANDIDATES = 8;
@@ -56,7 +60,7 @@ export async function chooseBodySelector(
 
   let answer: string;
   try {
-    const result = await ai.run(MODEL, {
+    const result = await ai.run(TEXT_MODEL, {
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: describeCandidates(shortlist) },
@@ -95,7 +99,7 @@ function describeCandidates(candidates: Candidate[]): string {
  * あり（llama-3.3-70b-instruct-fp8-fast は実測で後者だった）、前者しか見ていないと
  * 黙って空文字になって、AI を呼んだのに毎回点数へ落ちる。
  */
-function readAnswer(result: unknown): string {
+export function readAnswer(result: unknown): string {
   if (typeof result === 'string') return result;
   if (typeof result !== 'object' || result === null) return '';
 
@@ -113,7 +117,7 @@ function readAnswer(result: unknown): string {
  * `The answer is 2` とも返ってくるので、最初に出てくる数字を採る。
  * 範囲外なら null にして点数の 1 位に落とす。
  */
-function parseChoice(answer: string, count: number): number | null {
+export function parseChoice(answer: string, count: number): number | null {
   const match = /\d+/.exec(answer);
   if (match === null) return null;
 

@@ -6,6 +6,7 @@ import { getEntryRows, getFeedRow, seedFeed, setReadSeq } from '../test/seed';
 import asobiReceptionsJson from './__fixtures__/asobiticket-receptions.json?raw';
 import idolmasterNewsJson from './__fixtures__/idolmaster-news.json?raw';
 import rss2Xml from './__fixtures__/rss2.xml?raw';
+import newsListHtml from './__fixtures__/news-list.html?raw';
 
 const NOW = Math.floor(Date.parse('2026-08-05T00:00:00Z') / 1000);
 
@@ -207,7 +208,11 @@ describe('crawl', () => {
     await setReadSeq(env.DB, id, read[read.length - 1].id);
 
     const later = NOW + 40 * 86_400;
-    expect(await purgeExpiredEntries(env, { now: later })).toEqual({ deleted: 2, done: true });
+    expect(await purgeExpiredEntries(env, { now: later })).toEqual({
+      deleted: 2,
+      robots: 0,
+      done: true,
+    });
 
     const summary = await crawl(env, {
       now: later,
@@ -347,6 +352,65 @@ describe('crawl', () => {
     expect(feed.next_fetch_at).toBe(NOW + 86400);
   });
 
+  it('429 の Retry-After より前には取りに行かない（issue #39）', async () => {
+    const id = await seedFeed(env.DB, 'https://busy.example.com/feed.xml');
+    const stub = stubFetch(
+      () => new Response('', { status: 429, headers: { 'retry-after': '18000' } }),
+    );
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+
+    const feed = await getFeedRow(env.DB, id);
+    // 自前のバックオフ（1 回目は 1 時間）より、相手の指定（5 時間）を採る
+    expect(feed.next_fetch_at).toBe(NOW + 18000);
+  });
+
+  it('同じホストのフィードは、429 を受けた後その回は取りに行かない（issue #39）', async () => {
+    const first = await seedFeed(env.DB, 'https://busy.example.com/a.xml');
+    const second = await seedFeed(env.DB, 'https://busy.example.com/b.xml');
+    const stub = stubFetch(() => new Response('', { status: 429 }));
+
+    await crawl(env, { now: NOW, feedIds: [first, second], fetchImpl: stub.fetch });
+
+    expect(stub.calls).toHaveLength(1);
+    // 取りに行かなかった側も、受けたのと同じ失敗として間隔を空ける
+    expect((await getFeedRow(env.DB, second)).consecutive_failures).toBe(1);
+  });
+
+  it('全文取得の記事ページが robots.txt に禁じられていたら取りに行かず、印を残す（issue #39）', async () => {
+    const id = await seedFeed(env.DB, 'https://example.com/feed.xml', { fullText: 1 });
+    const stub = stubFetch(({ url }) => {
+      if (url.endsWith('/robots.txt')) return new Response('User-agent: *\nDisallow: /posts/');
+      return xmlResponse(rss2Xml);
+    });
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+
+    expect(stub.calls.some((call) => call.url.includes('/posts/'))).toBe(false);
+    expect((await getFeedRow(env.DB, id)).full_text_blocked).toBe(1);
+    // 取り直しを止める印（''）が付く
+    const entries = await getEntryRows(env.DB, id);
+    expect(entries.every((entry) => entry.full_body === '')).toBe(true);
+  });
+
+  it('robots.txt を一時的に取れないだけなら、記事に印を付けず、禁じられたとも出さない（issue #39）', async () => {
+    const id = await seedFeed(env.DB, 'https://example.com/feed.xml', { fullText: 1 });
+    const stub = stubFetch(({ url }) => {
+      if (url.endsWith('/robots.txt')) return new Response('', { status: 503 });
+      return xmlResponse(rss2Xml);
+    });
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+
+    expect(stub.calls.some((call) => call.url.includes('/posts/'))).toBe(false);
+    const feed = await getFeedRow(env.DB, id);
+    expect(feed.full_text_blocked).toBe(0);
+    expect(feed.consecutive_failures).toBe(0);
+    // 次の機会に取り直せるよう、印（''）は付けない
+    const entries = await getEntryRows(env.DB, id);
+    expect(entries.every((entry) => entry.full_body === null)).toBe(true);
+  });
+
   it('期限が来ていないフィードは取りに行かない', async () => {
     const due = await seedFeed(env.DB, 'https://due.example.com/feed.xml', { nextFetchAt: NOW });
     const notDue = await seedFeed(env.DB, 'https://notdue.example.com/feed.xml', {
@@ -439,5 +503,196 @@ describe('crawl（RSS を出さないサイト）', () => {
     const feed = await getFeedRow(env.DB, id);
     expect(feed.fetch_interval).toBe(3600);
     expect(feed.next_fetch_at).toBe(NOW + 3600);
+  });
+});
+
+/** 取得定義で読むフィード（issue #40） */
+describe('crawl（取得定義）', () => {
+  const PAGE = 'https://www.example.co.jp/news/';
+  /** サイトの作り替えで、もう当たらなくなった定義 */
+  const STALE = JSON.stringify({
+    version: 1,
+    list: {
+      url: PAGE,
+      format: 'html',
+      items: 'div.old-list > div.old-item',
+      fields: { url: { selector: 'a', attr: 'href' }, title: { selector: 'a' } },
+    },
+  });
+  const site = () =>
+    stubFetch(({ url }) =>
+      url.endsWith('/robots.txt')
+        ? new Response('', { status: 404 })
+        : new Response(newsListHtml, { headers: { 'content-type': 'text/html' } }),
+    );
+
+  it('推定した定義が当たらなくなったら、取れたページから推定し直して覚える', async () => {
+    const id = await seedFeed(env.DB, PAGE, { recipe: STALE, recipeSource: 'score' });
+
+    const summary = await crawl(env, { now: NOW, feedIds: [id], fetchImpl: site().fetch });
+
+    expect(summary.inserted).toBe(4);
+    const feed = await getFeedRow(env.DB, id);
+    expect(feed.recipe).not.toBe(STALE);
+    expect(feed.recipe_source).toBe('score');
+    expect(feed.last_error).toBeNull();
+  });
+
+  it('手で書いた定義は推定し直さず、失敗として残す', async () => {
+    const id = await seedFeed(env.DB, PAGE, { recipe: STALE, recipeSource: 'manual' });
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: site().fetch });
+
+    const feed = await getFeedRow(env.DB, id);
+    expect(feed.recipe).toBe(STALE);
+    expect(feed.last_error).toContain('取得定義で記事が 1 件も取れない');
+    expect(feed.last_error_kind).toBe('other');
+  });
+
+  it('一覧のページが robots.txt に禁じられていたら取りに行かない', async () => {
+    const id = await seedFeed(env.DB, PAGE, { recipe: STALE, recipeSource: 'score' });
+    const stub = stubFetch(({ url }) =>
+      url.endsWith('/robots.txt')
+        ? new Response('User-agent: *\nDisallow: /news/')
+        : new Response(newsListHtml),
+    );
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+
+    expect(stub.calls.map((call) => call.url)).toEqual(['https://www.example.co.jp/robots.txt']);
+    expect((await getFeedRow(env.DB, id)).last_error).toContain('robots.txt');
+  });
+
+  it('一覧のページの robots.txt を取れなければ、控えが切れるまで待つ', async () => {
+    const id = await seedFeed(env.DB, PAGE, { recipe: STALE, recipeSource: 'score' });
+    const stub = stubFetch(({ url }) =>
+      url.endsWith('/robots.txt') ? new Response('', { status: 503 }) : new Response(newsListHtml),
+    );
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+
+    const feed = await getFeedRow(env.DB, id);
+    expect(feed.last_error).toContain('robots.txt を取れない');
+    expect(feed.next_fetch_at).toBe(NOW + 3_600);
+  });
+
+  it('一覧のページの Retry-After を引き継ぐ（issue #39）', async () => {
+    const id = await seedFeed(env.DB, PAGE, { recipe: STALE, recipeSource: 'score' });
+    const stub = stubFetch(({ url }) =>
+      url.endsWith('/robots.txt')
+        ? new Response('', { status: 404 })
+        : new Response('', { status: 429, headers: { 'retry-after': '18000' } }),
+    );
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: stub.fetch });
+
+    expect((await getFeedRow(env.DB, id)).next_fetch_at).toBe(NOW + 18000);
+  });
+});
+
+/** 翻訳（issue #42） */
+describe('crawl（翻訳）', () => {
+  const ENGLISH = `<?xml version="1.0"?>
+<rss version="2.0"><channel><title>Squirrel News</title><link>https://en.example.com/</link>
+  <item><title>Squirrels found storing nuts in parked cars</title><link>https://en.example.com/2</link>
+    <guid>https://en.example.com/2</guid><description>&lt;p&gt;Residents were surprised to find acorns in their engines.&lt;/p&gt;</description></item>
+  <item><title>A quiet week in the forest canopy</title><link>https://en.example.com/1</link>
+    <guid>https://en.example.com/1</guid><description>&lt;p&gt;Nothing much happened, and that is good news.&lt;/p&gt;</description></item>
+</channel></rss>`;
+  const ai = {
+    run: (_model: string, input: { messages: { content: string }[] }) => {
+      const texts = JSON.parse(input.messages[1].content) as string[];
+      return Promise.resolve({ response: JSON.stringify(texts.map((text) => `訳:${text}`)) });
+    },
+  } as unknown as Ai;
+  const english = () => stubFetch(() => xmlResponse(ENGLISH));
+
+  it('訳すフィードは、取り込んだその回に訳して訳文を残す。原文は上書きしない', async () => {
+    const id = await seedFeed(env.DB, 'https://en.example.com/feed', { translate: 1 });
+
+    const summary = await crawl(env, { now: NOW, feedIds: [id], fetchImpl: english().fetch, ai });
+
+    const entries = await getEntryRows(env.DB, id);
+    expect(entries.map((entry) => entry.translated_title)).toEqual([
+      '訳:A quiet week in the forest canopy',
+      '訳:Squirrels found storing nuts in parked cars',
+    ]);
+    expect(entries[0].translated_body).toContain('訳:Nothing much happened');
+    expect(entries[0].title).toBe('A quiet week in the forest canopy');
+    expect(summary.filledEntryIds).toHaveLength(2);
+  });
+
+  it('訳さないフィードでも、日本語でなければ訳すことを勧めるだけにする', async () => {
+    const id = await seedFeed(env.DB, 'https://en.example.com/feed');
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: english().fetch, ai });
+
+    expect((await getFeedRow(env.DB, id)).translate_suggested).toBe(1);
+    expect((await getEntryRows(env.DB, id)).every((e) => e.translated_body === null)).toBe(true);
+  });
+
+  it('AI が使えない回は印を付けず、次の回に訳す', async () => {
+    const id = await seedFeed(env.DB, 'https://en.example.com/feed', { translate: 1 });
+    const down = { run: () => Promise.reject(new Error('quota')) } as unknown as Ai;
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: english().fetch, ai: down });
+    expect((await getEntryRows(env.DB, id)).every((e) => e.translated_body === null)).toBe(true);
+
+    await crawl(env, { now: NOW + 3600, feedIds: [id], fetchImpl: english().fetch, ai });
+    const after = await getEntryRows(env.DB, id);
+    expect(after.every((e) => e.translated_body?.includes('訳:'))).toBe(true);
+  });
+
+  it('訳している間に翻訳を切られたら、訳文を書き戻さない', async () => {
+    const id = await seedFeed(env.DB, 'https://en.example.com/feed', { translate: 1 });
+    // AI の応答待ちの間に、利用者が購読管理画面で翻訳を切った
+    const slow = {
+      run: async (model: string, input: { messages: { content: string }[] }) => {
+        await env.DB.prepare('UPDATE feeds SET translate = 0 WHERE id = ?').bind(id).run();
+        return ai.run(model as never, input as never);
+      },
+    } as unknown as Ai;
+
+    await crawl(env, { now: NOW, feedIds: [id], fetchImpl: english().fetch, ai: slow });
+
+    const entries = await getEntryRows(env.DB, id);
+    expect(entries.every((e) => e.translated_body === null)).toBe(true);
+  });
+
+  it('見出しも本文も短い外国語の記事も訳す（日本語の印を付けない）', async () => {
+    const id = await seedFeed(env.DB, 'https://en.example.com/feed', { translate: 1 });
+    const short = `<?xml version="1.0"?>
+<rss version="2.0"><channel><title>Releases</title><link>https://en.example.com/</link>
+  <item><title>v2.1 released</title><link>https://en.example.com/r</link>
+    <guid>https://en.example.com/r</guid><description>See notes.</description></item>
+</channel></rss>`;
+
+    await crawl(env, {
+      now: NOW,
+      feedIds: [id],
+      fetchImpl: stubFetch(() => xmlResponse(short)).fetch,
+      ai,
+    });
+
+    const [entry] = await getEntryRows(env.DB, id);
+    expect(entry.translated_title).toBe('訳:v2.1 released');
+  });
+
+  it('回の上限を超えた分は残し、次の回に訳す', async () => {
+    const id = await seedFeed(env.DB, 'https://en.example.com/feed', { translate: 1 });
+
+    await crawl(env, {
+      now: NOW,
+      feedIds: [id],
+      fetchImpl: english().fetch,
+      ai,
+      translateLimit: 1,
+    });
+    const once = await getEntryRows(env.DB, id);
+    expect(once.filter((e) => e.translated_body !== null)).toHaveLength(1);
+
+    await crawl(env, { now: NOW + 3600, feedIds: [id], fetchImpl: english().fetch, ai });
+    const twice = await getEntryRows(env.DB, id);
+    expect(twice.filter((e) => e.translated_body !== null)).toHaveLength(2);
   });
 });

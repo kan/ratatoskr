@@ -442,6 +442,11 @@ export const useFeedsStore = defineStore('feeds', () => {
     // その場で勧めたい（次の起動まで待たせない）
     local.fullText = feed.fullText;
     local.fullTextSuggested = feed.fullTextSuggested;
+    local.fullTextBlocked = feed.fullTextBlocked;
+    local.recipeSource = feed.recipeSource;
+    local.translate = feed.translate;
+    local.translateSuggested = feed.translateSuggested;
+    local.skimmed = feed.skimmed;
     syncUnreadCount(local);
     if (index === feedIndex.value) absorbNewEntries();
   }

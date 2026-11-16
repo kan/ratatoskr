@@ -1,13 +1,21 @@
 import type {
   CreateFeedResponse,
   Entry,
+  FeedCandidate as SharedFeedCandidate,
+  RecipeSource,
   FeedCandidatesResponse,
   FeedResponse,
   FetchFeedResponse,
   UpdateFeedRequest,
 } from '../../shared/types';
+import { isRecipeSource, RECIPE_SOURCES } from '../../shared/types';
 import { crawl } from '../crawler';
-import { discoverFeed, type FeedCandidate } from '../crawler/discover';
+import { discoverFeed } from '../crawler/discover';
+import { fetchArticlePage } from '../crawler/fetch';
+import { inferRecipe } from '../crawler/infer';
+import { titleFromHtml } from '../crawler/page-title';
+import { createPoliteFetch } from '../crawler/polite';
+import { parseRecipe } from '../crawler/recipe';
 import { selectEntries, selectEntriesByIds, selectMaxEntryId } from '../db/entries';
 import { deleteFeed, insertFeed, selectFeedById, updateFeedSettings } from '../db/feeds';
 import { badRequest, readJsonBody } from '../lib/body';
@@ -60,11 +68,28 @@ function normalizeUrl(raw: unknown): string {
 export async function createFeed(request: Request, env: Env): Promise<Response> {
   const body = await readJsonBody(request);
   if (typeof body !== 'object' || body === null) badRequest('ボディはオブジェクトで送る');
-  const input = body as { url?: unknown; rate?: unknown; folder?: unknown };
+  const input = body as {
+    url?: unknown;
+    rate?: unknown;
+    folder?: unknown;
+    recipe?: unknown;
+    recipeSource?: unknown;
+  };
 
   const url = normalizeUrl(input.url);
   const rate = input.rate === undefined ? 3 : parseRate(input.rate);
   const folder = input.folder === undefined ? '' : parseFolder(input.folder);
+
+  // 取得定義が付いてきたら自動検出はしない（issue #40）
+  if (input.recipe !== undefined) {
+    const recipe = parseRecipe(input.recipe);
+    if (typeof recipe === 'string') return badRequest(`取得定義が正しくない: ${recipe}`);
+    const source = parseRecipeSource(input.recipeSource);
+    return register(env, url, recipe.title ?? '', rate, folder, {
+      json: JSON.stringify(recipe),
+      source,
+    });
+  }
 
   const found = await discoverFeed(url);
   const { result } = found;
@@ -73,7 +98,7 @@ export async function createFeed(request: Request, env: Env): Promise<Response> 
   }
   // 上の階層で見つけたものは、フィードそのものでも 1 件でも選ばせる
   // （理由は crawler/discover.ts の Discovery.viaAncestor）
-  const choose = (candidates: FeedCandidate[]): Response => {
+  const choose = (candidates: SharedFeedCandidate[]): Response => {
     const body: FeedCandidatesResponse = { candidates, foundAt: found.pageUrl };
     return json(body, 300);
   };
@@ -84,6 +109,11 @@ export async function createFeed(request: Request, env: Env): Promise<Response> 
   }
 
   if (result.candidates.length === 0) {
+    // フィードが無い。貼られたページから取得定義を推定して、候補として見せる（issue #40）。
+    // 黙って登録しないのは、推定が外れて別の並び（ナビゲーション）を掴むことがあるため。
+    // 取れた見出しを見せて、利用者に確かめさせる
+    const inferred = await inferFromPage(env, url);
+    if (inferred !== null) return choose([inferred]);
     throw new ApiError('feed_not_found', 'このページからフィードを見つけられない', 404);
   }
   // 候補が複数あるときも、どれを購読するかは決められないので選ばせる
@@ -95,15 +125,68 @@ export async function createFeed(request: Request, env: Env): Promise<Response> 
   return register(env, result.candidates[0].url, '', rate, folder);
 }
 
+/** 推定した候補に添える見出しの数 */
+const PREVIEW_TITLES = 5;
+
+/**
+ * 貼られたページを取り直して、取得定義を推定する。
+ *
+ * 検出（discoverFeed）も同じページを取っているが、あちらは `<link>` を拾う走査で
+ * 本文を手放している。購読の追加は対話的な操作で、1 回余分に取るのは許容範囲。
+ * 記事の一覧のページはフィードではないので robots.txt を見る（issue #39）
+ */
+async function inferFromPage(env: Env, url: string): Promise<SharedFeedCandidate | null> {
+  const now = Math.floor(Date.now() / 1000);
+  const polite = createPoliteFetch(fetch, { db: env.DB, now });
+  const page = await fetchArticlePage(url, polite.page);
+  // 禁じられているのに「フィードが無い」と返すと、理由が分からないまま諦めることになる
+  if (page.kind === 'disallowed') {
+    throw new ApiError(
+      'feed_not_found',
+      'このページにフィードが無く、記事の一覧を推定しようとしたが、サイトの robots.txt で取得が禁じられている',
+      404,
+    );
+  }
+  if (page.kind !== 'ok') return null;
+  const title = (await titleFromHtml(page.html)) ?? '';
+  const inferred = await inferRecipe(page.html, url, title, env.AI, now);
+  if (inferred === null) return null;
+  return {
+    url,
+    title: title === '' ? null : title,
+    recipe: inferred.recipe,
+    recipeSource: inferred.source,
+    preview: inferred.feed.items.slice(0, PREVIEW_TITLES).map((item) => item.title),
+  };
+}
+
+function parseRecipeSource(value: unknown): RecipeSource {
+  if (value === undefined) return 'manual';
+  if (isRecipeSource(value)) return value;
+  return badRequest(`recipeSource は ${RECIPE_SOURCES.join(' / ')} のいずれか`);
+}
+
 async function register(
   env: Env,
   feedUrl: string,
   title: string,
   rate: number,
   folder: string,
+  recipe?: { json: string; source: RecipeSource },
 ): Promise<Response> {
   const now = Math.floor(Date.now() / 1000);
-  const id = await insertFeed(env.DB, { url: feedUrl, siteUrl: null, title, rate, folder }, now);
+  const id = await insertFeed(
+    env.DB,
+    {
+      url: feedUrl,
+      siteUrl: null,
+      title,
+      rate,
+      folder,
+      ...(recipe === undefined ? {} : { recipe }),
+    },
+    now,
+  );
   if (id === null) {
     throw new ApiError('already_subscribed', 'このフィードは既に購読している', 409);
   }
@@ -134,6 +217,9 @@ export async function updateFeed(request: Request, env: Env, id: number): Promis
     ...(input.disabled === undefined ? {} : { disabled: parseBoolean(input.disabled, 'disabled') }),
     ...(input.fullText === undefined ? {} : { fullText: parseBoolean(input.fullText, 'fullText') }),
     ...(input.nsfw === undefined ? {} : { nsfw: parseBoolean(input.nsfw, 'nsfw') }),
+    ...(input.translate === undefined
+      ? {}
+      : { translate: parseBoolean(input.translate, 'translate') }),
   };
 
   if (!(await updateFeedSettings(env.DB, id, settings))) {

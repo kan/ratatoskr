@@ -56,7 +56,7 @@ function entryClass(entry: Entry): string {
         <span class="mr-1.5 tabular-nums">{{ index + 1 }}</span>
         <!-- ピンの目印。数字の並びを崩さないよう、タイトル側に小さく出す -->
         <span v-if="isPinned(entry)" :data-testid="`pinned-${entry.id}`" title="ピン済み">📌</span>
-        {{ entry.title || '(無題)' }}
+        {{ entry.translation?.title || entry.title || '(無題)' }}
       </button>
     </li>
   </ul>

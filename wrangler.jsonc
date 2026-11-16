@@ -49,7 +49,8 @@
     "enabled": true
   },
 
-  // Cloudflare Access の検証に使う 2 つ。**ここには名前だけ置き、値は空にしておく。**
+  // Cloudflare Access の検証に使う 2 つと、メールマガジンを受け取る宛先（EMAIL_ADDRESS。
+  // issue #41。空ならメールは全て断る）。**ここには名前だけ置き、値は空にしておく。**
   // どちらもアカウント固有の値なので、公開リポジトリに自分のチーム名とアプリ ID を残さない。
   // 実際の値は database_id と同じ手口で、デプロイ時に scripts/deploy-config.mjs が
   // .prod.vars（git 管理外）から wrangler.deploy.json へ差し込む。
@@ -64,7 +65,8 @@
   // ローカルの値は .dev.vars（git 管理外）に置くと、こちらを上書きする
   "vars": {
     "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_AUD": ""
+    "ACCESS_AUD": "",
+    "EMAIL_ADDRESS": ""
   }
   // dev.port は置かない。開発サーバのポートは scripts/dev.mjs が起動のたびに空きから選ぶ
 }

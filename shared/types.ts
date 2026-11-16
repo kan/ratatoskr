@@ -21,6 +21,21 @@ export type FeedErrorKind =
   | 'connection_lost'
   | 'other';
 
+/** 取得定義を誰が作ったか（issue #40。migrations/0009_feeds_recipe.sql） */
+/**
+ * メールマガジン（issue #41）の送信者のフィードの URL の頭。`mailto:<送信者>` で作り、
+ * これで見分ける（クロールの対象から外す・購読管理画面の説明）。作る側と見分ける側で
+ * 同じ値を見る
+ */
+export const MAIL_FEED_PREFIX = 'mailto:';
+
+export const RECIPE_SOURCES = ['ai', 'score', 'manual'] as const;
+export type RecipeSource = (typeof RECIPE_SOURCES)[number];
+
+export function isRecipeSource(value: unknown): value is RecipeSource {
+  return (RECIPE_SOURCES as readonly unknown[]).includes(value);
+}
+
 export interface Feed {
   id: number;
   url: string;
@@ -45,6 +60,29 @@ export interface Feed {
   /** クロール時に「要約しか配信していない」と見えた。購読管理画面で勧めるのに使う */
   fullTextSuggested: boolean;
   /**
+   * 全文取得で、記事ページの取得が robots.txt に禁じられていた（issue #39）。
+   * 全文取得を入れたのに本文が埋まらない理由を、購読管理画面で見せるのに使う
+   */
+  fullTextBlocked: boolean;
+  /**
+   * RSS を出さないサイトを、取得定義で読んでいるか（issue #40）。誰が作った定義か。
+   * ai / score は購読の追加でページから推定したもの、manual は手で書いて貼ったもの。
+   * RSS や既知のソースで読んでいるフィードは null
+   */
+  recipeSource: RecipeSource | null;
+  /**
+   * 日本語以外の記事を訳すか（issue #42）。既定は false で、決めるのはユーザ
+   * （Workers AI の無料枠を記事の数だけ使うため）
+   */
+  translate: boolean;
+  /** クロール時に「日本語ではない」と見えた。購読管理画面で勧めるのに使う */
+  translateSuggested: boolean;
+  /**
+   * 最近ほとんど読まずに送っている（issue #43）。購読管理画面で、レートを下げるか
+   * 解除することを勧めるのに使う。1 日 1 回付け直す
+   */
+  skimmed: boolean;
+  /**
    * 表示を有効にした端末でしか出さない（issue #23）。**隠すのは画面側。**
    * サーバは全ての端末に同じものを配り、どの端末で出すかは端末ごとの設定で決まる
    * （web/src/stores/nsfw.ts）
@@ -61,7 +99,31 @@ export interface Entry {
   body: string; // サニタイズ済み HTML
   publishedAt: number | null;
   storedAt: number;
+  /**
+   * 訳文（issue #42）。訳したものだけに付く。原文（title / body）はそのまま残し、
+   * どちらを出すかは画面が決める（既定は訳文。t キーで原文と切り替える）
+   */
+  translation?: { title: string; body: string };
 }
+
+/**
+ * 読み方のデータ（issue #43）。端末で記録して outbox から送る。id は端末が振り、
+ * 同じものが二度届いてもサーバは 1 件にする（冪等）
+ */
+export type ReadingEvent =
+  /** 記事を表示していた時間。フォーカスがあり、最後の操作から 60 秒以内の時間だけを数える */
+  | { id: string; kind: 'dwell'; at: number; feedId: number; entryId: number; seconds: number }
+  /** 本文中のリンクを開いた */
+  | { id: string; kind: 'link'; at: number; feedId: number; entryId: number; url: string }
+  /** 元記事を開いた（v） */
+  | { id: string; kind: 'open'; at: number; feedId: number; entryId: number };
+
+export interface ReadingEventsRequest {
+  events: ReadingEvent[];
+}
+
+/** POST /api/events が 1 回に受ける件数。送る側（web/src/stores/outbox.ts）も同じ値で区切る */
+export const MAX_EVENTS_PER_REQUEST = 200;
 
 export interface Pin {
   id: number;
@@ -156,6 +218,15 @@ export interface CreateFeedRequest {
   url: string;
   rate?: number;
   folder?: string;
+  /**
+   * RSS を出さないサイトの取得定義（issue #40）。指定すると自動検出をせず、この定義で
+   * 読むフィードとして登録する。中身はサーバが確かめる（src/crawler/recipe.ts の parseRecipe）
+   *
+   * 候補（FeedCandidatesResponse）に付いてきた定義をそのまま返すか、開発時に書いた
+   * 定義を貼る。前者は recipeSource に候補の値（ai / score）を添える
+   */
+  recipe?: unknown;
+  recipeSource?: RecipeSource;
 }
 
 /** 登録できた場合。登録直後に読めるよう、同期的な初回クロールの結果を添える */
@@ -165,8 +236,21 @@ export interface CreateFeedResponse {
 }
 
 /** フィードが複数見つかった場合（HTTP 300）。どれを購読するかはユーザが選ぶ */
+export interface FeedCandidate {
+  url: string;
+  title: string | null;
+  /**
+   * フィードが見つからず、ページから取得定義を推定した候補（issue #40）。
+   * 選んだら CreateFeedRequest にそのまま載せて送り返す
+   */
+  recipe?: unknown;
+  recipeSource?: RecipeSource;
+  /** 推定した定義で取れた記事の見出し。何を購読することになるかを見せる */
+  preview?: string[];
+}
+
 export interface FeedCandidatesResponse {
-  candidates: { url: string; title: string | null }[];
+  candidates: FeedCandidate[];
   /**
    * 候補を見つけたページ。**貼られた URL と違うことがある。**
    *
@@ -186,6 +270,8 @@ export interface UpdateFeedRequest {
   disabled?: boolean;
   fullText?: boolean;
   nsfw?: boolean;
+  /** 日本語以外の記事を訳すか（issue #42） */
+  translate?: boolean;
 }
 
 export interface FeedResponse {

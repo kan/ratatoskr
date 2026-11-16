@@ -1,5 +1,12 @@
-import type { Feed, FeedErrorKind, FeedReadState, ReadMark } from '../../shared/types';
-import { CLEAR_FULL_BODIES } from './entries';
+import type {
+  Feed,
+  FeedErrorKind,
+  FeedReadState,
+  ReadMark,
+  RecipeSource,
+} from '../../shared/types';
+import { isRecipeSource, MAIL_FEED_PREFIX } from '../../shared/types';
+import { CLEAR_FULL_BODIES, CLEAR_TRANSLATIONS } from './entries';
 import { COPY_NSFW_TO_PINS } from './pins';
 import { UNREAD_COUNT_SUBQUERY } from './unread';
 
@@ -24,6 +31,11 @@ interface FeedRow {
   disabled: number;
   full_text: number;
   full_text_suggested: number;
+  full_text_blocked: number;
+  recipe_source: string | null;
+  translate: number;
+  translate_suggested: number;
+  skimmed: number;
   nsfw: number;
 }
 
@@ -46,13 +58,19 @@ function toFeed(row: FeedRow): Feed {
     fullText: row.full_text === 1,
     // 2 は「ユーザが決めた」。勧めるのは 1 のときだけ（migrations/0003_full_text.sql）
     fullTextSuggested: row.full_text_suggested === 1,
+    fullTextBlocked: row.full_text_blocked === 1,
+    recipeSource: isRecipeSource(row.recipe_source) ? row.recipe_source : null,
+    translate: row.translate === 1,
+    translateSuggested: row.translate_suggested === 1,
+    skimmed: row.skimmed === 1,
     nsfw: row.nsfw === 1,
   };
 }
 
 const FEED_COLUMNS = `f.id, f.url, f.site_url, f.title, f.icon_url, f.rate, f.folder, f.read_seq,
               f.last_fetched_at, f.last_error, f.last_error_kind, f.consecutive_failures,
-              f.disabled, f.full_text, f.full_text_suggested, f.nsfw`;
+              f.disabled, f.full_text, f.full_text_suggested, f.full_text_blocked,
+              f.recipe_source, f.translate, f.translate_suggested, f.skimmed, f.nsfw`;
 
 /**
  * 全フィードを未読数付きで返す。
@@ -133,6 +151,8 @@ export interface NewFeed {
   folder: string;
   /** 省けば false。OPML の取り込みだけが指定する（書き出した印を戻すため） */
   nsfw?: boolean;
+  /** RSS を出さないサイトの取得定義（issue #40）。JSON にして入れる */
+  recipe?: { json: string; source: RecipeSource };
 }
 
 /**
@@ -140,8 +160,8 @@ export interface NewFeed {
  * next_fetch_at は 0 にして、登録直後のクロール（同期・cron のどちらでも）に拾わせる。
  */
 const INSERT_FEED = `INSERT OR IGNORE INTO feeds
-       (url, site_url, title, rate, folder, nsfw, next_fetch_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 0, ?)`;
+       (url, site_url, title, rate, folder, nsfw, recipe, recipe_source, next_fetch_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`;
 
 function bindNewFeed(
   statement: D1PreparedStatement,
@@ -155,6 +175,8 @@ function bindNewFeed(
     feed.rate,
     feed.folder,
     feed.nsfw === true ? 1 : 0,
+    feed.recipe?.json ?? null,
+    feed.recipe?.source ?? null,
     now,
   );
 }
@@ -172,6 +194,26 @@ export async function insertFeed(
     id: number;
   }>();
   return row?.id ?? null;
+}
+
+/**
+ * メールマガジンの送信者のフィード（issue #41）を、無ければ作って返す。
+ *
+ * UNIQUE(url) に任せて INSERT OR IGNORE してから引く。同じ送信者のメールが同時に
+ * 届いても、フィードは 1 つにしかならない
+ */
+export async function ensureMailFeed(
+  db: D1Database,
+  feed: { url: string; title: string },
+  now: number,
+): Promise<{ id: number; disabled: boolean; translate: boolean }> {
+  const [, selected] = await db.batch<{ id: number; disabled: number; translate: number }>([
+    bindNewFeed(db.prepare(INSERT_FEED), { ...feed, siteUrl: null, rate: 3, folder: '' }, now),
+    db.prepare('SELECT id, disabled, translate FROM feeds WHERE url = ?').bind(feed.url),
+  ]);
+  const row = selected.results[0];
+  if (row === undefined) throw new Error(`メールのフィードを作れない: ${feed.url}`);
+  return { id: row.id, disabled: row.disabled === 1, translate: row.translate === 1 };
 }
 
 // D1 の 1 バッチが際限なく膨らまないように区切る（insertEntries と同じ考え方）
@@ -210,6 +252,8 @@ export interface FeedSettings {
   fullText?: boolean;
   /** 表示を有効にした端末でしか出さないか（issue #23） */
   nsfw?: boolean;
+  /** 日本語以外の記事を訳すか（issue #42） */
+  translate?: boolean;
 }
 
 /**
@@ -246,7 +290,11 @@ export async function updateFeedSettings(
     // 切るときは本文の位置も忘れる。覚えたままだと、入れ直しても同じセレクタを
     // そのまま使うので、抽出を仕損じたフィードをやり直す道が無くなる
     if (!settings.fullText) {
-      assignments.push('full_text_selector = NULL', 'full_text_source = NULL');
+      assignments.push(
+        'full_text_selector = NULL',
+        'full_text_source = NULL',
+        'full_text_blocked = 0',
+      );
     }
     // 勧める必要はもう無い。入れたのであれ断ったのであれ、ユーザが決めた。
     // 0 に戻すと次のクロールで同じ判定が出て勧めが復活するので、2 を入れる
@@ -255,6 +303,10 @@ export async function updateFeedSettings(
   if (settings.nsfw !== undefined) {
     assignments.push('nsfw = ?');
     params.push(settings.nsfw ? 1 : 0);
+  }
+  if (settings.translate !== undefined) {
+    assignments.push('translate = ?', 'translate_suggested = 2');
+    params.push(settings.translate ? 1 : 0);
   }
   // 無効化を解除したら次の cron で拾えるようにする。
   // 連続失敗で自動的に無効化されたフィードを、手で戻せるようにするため
@@ -274,6 +326,11 @@ export async function updateFeedSettings(
   const statements = [update];
   if (settings.fullText === false) {
     statements.push(db.prepare(CLEAR_FULL_BODIES).bind(Math.floor(Date.now() / 1000), id));
+  }
+  // 訳すのをやめたら訳文も捨てる。読み出しは訳文があれば添えて返すので、捨てないと
+  // 他の端末には訳文が出続ける。入れ直したときは訳し直す
+  if (settings.translate === false) {
+    statements.push(db.prepare(CLEAR_TRANSLATIONS).bind(Math.floor(Date.now() / 1000), id));
   }
   // NSFW の印はピンにも写してある。フィードの側だけ変えると、隠したはずのフィードの
   // 記事がピンの一覧に残る
@@ -309,6 +366,13 @@ export interface CrawlTarget {
   fullText: boolean;
   /** 記事ページのどこが本文か。NULL なら次の取得時に判定する */
   fullTextSelector: string | null;
+  /** 記事ページの取得が robots.txt に禁じられていた（issue #39） */
+  fullTextBlocked: boolean;
+  /** 日本語以外の記事を訳すか（issue #42） */
+  translate: boolean;
+  /** 取得定義の JSON（issue #40）。検証は取り込み側（src/crawler/source.ts）が行う */
+  recipe: string | null;
+  recipeSource: RecipeSource | null;
 }
 
 interface CrawlTargetRow {
@@ -323,6 +387,10 @@ interface CrawlTargetRow {
   consecutive_failures: number;
   full_text: number;
   full_text_selector: string | null;
+  full_text_blocked: number;
+  recipe: string | null;
+  recipe_source: string | null;
+  translate: number;
 }
 
 function toCrawlTarget(row: CrawlTargetRow): CrawlTarget {
@@ -338,11 +406,16 @@ function toCrawlTarget(row: CrawlTargetRow): CrawlTarget {
     consecutiveFailures: row.consecutive_failures,
     fullText: row.full_text === 1,
     fullTextSelector: row.full_text_selector,
+    fullTextBlocked: row.full_text_blocked === 1,
+    translate: row.translate === 1,
+    recipe: row.recipe,
+    recipeSource: isRecipeSource(row.recipe_source) ? row.recipe_source : null,
   };
 }
 
 const CRAWL_COLUMNS = `id, url, title, site_url, etag, last_modified, content_hash,
-         fetch_interval, consecutive_failures, full_text, full_text_selector`;
+         fetch_interval, consecutive_failures, full_text, full_text_selector,
+         full_text_blocked, recipe, recipe_source, translate`;
 
 /**
  * 期限が来たフィードを古い順に取る。LIMIT は必ず付ける
@@ -357,7 +430,7 @@ export async function selectCrawlTargets(
     .prepare(
       `SELECT ${CRAWL_COLUMNS}
          FROM feeds
-        WHERE disabled = 0 AND next_fetch_at <= ?
+        WHERE disabled = 0 AND next_fetch_at <= ? AND url NOT LIKE '${MAIL_FEED_PREFIX}%'
         ORDER BY next_fetch_at
         LIMIT ?`,
     )
@@ -472,6 +545,34 @@ export async function markFetchFailure(db: D1Database, p: FetchFailureParams): P
 }
 
 /**
+ * 推定し直した取得定義を覚える（issue #40）。記事が取れなくなった推定の定義を、
+ * 取り込みの中で作り直したときに使う
+ */
+export async function updateRecipe(
+  db: D1Database,
+  id: number,
+  json: string,
+  source: RecipeSource,
+): Promise<void> {
+  await db
+    .prepare('UPDATE feeds SET recipe = ?, recipe_source = ? WHERE id = ?')
+    .bind(json, source, id)
+    .run();
+}
+
+/** 記事ページの取得が robots.txt に禁じられていたかを覚える（issue #39） */
+export async function markFullTextBlocked(
+  db: D1Database,
+  id: number,
+  blocked: boolean,
+): Promise<void> {
+  await db
+    .prepare('UPDATE feeds SET full_text_blocked = ? WHERE id = ?')
+    .bind(blocked ? 1 : 0, id)
+    .run();
+}
+
+/**
  * 記事ページのどこが本文かを覚える（src/crawler/choose.ts が決めた結果）。
  * null を渡すと忘れさせる。サイトが作り替えられて引けなくなったときに、
  * 次の取得で判定し直させるために使う。
@@ -485,6 +586,14 @@ export async function updateFullTextSelector(
   await db
     .prepare('UPDATE feeds SET full_text_selector = ?, full_text_source = ? WHERE id = ?')
     .bind(selector, source, id)
+    .run();
+}
+
+/** 「日本語ではない」と見えたことを覚える（issue #42）。勧めるだけで訳しはしない */
+export async function markTranslateSuggested(db: D1Database, id: number): Promise<void> {
+  await db
+    .prepare('UPDATE feeds SET translate_suggested = 1 WHERE id = ? AND translate_suggested = 0')
+    .bind(id)
     .run();
 }
 

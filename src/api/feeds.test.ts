@@ -10,6 +10,7 @@ import type {
 import { markFullTextSuggested, selectFeedById } from '../db/feeds';
 import { apiJson, apiSend } from '../test/request';
 import { getEntryRows, getFeedRow, seedEntry, seedFeed, seedPin } from '../test/seed';
+import newsListHtml from '../crawler/__fixtures__/news-list.html?raw';
 
 /**
  * 購読管理。フィードの自動検出と初回クロールが絡むので、外向きの fetch は
@@ -151,6 +152,56 @@ describe('POST /api/feeds', () => {
     expect(response.status).toBe(404);
   });
 
+  it('フィードが無いページは、記事の一覧を推定して候補にする（issue #40）', async () => {
+    stubFetch({ 'https://www.example.co.jp/news/': { body: newsListHtml, type: HTML } });
+    const response = await apiSend('POST', '/api/feeds', {
+      url: 'https://www.example.co.jp/news/',
+    });
+
+    expect(response.status).toBe(300);
+    const body = (await response.json()) as FeedCandidatesResponse;
+    expect(body.candidates).toHaveLength(1);
+    const [candidate] = body.candidates;
+    expect(candidate.recipeSource).toBe('score');
+    expect(candidate.preview?.[0]).toBe('冬季休業のお知らせ & 窓口の受付時間について');
+    // 登録はまだしない
+    expect(await selectFeedById(env.DB, 1)).toBeNull();
+
+    // 候補の定義をそのまま送り返すと、その定義で読むフィードとして登録される
+    const created = await apiSend('POST', '/api/feeds', {
+      url: candidate.url,
+      recipe: candidate.recipe,
+      recipeSource: candidate.recipeSource,
+    });
+    expect(created.status).toBe(201);
+    const { feed, entries } = (await created.json()) as CreateFeedResponse;
+    expect(feed.recipeSource).toBe('score');
+    expect(entries.map((entry) => entry.title)).toContain('秋の展示会に出展します');
+  });
+
+  it('推定しようとしたページが robots.txt で禁じられていたら、その理由を返す', async () => {
+    stubFetch({
+      'https://www.example.co.jp/news/': { body: newsListHtml, type: HTML },
+      'https://www.example.co.jp/robots.txt': {
+        body: 'User-agent: *\nDisallow: /news/',
+        type: 'text/plain',
+      },
+    });
+    const response = await apiSend('POST', '/api/feeds', {
+      url: 'https://www.example.co.jp/news/',
+    });
+    expect(response.status).toBe(404);
+    expect(JSON.stringify(await response.json())).toContain('robots.txt');
+  });
+
+  it('壊れた取得定義は 400', async () => {
+    const response = await apiSend('POST', '/api/feeds', {
+      url: 'https://www.example.co.jp/news/',
+      recipe: { version: 1 },
+    });
+    expect(response.status).toBe(400);
+  });
+
   it('取得そのものに失敗したら 502', async () => {
     stubFetch({});
     const response = await apiSend('POST', '/api/feeds', { url: 'https://blog.example.com/' });
@@ -255,6 +306,32 @@ describe('PATCH /api/feeds/:id の nsfw', () => {
   it('真偽値以外は 400', async () => {
     const id = await seedFeed(env.DB, 'https://nsfw-bad.example.com/feed');
     expect((await apiSend('PATCH', `/api/feeds/${id}`, { nsfw: 1 })).status).toBe(400);
+  });
+});
+
+describe('PATCH /api/feeds/:id の translate（issue #42）', () => {
+  it('訳文は記事に添えて配り、訳すのをやめたら捨てて原文に戻す', async () => {
+    const feedId = await seedFeed(env.DB, 'https://en.example.com/feed');
+    const entryId = await seedEntry(env.DB, feedId, { title: 'Hello', body: '<p>World</p>' });
+    await env.DB.prepare(
+      `UPDATE entries SET translated_title = '訳題', translated_body = '<p>訳文</p>' WHERE id = ?`,
+    )
+      .bind(entryId)
+      .run();
+    await apiSend('PATCH', `/api/feeds/${feedId}`, { translate: true });
+
+    const before = await apiJson<BootstrapResponse>('/api/bootstrap');
+    const entry = before.entries.find((e) => e.id === entryId);
+    expect(entry?.title).toBe('Hello');
+    expect(entry?.translation).toEqual({ title: '訳題', body: '<p>訳文</p>' });
+    expect(before.feeds.find((f) => f.id === feedId)?.translate).toBe(true);
+
+    await apiSend('PATCH', `/api/feeds/${feedId}`, { translate: false });
+    const after = await apiJson<BootstrapResponse>('/api/bootstrap');
+    expect(after.entries.find((e) => e.id === entryId)?.translation).toBeUndefined();
+    const [row] = await getEntryRows(env.DB, feedId);
+    expect(row.translated_body).toBeNull();
+    expect(row.body_updated_at).not.toBeNull();
   });
 });
 

@@ -21,6 +21,8 @@ const props = defineProps<{
    * 文言そのものを受け取る（起動の途中は「無い」と断定しない。issue #10）
    */
   emptyLabel: string;
+  /** 訳文を出しているか（issue #42）。原文に切り替えられることを知らせるだけ */
+  translated?: boolean;
 }>();
 
 /**
@@ -28,7 +30,19 @@ const props = defineProps<{
  * 境界でフィードを跨ぐかどうかも含めて、判断はカーソルの所有者が持つ。
  * `links` はリンク一覧を開く要求（l と同じ）
  */
-const emit = defineEmits<{ next: []; prev: []; links: [] }>();
+const emit = defineEmits<{ next: []; prev: []; links: []; link: [url: string] }>();
+
+/**
+ * 本文中のリンクが開かれた（issue #43）。記録は親に任せ、ここは知らせるだけ。
+ * 開く動作そのものはブラウザの既定（新しいタブ）に任せて止めない。中ボタンも数える
+ */
+function onBodyClick(event: MouseEvent): void {
+  // auxclick は右クリック（button 2）でも来る。コンテキストメニューを出しただけで
+  // 「開いた」と数えると、読み方のデータ（issue #43）がずれる。数えるのは左と中だけ
+  if (event.button !== 0 && event.button !== 1) return;
+  const target = event.target instanceof Element ? event.target.closest('a[href]') : null;
+  if (target instanceof HTMLAnchorElement) emit('link', target.href);
+}
 
 const body = ref<HTMLElement | null>(null);
 
@@ -262,6 +276,7 @@ defineExpose({ pageDown, pageUp, scrollToBottom, links });
             <span v-if="entry.publishedAt">{{
               new Date(entry.publishedAt * 1000).toLocaleString('ja-JP')
             }}</span>
+            <span v-if="translated" data-testid="entry-translated"> / 訳文（t で原文）</span>
           </p>
           <hr class="my-4 border-neutral-300 dark:border-neutral-700" />
           <!-- body は取り込み時にサーバ側でサニタイズ済み（CLAUDE.md の不変条件 4） -->
@@ -270,6 +285,8 @@ defineExpose({ pageDown, pageUp, scrollToBottom, links });
             ref="body"
             class="article-body"
             @error.capture="onLoadError"
+            @click="onBodyClick"
+            @auxclick="onBodyClick"
             v-html="entry.body"
           ></div>
         </template>

@@ -21,6 +21,9 @@ export interface FeedSeed {
   disabled: number;
   fullText: number;
   fullTextSelector: string | null;
+  recipe: string | null;
+  recipeSource: string | null;
+  translate: number;
 }
 
 export interface FeedRow {
@@ -45,6 +48,12 @@ export interface FeedRow {
   full_text_suggested: number;
   full_text_selector: string | null;
   full_text_source: string | null;
+  full_text_blocked: number;
+  recipe: string | null;
+  recipe_source: string | null;
+  translate: number;
+  translate_suggested: number;
+  skimmed: number;
 }
 
 export interface EntryRow {
@@ -59,6 +68,8 @@ export interface EntryRow {
   stored_at: number;
   full_body: string | null;
   body_updated_at: number | null;
+  translated_title: string | null;
+  translated_body: string | null;
 }
 
 /**
@@ -67,7 +78,11 @@ export interface EntryRow {
  * entries は feeds の CASCADE で消える。
  */
 export async function resetDb(db: D1Database): Promise<void> {
-  await db.batch([db.prepare('DELETE FROM feeds'), db.prepare('DELETE FROM pins')]);
+  await db.batch([
+    db.prepare('DELETE FROM feeds'),
+    db.prepare('DELETE FROM pins'),
+    db.prepare('DELETE FROM robots_txt'),
+  ]);
 }
 
 export async function seedFeed(
@@ -91,6 +106,9 @@ export async function seedFeed(
     disabled: 0,
     fullText: 0,
     fullTextSelector: null,
+    recipe: null,
+    recipeSource: null,
+    translate: 0,
     ...overrides,
   };
 
@@ -99,8 +117,8 @@ export async function seedFeed(
       `INSERT INTO feeds
          (url, title, site_url, rate, folder, read_seq, etag, last_modified, content_hash,
           next_fetch_at, fetch_interval, consecutive_failures, disabled, created_at,
-          full_text, full_text_selector)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          full_text, full_text_selector, recipe, recipe_source, translate)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING id`,
     )
     .bind(
@@ -120,6 +138,9 @@ export async function seedFeed(
       0,
       seed.fullText,
       seed.fullTextSelector,
+      seed.recipe,
+      seed.recipeSource,
+      seed.translate,
     )
     .first<{ id: number }>();
 

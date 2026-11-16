@@ -27,6 +27,11 @@ export interface Feed {
   disabled: boolean;
   fullText: boolean;          // 記事ページから本文を取ってくるか（M7）
   fullTextSuggested: boolean; // 要約しか配信していないと見えた（勧めるだけ）
+  fullTextBlocked: boolean;   // 記事ページの取得が robots.txt に禁じられていた（issue #39）
+  recipeSource: 'ai' | 'score' | 'manual' | null; // 取得定義で読んでいるなら、誰が作ったか（issue #40）
+  translate: boolean;         // 日本語以外の記事を訳すか（issue #42）
+  translateSuggested: boolean; // 日本語ではないと見えた（勧めるだけ）
+  skimmed: boolean;           // 最近ほとんど読まずに送っている（issue #43。勧めるだけ）
   nsfw: boolean;              // 表示を有効にした端末でしか出さない（issue #23）
 }
 
@@ -39,7 +44,12 @@ export interface Entry {
   body: string;          // サニタイズ済み HTML
   publishedAt: number | null;
   storedAt: number;
+  translation?: { title: string; body: string }; // 訳文（issue #42）。訳した記事にだけ付く
 }
+
+// translation は原文（title / body）を置き換えない。どちらを出すかは画面が決める
+// （既定は訳文、t で原文）。訳文が変わった・消えたときも本文の変化として
+// updatedEntries で届け直す（body_updated_at を刻む）
 
 // body には、全文取得（M7）が成功していればフィードの要約ではなく記事ページの本文が
 // 入る。DB では別の列（entries.full_body）に持ち、読み出し時に COALESCE で 1 つに
@@ -176,6 +186,23 @@ export interface Pin {
 }
 ```
 
+### `POST /api/events`
+
+読み方のデータ（issue #43）。outbox からまとめて送られる。1 リクエスト 200 件まで（`MAX_EVENTS_PER_REQUEST`）。急がないデータなので、端末は 20 件溜まるかタブを離れるまで送らない。
+
+```jsonc
+{
+  "events": [
+    { "id": "<端末が振る UUID>", "kind": "dwell", "at": 1790000000, "feedId": 1, "entryId": 12345, "seconds": 42 },
+    { "id": "...", "kind": "link", "at": 1790000000, "feedId": 1, "entryId": 12345, "url": "https://..." },
+    { "id": "...", "kind": "open", "at": 1790000000, "feedId": 1, "entryId": 12345 }
+  ]
+}
+```
+
+**冪等。** 同じ id は 1 件になる（`INSERT OR IGNORE`）。サーバは記事とフィードの見出し・URL を
+写して残す（記事が保持期間で消えても、何の記事だったか分かるように）。応答は `{ "accepted": 件数 }`。
+
 ### `POST /api/entries/:id/unread`
 
 個別の記事を未読に戻す。`entry_states` に行を作る。ウォーターマークは動かさない。
@@ -224,13 +251,23 @@ export interface Pin {
 { "candidates": [ { "url": "...", "title": "..." } ] }
 ```
 
+**フィードが 1 つも見つからなければ、貼られたページから取得定義を推定する**（issue #40。`docs/DESIGN.md` の「取得定義」）。推定できたら、その候補を 300 で返す。候補には定義と、それで取れた見出しが付く。
+
+```jsonc
+{ "candidates": [ { "url": "...", "title": "...", "recipe": { /* 取得定義 */ }, "recipeSource": "score", "preview": ["見出し", "..."] } ] }
+```
+
+**`recipe` を付けて送ると、自動検出をせずにその定義で読むフィードとして登録する。** 推定した候補を選んだときは候補の `recipe` と `recipeSource` をそのまま送り返し、開発時に書いた定義を貼るときは `recipe` だけを送る（`recipeSource` は `manual` になる）。定義はサーバが確かめ、読めなければ 400。推定しようとしたページが robots.txt で禁じられていたら、その理由を添えて 404。
+
 ### `PATCH /api/feeds/:id`
 
-`rate`、`folder`、`title`、`disabled`、`fullText`、`nsfw` を更新する。`title` はフィードの提供する値を上書きするユーザ指定値。
+`rate`、`folder`、`title`、`disabled`、`fullText`、`nsfw`、`translate` を更新する。`title` はフィードの提供する値を上書きするユーザ指定値。
 
 `nsfw` を変えると、**そのフィードの記事を指すピンの `nsfw` も同じ値に揃える**（1 つの batch）。記事が保持期間で消えたピンは、どのフィードの記事だったかを引けないので動かさない。
 
 `fullText` は「記事ページから本文を取ってくるか」。**既定は false で、決めるのはユーザ。** 相手のサーバに記事の数だけ取りに行く動作なので、こちらが勝手に始めない。クロール時に要約しか配信していないと見えたフィードは `fullTextSuggested` が立ち、購読管理画面がそれを勧める。
+
+`translate` は「日本語以外の記事を訳すか」（issue #42）。`fullText` と同じく既定は false で、決めるのはユーザ。切ると訳文を捨て、訳文の付いていた記事は `updatedEntries` で原文に戻して届け直す。
 
 ### `DELETE /api/feeds/:id`
 
@@ -240,7 +277,7 @@ export interface Pin {
 
 手動での即時クロール。`next_fetch_at` を無視して実行し、更新後の Feed と新着 Entry を返す。
 
-`entries` には**新着に加えて、全文取得（M7）で本文が差し替わった記事も入る。** 既にクライアントが持っている記事なので `sinceId` の差分には出てこず、これを返さないと `fullText` を入れた直後に手持ちの未読が要約のまま残る。クライアントは id で上書きマージする。
+`entries` には**新着に加えて、全文取得（M7）で本文が差し替わった記事と、訳文が入った記事（issue #42）も入る。** 既にクライアントが持っている記事なので `sinceId` の差分には出てこず、これを返さないと `fullText` を入れた直後に手持ちの未読が要約のまま残る。クライアントは id で上書きマージする。
 
 ### `POST /api/feeds/fetch-all`
 

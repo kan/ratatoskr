@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
  * 差し込むのは 3 種類。
  *
  *   1. D1 の database_id … デプロイ時に必須で、データベース名だけでは解決されない
- *   2. vars の中身 … Access の検証に使う 2 つ（名前は wrangler.jsonc の vars が正で、
+ *   2. vars の中身 … Access の検証に使う 2 つと、メールの宛先（名前は wrangler.jsonc の vars が正で、
  *      Env の型もそこから生成される）。**デプロイのたびに必ず渡す**ので、Worker ごと
  *      消しても .prod.vars さえあれば 1 コマンドで戻せる
  *   3. 入口のホスト名（任意）… CUSTOM_DOMAIN を置くと、そのホスト名を Custom Domain に
@@ -100,7 +100,13 @@ if (customDomain !== undefined) {
 
 // vars の名前は wrangler.jsonc が正。ここに一覧を持たない
 const names = Object.keys(config.vars ?? {});
-const missing = names.filter((name) => valueOf(name) === undefined);
+/**
+ * 置かなくても止めない vars。使わなければ空のままで困らない機能の設定だけを入れる。
+ * 後から足した機能のために、既存の .prod.vars の書き足しを強いないため
+ * （EMAIL_ADDRESS はメールマガジンの取り込み。空ならメールを全て断る）
+ */
+const OPTIONAL_VARS = new Set(['EMAIL_ADDRESS']);
+const missing = names.filter((name) => valueOf(name) === undefined && !OPTIONAL_VARS.has(name));
 // 手元から組み立てているのに値が無いのは、たいてい .prod.vars の書き忘れ。そこで止める。
 // ボタン経由では値の置き場がビルドの設定しか無く、初回は当然まだ入っていないので進める
 if (missing.length > 0 && selfHosted) {
@@ -115,7 +121,7 @@ for (const name of names) config.vars[name] = valueOf(name) ?? '';
 // 生成物。手で直しても次のデプロイで消える
 writeFileSync(CONFIG_OUT, `${JSON.stringify(config, null, 2)}\n`);
 
-const empty = names.filter((name) => config.vars[name] === '');
+const empty = names.filter((name) => config.vars[name] === '' && !OPTIONAL_VARS.has(name));
 if (empty.length > 0) console.warn(`空のまま上げる: ${empty.join(', ')}`);
 const from = selfHosted ? LOCAL_VARS : 'ビルドの環境変数';
 console.log(`${CONFIG_OUT} を生成した（${SOURCE} + ${from}）`);

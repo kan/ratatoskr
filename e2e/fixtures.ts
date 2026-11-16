@@ -10,6 +10,8 @@ import type {
   FetchFeedResponse,
   ReadMark,
   ReadRequest,
+  ReadingEvent,
+  ReadingEventsRequest,
   SyncResponse,
   PinResponse,
   ReadResponse,
@@ -41,6 +43,11 @@ function feed(id: number, title: string, rate: number, unreadCount: number): Fee
     disabled: false,
     fullText: false,
     fullTextSuggested: false,
+    fullTextBlocked: false,
+    recipeSource: null,
+    translate: false,
+    translateSuggested: false,
+    skimmed: false,
     nsfw: false,
   };
 }
@@ -180,6 +187,8 @@ export interface MockOptions {
    * ENTRIES そのものを書き換えると、本文の長さで Space の境界を見ているテストが動く
    */
   bodies?: Record<number, string>;
+  /** 記事 id → 訳文（issue #42）。訳した記事として配る */
+  translations?: Record<number, { title: string; body: string }>;
 }
 
 /**
@@ -204,13 +213,22 @@ export interface ApiRecorder {
   bootstrapCalls: number;
   /** 次の同期で返す応答。積んだ分から順に使い、空なら「変化なし」を返す */
   nextSync: SyncResponse[];
+  /** POST /api/events で届いた読み方のデータ（issue #43） */
+  events: ReadingEvent[];
 }
 
 export async function mockApi(page: Page, options: MockOptions = {}): Promise<ApiRecorder> {
   // 足す分は朝刊（feed 1）の後ろに付ける。id を離してあるので、既定の 3 件を
   // 見ている他のテストの位置表示（(1/2) 朝刊）には影響しない
   const entries: Entry[] = [
-    ...ENTRIES.map((e) => ({ ...e, body: options.bodies?.[e.id] ?? e.body })),
+    ...ENTRIES.map((e) => {
+      const translation = options.translations?.[e.id];
+      return {
+        ...e,
+        body: options.bodies?.[e.id] ?? e.body,
+        ...(translation === undefined ? {} : { translation }),
+      };
+    }),
     ...Array.from({ length: options.extraEntries ?? 0 }, (_, i) =>
       entry(100 + i, 1, `朝刊の追加 ${i + 1} 本目`, SHORT),
     ),
@@ -240,6 +258,7 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
     syncCalls: [],
     bootstrapCalls: 0,
     nextSync: [],
+    events: [],
   };
 
   if (options.showHelp !== true) {
@@ -288,6 +307,12 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
     await route.fulfill({
       json: queued ?? syncResponse({ feeds: FEEDS.map((feed) => current(feed.id)) }),
     });
+  });
+
+  await page.route('**/api/events', async (route) => {
+    const body = route.request().postDataJSON() as ReadingEventsRequest;
+    recorder.events.push(...body.events);
+    await route.fulfill({ json: { accepted: body.events.length } });
   });
 
   await page.route('**/api/read', async (route) => {
