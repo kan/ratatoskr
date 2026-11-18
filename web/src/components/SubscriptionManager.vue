@@ -330,6 +330,21 @@ async function toggleTranslate(feed: Feed): Promise<void> {
 }
 
 /**
+ * 文字起こしの入切（issue #46）。**入れても手動更新で起こさない。** 1 本に数回の cron を
+ * 要し、手動更新の応答を何分も待たせることになるので、次の cron からの取り掛かりに任せる。
+ * 切っても、済んだ要約は残る（作り直すと無料枠を音声の長さだけ使い直すため）
+ */
+function toggleTranscribe(feed: Feed): Promise<void> {
+  const transcribe = !feed.transcribe;
+  return run(async () => {
+    await session.editFeed(feed.id, { transcribe });
+    message.value = transcribe
+      ? '文字起こしを入れた。最新 3 回分を、次の定期取得から順に起こす（1 回分に 20 分ほど）'
+      : '文字起こしを止めた。済んだ要約は残る';
+  });
+}
+
+/**
  * NSFW の印の付け外し（issue #23）。
  *
  * **隠している端末で付けると、その行はこの場で消える。** 何も言わないと消えた理由が
@@ -604,6 +619,13 @@ async function onOpmlSelected(event: Event): Promise<void> {
                   日本語以外の記事が並んでいる。「翻訳」で日本語に訳して読める
                 </p>
                 <p
+                  v-if="feed.transcribeSuggested && !feed.transcribe"
+                  class="text-amber-700 dark:text-amber-500"
+                  :data-testid="`manage-transcribe-hint-${feed.id}`"
+                >
+                  Podcast のようだ。「文字起こし」で最新 3 回分を文字起こしして要約できる
+                </p>
+                <p
                   v-if="feed.fullText && feed.fullTextBlocked"
                   class="text-amber-700 dark:text-amber-500"
                   :data-testid="`manage-full-text-blocked-${feed.id}`"
@@ -680,6 +702,21 @@ async function onOpmlSelected(event: Event): Promise<void> {
                   @click="toggleTranslate(feed)"
                 >
                   翻訳
+                </button>
+                <button
+                  v-if="feed.podcast"
+                  :class="toggleClass(feed.transcribe)"
+                  :disabled="busy"
+                  :aria-pressed="feed.transcribe"
+                  :title="
+                    feed.transcribe
+                      ? 'Podcast の最新 3 回分を文字起こしして要約する（入）'
+                      : 'Podcast の最新 3 回分を文字起こしして要約する（切）'
+                  "
+                  :data-testid="`manage-transcribe-${feed.id}`"
+                  @click="toggleTranscribe(feed)"
+                >
+                  文字起こし
                 </button>
                 <button
                   :class="toggleClass(feed.nsfw)"

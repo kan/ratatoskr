@@ -7,6 +7,7 @@ import type {
 } from '../../shared/types';
 import { isRecipeSource, MAIL_FEED_PREFIX } from '../../shared/types';
 import { CLEAR_FULL_BODIES, CLEAR_TRANSLATIONS } from './entries';
+import { RESET_TRANSCRIPT_FAILURES, RETRY_FAILED_TRANSCRIPTS } from './transcripts';
 import { COPY_NSFW_TO_PINS } from './pins';
 import { UNREAD_COUNT_SUBQUERY } from './unread';
 
@@ -35,6 +36,8 @@ interface FeedRow {
   recipe_source: string | null;
   translate: number;
   translate_suggested: number;
+  transcribe: number;
+  transcribe_suggested: number;
   skimmed: number;
   nsfw: number;
 }
@@ -62,6 +65,9 @@ function toFeed(row: FeedRow): Feed {
     recipeSource: isRecipeSource(row.recipe_source) ? row.recipe_source : null,
     translate: row.translate === 1,
     translateSuggested: row.translate_suggested === 1,
+    transcribe: row.transcribe === 1,
+    transcribeSuggested: row.transcribe_suggested === 1,
+    podcast: isPodcast(row.transcribe_suggested),
     skimmed: row.skimmed === 1,
     nsfw: row.nsfw === 1,
   };
@@ -70,7 +76,8 @@ function toFeed(row: FeedRow): Feed {
 const FEED_COLUMNS = `f.id, f.url, f.site_url, f.title, f.icon_url, f.rate, f.folder, f.read_seq,
               f.last_fetched_at, f.last_error, f.last_error_kind, f.consecutive_failures,
               f.disabled, f.full_text, f.full_text_suggested, f.full_text_blocked,
-              f.recipe_source, f.translate, f.translate_suggested, f.skimmed, f.nsfw`;
+              f.recipe_source, f.translate, f.translate_suggested, f.transcribe,
+              f.transcribe_suggested, f.skimmed, f.nsfw`;
 
 /**
  * 全フィードを未読数付きで返す。
@@ -254,6 +261,8 @@ export interface FeedSettings {
   nsfw?: boolean;
   /** 日本語以外の記事を訳すか（issue #42） */
   translate?: boolean;
+  /** Podcast を文字起こしして要約するか（issue #46） */
+  transcribe?: boolean;
 }
 
 /**
@@ -308,6 +317,12 @@ export async function updateFeedSettings(
     assignments.push('translate = ?', 'translate_suggested = 2');
     params.push(settings.translate ? 1 : 0);
   }
+  // 切っても、済んだ文字起こしと要約は捨てない。訳文と違って原文を置き換えるものではなく、
+  // 作り直すと無料枠を音声の長さだけ使い直すことになる。止まるのは新しく始める分だけ
+  if (settings.transcribe !== undefined) {
+    assignments.push('transcribe = ?', 'transcribe_suggested = 2');
+    params.push(settings.transcribe ? 1 : 0);
+  }
   // 無効化を解除したら次の cron で拾えるようにする。
   // 連続失敗で自動的に無効化されたフィードを、手で戻せるようにするため
   if (settings.disabled === false) {
@@ -331,6 +346,14 @@ export async function updateFeedSettings(
   // 他の端末には訳文が出続ける。入れ直したときは訳し直す
   if (settings.translate === false) {
     statements.push(db.prepare(CLEAR_TRANSLATIONS).bind(Math.floor(Date.now() / 1000), id));
+  }
+  // 入れ直したら、諦めていたエピソードもやり直す。Workers AI の障害が長引くと、
+  // 失敗を数えて諦めたエピソードが残る（src/crawler/transcribe.ts の MAX_FAILURES）
+  if (settings.transcribe === true) {
+    statements.push(
+      db.prepare(RESET_TRANSCRIPT_FAILURES).bind(id),
+      db.prepare(RETRY_FAILED_TRANSCRIPTS).bind(id),
+    );
   }
   // NSFW の印はピンにも写してある。フィードの側だけ変えると、隠したはずのフィードの
   // 記事がピンの一覧に残る
@@ -370,6 +393,11 @@ export interface CrawlTarget {
   fullTextBlocked: boolean;
   /** 日本語以外の記事を訳すか（issue #42） */
   translate: boolean;
+  /**
+   * 音声付きの記事が届いたことを、もう知っているか（issue #46。Feed.podcast と同じ判定）。
+   * 知らなければ、取り込みで文字起こしを勧め、取り込み済みの記事にも音声を書き足す
+   */
+  podcast: boolean;
   /** 取得定義の JSON（issue #40）。検証は取り込み側（src/crawler/source.ts）が行う */
   recipe: string | null;
   recipeSource: RecipeSource | null;
@@ -391,6 +419,16 @@ interface CrawlTargetRow {
   recipe: string | null;
   recipe_source: string | null;
   translate: number;
+  transcribe_suggested: number;
+}
+
+/**
+ * 音声付きの記事が届いたことがあるか。勧めの印は音声が届いた時点で 1 になり、
+ * ユーザが決めれば（入れても断っても）2 になる。0 のままなのは音声が一度も届いて
+ * いないフィードだけ（migrations/0012_podcast.sql）
+ */
+function isPodcast(transcribeSuggested: number): boolean {
+  return transcribeSuggested !== 0;
 }
 
 function toCrawlTarget(row: CrawlTargetRow): CrawlTarget {
@@ -408,6 +446,7 @@ function toCrawlTarget(row: CrawlTargetRow): CrawlTarget {
     fullTextSelector: row.full_text_selector,
     fullTextBlocked: row.full_text_blocked === 1,
     translate: row.translate === 1,
+    podcast: isPodcast(row.transcribe_suggested),
     recipe: row.recipe,
     recipeSource: isRecipeSource(row.recipe_source) ? row.recipe_source : null,
   };
@@ -415,7 +454,7 @@ function toCrawlTarget(row: CrawlTargetRow): CrawlTarget {
 
 const CRAWL_COLUMNS = `id, url, title, site_url, etag, last_modified, content_hash,
          fetch_interval, consecutive_failures, full_text, full_text_selector,
-         full_text_blocked, recipe, recipe_source, translate`;
+         full_text_blocked, recipe, recipe_source, translate, transcribe_suggested`;
 
 /**
  * 期限が来たフィードを古い順に取る。LIMIT は必ず付ける
@@ -586,6 +625,14 @@ export async function updateFullTextSelector(
   await db
     .prepare('UPDATE feeds SET full_text_selector = ?, full_text_source = ? WHERE id = ?')
     .bind(selector, source, id)
+    .run();
+}
+
+/** 音声付きの記事が届いたことを覚える（issue #46）。勧めるだけで文字起こしはしない */
+export async function markTranscribeSuggested(db: D1Database, id: number): Promise<void> {
+  await db
+    .prepare('UPDATE feeds SET transcribe_suggested = 1 WHERE id = ? AND transcribe_suggested = 0')
+    .bind(id)
     .run();
 }
 

@@ -1,5 +1,6 @@
 import { errorMessage } from '../lib/errors';
 import { parseDate } from './date';
+import { audioOf } from './podcast';
 import { ParseError, type ParsedFeed, type ParsedItem } from './types';
 import { attr, collect, firstLink, isXmlNode, parseXml, pick, text } from './xml';
 
@@ -63,7 +64,14 @@ function toItem(item: unknown, now?: number): ParsedItem {
     // content:encoded は description より情報量が多いので優先する
     body: text(pick(item, 'encoded', 'description')) ?? '',
     publishedAt: parseDate(pick(item, 'pubDate', 'date'), now),
+    ...withAudio(item),
   };
+}
+
+/** 音声の無い記事には audio の鍵ごと付けない（テストや比較で undefined の鍵が混ざらないように） */
+function withAudio(item: unknown): Pick<ParsedItem, 'audio'> {
+  const audio = audioOf(item);
+  return audio === undefined ? {} : { audio };
 }
 
 function parseAtom(feed: unknown, now?: number): ParsedFeed {
@@ -78,6 +86,7 @@ function parseAtom(feed: unknown, now?: number): ParsedFeed {
       body: text(pick(entry, 'content', 'summary')) ?? '',
       // published が無いフィードは updated しか持たない
       publishedAt: parseDate(pick(entry, 'published', 'updated'), now),
+      ...withAudio(entry),
     })),
   };
 }

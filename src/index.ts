@@ -2,6 +2,7 @@ import { handleApi } from './api/router';
 import { crawl } from './crawler';
 import { RETENTION_CRON } from './cron';
 import { ingestMail } from './mail/ingest';
+import { transcribePending } from './crawler/transcribe';
 import { purgeExpiredEntries } from './retention';
 
 export default {
@@ -29,6 +30,11 @@ export default {
     // filledEntryIds は記事の id をそのまま持つので、件数だけを残す。
     // cron のログは毎回出るものなので、追える形で短くしておく
     console.log('crawl', JSON.stringify({ ...counts, filled: filledEntryIds.length }));
+
+    // Podcast の文字起こし（issue #46）。フィードの取得とは別の仕事として毎回進める
+    // （src/crawler/transcribe.ts）
+    const transcribed = await transcribePending(env);
+    if (transcribed.length > 0) console.log('transcribe', JSON.stringify({ done: transcribed }));
   },
 
   // メールマガジンの取り込み（issue #41）。Cloudflare Email Routing でこの Worker に

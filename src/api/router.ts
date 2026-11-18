@@ -9,6 +9,7 @@ import { createPin, removePin } from './pins';
 import { exportOpml, importOpml } from './opml';
 import { read } from './read';
 import { sync } from './sync';
+import { getTranscript } from './transcript';
 import { setEntryUnread } from './unread';
 
 /**
@@ -30,6 +31,7 @@ const ROUTES: Record<string, Handler> = {
   'POST /api/events': postEvents,
   'POST /api/entries/:id/unread': (_request, env, id) => setEntryUnread(env, id, true),
   'DELETE /api/entries/:id/unread': (_request, env, id) => setEntryUnread(env, id, false),
+  'GET /api/entries/:id/transcript': (_request, env, id) => getTranscript(env, id),
   'POST /api/feeds': createFeed,
   'PATCH /api/feeds/:id': (request, env, id) => updateFeed(request, env, id),
   'DELETE /api/feeds/:id': (_request, env, id) => removeFeed(env, id),

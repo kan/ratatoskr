@@ -1,4 +1,6 @@
-import type { Entry } from '../../shared/types';
+import type { AudioSource, Entry, EntryAudio } from '../../shared/types';
+import { isTranscriptState } from '../../shared/types';
+import { parseChapters, parseSummary } from './audio';
 import { UNREAD_JOIN, UNREAD_PREDICATE } from './unread';
 
 /**
@@ -16,6 +18,12 @@ interface EntryRow {
   stored_at: number;
   translated_title: string | null;
   translated_body: string | null;
+  audio_url: string | null;
+  audio_type: string | null;
+  audio_duration: number | null;
+  audio_chapters: string | null;
+  transcript_state: string | null;
+  transcript_summary: string | null;
 }
 
 function toEntry(row: EntryRow): Entry {
@@ -33,7 +41,23 @@ function toEntry(row: EntryRow): Entry {
   if (row.translated_body !== null) {
     entry.translation = { title: row.translated_title ?? row.title, body: row.translated_body };
   }
+  // 音声も音声付きの記事にだけ付ける（issue #46）
+  if (row.audio_url !== null) entry.audio = toAudio(row, row.audio_url);
   return entry;
+}
+
+function toAudio(row: EntryRow, url: string): EntryAudio {
+  const audio: EntryAudio = {
+    url,
+    type: row.audio_type,
+    duration: row.audio_duration,
+    chapters: parseChapters(row.audio_chapters),
+  };
+  if (isTranscriptState(row.transcript_state)) audio.transcript = row.transcript_state;
+  // 要約は終えたとき（completeTranscript）にしか書かれない
+  const summary = parseSummary(row.transcript_summary);
+  if (summary !== null) audio.summary = summary;
+  return audio;
 }
 
 // 全文が取れていればそちらを body として返す。フィードが配信した本文（e.body）は
@@ -43,7 +67,9 @@ const ENTRY_COLUMNS = `e.id, e.feed_id, e.url, e.title, e.author,
          COALESCE(NULLIF(e.full_body, ''), e.body) AS body,
          e.published_at, e.stored_at,
          NULLIF(e.translated_title, '') AS translated_title,
-         NULLIF(e.translated_body, '') AS translated_body`;
+         NULLIF(e.translated_body, '') AS translated_body,
+         e.audio_url, e.audio_type, e.audio_duration, e.audio_chapters,
+         e.transcript_state, e.transcript_summary`;
 
 /**
  * 保持期間を過ぎた記事を消す（docs/DESIGN.md §3「保持期間」）。
@@ -178,6 +204,8 @@ export interface NewEntry {
   /** サニタイズ済み HTML のみ */
   body: string;
   publishedAt: number | null;
+  /** Podcast のエピソードの音声（issue #46）。url は http / https の絶対 URL */
+  audio?: AudioSource;
 }
 
 // D1 の 1 バッチが際限なく膨らまないように区切る。フィード 1 本あたりの
@@ -210,8 +238,9 @@ export async function insertEntries(
 
   const statement = db.prepare(
     `INSERT OR IGNORE INTO entries
-       (feed_id, guid_hash, url, title, author, body, published_at, stored_at)
-     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
+       (feed_id, guid_hash, url, title, author, body, published_at, stored_at,
+        audio_url, audio_type, audio_duration, audio_chapters)
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
       WHERE NOT EXISTS (
               SELECT 1 FROM entries WHERE feed_id = ?1 AND url = ?3 AND title = ?4
             )
@@ -236,6 +265,7 @@ export async function insertEntries(
             e.body,
             e.publishedAt,
             storedAt,
+            ...audioColumns(e),
           ),
         ),
     );
@@ -470,6 +500,38 @@ export async function updateTranslations(
       rows.slice(i, i + BATCH_SIZE).map((row) => statement.bind(row.title, row.body, now, row.id)),
     );
   }
+}
+
+/**
+ * 取り込み済みの記事に音声を書き足す（issue #46）。音声の列ができる前に取り込んだ
+ * Podcast の記事は、取り込みが INSERT OR IGNORE なので音声を持たないまま残る。
+ * 音声の付いた記事が初めて届いたフィードで 1 度だけ呼ぶ（src/crawler/index.ts）
+ */
+export async function fillMissingAudio(db: D1Database, entries: NewEntry[]): Promise<void> {
+  const rows = entries.filter((entry) => entry.audio !== undefined);
+  const statement = db.prepare(
+    `UPDATE entries SET audio_url = ?, audio_type = ?, audio_duration = ?, audio_chapters = ?
+      WHERE feed_id = ? AND guid_hash = ? AND audio_url IS NULL`,
+  );
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    await db.batch(
+      rows
+        .slice(i, i + BATCH_SIZE)
+        .map((row) => statement.bind(...audioColumns(row), row.feedId, row.guidHash)),
+    );
+  }
+}
+
+/** 音声の 4 列（audio_url, audio_type, audio_duration, audio_chapters）に入れる値 */
+function audioColumns(entry: NewEntry): (string | number | null)[] {
+  const audio = entry.audio;
+  if (audio === undefined) return [null, null, null, null];
+  return [
+    audio.url,
+    audio.type,
+    audio.duration,
+    audio.chapters.length === 0 ? null : JSON.stringify(audio.chapters),
+  ];
 }
 
 /**

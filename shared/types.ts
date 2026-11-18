@@ -78,6 +78,19 @@ export interface Feed {
   /** クロール時に「日本語ではない」と見えた。購読管理画面で勧めるのに使う */
   translateSuggested: boolean;
   /**
+   * Podcast のエピソードを文字起こしして要約するか（issue #46）。既定は false で、
+   * 決めるのはユーザ（Workers AI の無料枠を音声の長さだけ使うため）
+   */
+  transcribe: boolean;
+  /** 音声付きの記事が届いた。購読管理画面で文字起こしを勧めるのに使う */
+  transcribeSuggested: boolean;
+  /**
+   * Podcast か（音声付きの記事が届いたことがある、または文字起こしを入れた）。
+   * 購読管理画面で「文字起こし」の入切を出すかに使う。勧めを断った後も入れ直せるように、
+   * 勧め（transcribeSuggested）とは別に持つ
+   */
+  podcast: boolean;
+  /**
    * 最近ほとんど読まずに送っている（issue #43）。購読管理画面で、レートを下げるか
    * 解除することを勧めるのに使う。1 日 1 回付け直す
    */
@@ -104,6 +117,69 @@ export interface Entry {
    * どちらを出すかは画面が決める（既定は訳文。t キーで原文と切り替える）
    */
   translation?: { title: string; body: string };
+  /** Podcast のエピソードの音声（issue #46）。音声付きの記事だけに付く */
+  audio?: EntryAudio;
+}
+
+/** チャプター（Podlove Simple Chapters） */
+export interface AudioChapter {
+  /** 秒 */
+  start: number;
+  title: string;
+}
+
+/** 文字起こしの状態。running は途中、done は要約まで済んだ、failed は諦めた */
+export type TranscriptState = 'running' | 'done' | 'failed';
+
+export function isTranscriptState(value: unknown): value is TranscriptState {
+  return value === 'running' || value === 'done' || value === 'failed';
+}
+
+/** フィードが配るエピソードの音声 */
+export interface AudioSource {
+  /** http / https の絶対 URL */
+  url: string;
+  type: string | null;
+  /** 秒。分からなければ null */
+  duration: number | null;
+  /** 開始の早い順。無ければ空 */
+  chapters: AudioChapter[];
+}
+
+/**
+ * 要約（issue #46）。**HTML ではなく値で持つ。** 画面は区間の頭の時刻を再生位置へ
+ * 飛ぶボタンとして組む。LLM の出力を v-html に通さずに済む
+ */
+export interface TranscriptSummary {
+  /** エピソード全体の要旨 */
+  overview: string;
+  /** 区間（チャプターか 10 分ごと）ごとの要約。開始の早い順 */
+  sections: { start: number; title: string | null; text: string }[];
+}
+
+export interface EntryAudio extends AudioSource {
+  /** 文字起こしの状態。始めていなければ省く */
+  transcript?: TranscriptState;
+  /**
+   * 要約。transcript が done のときだけ付く。文字起こしの全文は重いので載せない
+   * （GET /api/entries/:id/transcript）
+   */
+  summary?: TranscriptSummary;
+}
+
+/** 文字起こしの 1 区間 */
+export interface TranscriptSegment {
+  /** 音声の頭からの秒 */
+  start: number;
+  text: string;
+}
+
+/** GET /api/entries/:id/transcript */
+export interface TranscriptResponse {
+  state: TranscriptState;
+  segments: TranscriptSegment[];
+  /** 要約。done のときだけ */
+  summary: TranscriptSummary | null;
 }
 
 /**
@@ -272,6 +348,8 @@ export interface UpdateFeedRequest {
   nsfw?: boolean;
   /** 日本語以外の記事を訳すか（issue #42） */
   translate?: boolean;
+  /** Podcast を文字起こしして要約するか（issue #46） */
+  transcribe?: boolean;
 }
 
 export interface FeedResponse {

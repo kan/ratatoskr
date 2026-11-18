@@ -220,6 +220,9 @@ export async function updateFeed(request: Request, env: Env, id: number): Promis
     ...(input.translate === undefined
       ? {}
       : { translate: parseBoolean(input.translate, 'translate') }),
+    ...(input.transcribe === undefined
+      ? {}
+      : { transcribe: parseBoolean(input.transcribe, 'transcribe') }),
   };
 
   if (!(await updateFeedSettings(env.DB, id, settings))) {

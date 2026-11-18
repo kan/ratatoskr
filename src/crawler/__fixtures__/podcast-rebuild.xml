@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:media="http://search.yahoo.com/mrss/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:psc="http://podlove.org/simple-chapters">
+  <channel>
+    <title>Rebuild</title>
+    <description>ウェブ開発、プログラミング、モバイル、ガジェットなどにフォーカスしたテクノロジー系ポッドキャストです。 #rebuildfm</description>
+    <generator>Jekyll</generator>
+    <link>https://rebuild.fm</link>
+    <atom:link href="https://feeds.rebuild.fm/rebuildfm" rel="self" type="application/rss+xml" />
+    <itunes:new-feed-url>https://feeds.rebuild.fm/rebuildfm</itunes:new-feed-url>
+    <media:thumbnail url="https://rebuild.fm/images/icon240.png" />
+    <media:keywords>tech,technology,programming,perl,ruby,mobile,web,miyagawa,apple,google,android,development,software</media:keywords>
+    <media:category scheme="http://www.itunes.com/dtds/podcast-1.0.dtd">Technology</media:category>
+    <itunes:author>Tatsuhiko Miyagawa</itunes:author>
+    <itunes:explicit>false</itunes:explicit>
+    <itunes:image href="https://rebuild.fm/images/icon1400.jpg" />
+    <itunes:keywords>tech,technology,programming,perl,ruby,mobile,web,miyagawa,apple,google,android,development,software</itunes:keywords>
+    <itunes:subtitle>A Podcast by Tatsuhiko Miyagawa. Talking about Tech, Software Development and Gadgets.</itunes:subtitle>
+    <itunes:summary>ウェブ開発、プログラミング、モバイル、ガジェットなどにフォーカスしたテクノロジー系ポッドキャストです。 #rebuildfm</itunes:summary>
+    <itunes:category text="Technology"/>
+    <language>ja</language>
+    
+    
+            <item>
+        <title>435: AI Agents Are Tamagotchi (hak)</title>
+        <description><![CDATA[ <p>Hakuro Matsuda さんをゲストに迎えて、HomeView, MacBook Pro, iPhone Duo, サイバーアタック、AI エージェントなどについて話しました。</p>
+<h3>Show Notes</h3><ul>
+<li><a href="https://www.apple.com/newsroom/2026/10/meet-apple-homeview-a-new-way-to-enjoy-entertainment-and-manage-the-home/">Apple: Meet Apple HomeView</a></li>
+<li><a href="https://sixcolors.com/post/2026/10/third-party-homeview-apps-think-carplay/">Six Colors: Third-party HomeView apps? Think CarPlay</a></li>
+<li><a href="https://www.macworld.com/article/3259650/apple-home-collection-build-your-smart-home.html">Apple Home Collection is an expensive way to build your smart home</a></li>
+</ul>
+ ]]></description>
+        <pubDate>Thu, 05 Nov 2026 22:00:00 -0800</pubDate>
+        <link>https://rebuild.fm/435/</link>
+        <guid isPermaLink="true">https://rebuild.fm/435/</guid>
+        <itunes:author>Tatsuhiko Miyagawa</itunes:author>
+        <dc:creator>Tatsuhiko Miyagawa</dc:creator>
+        
+        <atom:contributor>
+          <atom:name>hak</atom:name>
+          <atom:uri>https://rebuild.fm/people/hak/</atom:uri>
+        </atom:contributor>
+        
+        <atom:contributor>
+          <atom:name>miyagawa</atom:name>
+          <atom:uri>https://rebuild.fm/people/miyagawa/</atom:uri>
+        </atom:contributor>
+        
+        
+        <itunes:explicit>false</itunes:explicit>
+        <itunes:subtitle>Hakuro Matsuda さんをゲストに迎えて、HomeView, MacBook Pro, iPhone Duo, サイバーアタック、AI エージェントなどについて話しました。
+</itunes:subtitle>
+        <itunes:duration>2:34:53</itunes:duration>
+        <enclosure url="https://cache.rebuild.fm/podcast-ep435.mp3" type="audio/mpeg" length="111966273" />
+        
+        <psc:chapters version="1.2">
+          <psc:chapter start="00:00" title="DST, 中間選挙" />
+          <psc:chapter start="05:32" title="HomeView" />
+          <psc:chapter start="26:49" title="HomePod mini 2" />
+          <psc:chapter start="31:17" title="Apple TV 4K" />
+          <psc:chapter start="38:14" title="iMac, Mac mini, Mac Studio" />
+          <psc:chapter start="45:55" title="iPad mini" />
+          <psc:chapter start="49:16" title="MacBook Pro" />
+          <psc:chapter start="1:10:53" title="iPhone Duo" />
+          <psc:chapter start="1:18:12" title="Surface Laptop Ultra" />
+          <psc:chapter start="1:21:32" title="Tech Stocks" />
+          <psc:chapter start="1:32:38" title="サイバーアタック" />
+          <psc:chapter start="1:49:22" title="Muse, dots" />
+          <psc:chapter start="2:01:40" title="AI エージェント" />
+          <psc:chapter start="2:23:12" title="コンテンツ" />
+          </psc:chapters>
+        
+        
+      </item>
+      <item>
+        <title>1: Podcasting, LTSV, RubyMotion (伊藤直也)</title>
+        <description><![CDATA[ <p>伊藤直也さんをゲストに迎えてポッドキャスト、LTSV、RubyMotion、Perlなどについて話しました。</p>
+<h3>Show Notes</h3><ul>
+<li><a href="http://5by5.tv">5by5</a>, <a href="http://www.muleradio.net">Mule Radio</a></li>
+<li><a href="http://blog.instapaper.com/post/24549960305">Instapaper for Android</a></li>
+<li><a href="http://ltsv.org">LTSV</a>, <a href="http://d.hatena.ne.jp/naoya/20130209/1360381374">LTSV FAQ</a></li>
+</ul>
+ ]]></description>
+        <pubDate>Wed, 13 Feb 2013 00:00:00 -0800</pubDate>
+        <link>https://rebuild.fm/1/</link>
+        <guid isPermaLink="true">http://rebuild.fm/1/</guid>
+        <itunes:author>Tatsuhiko Miyagawa</itunes:author>
+        <dc:creator>Tatsuhiko Miyagawa</dc:creator>
+        
+        <atom:contributor>
+          <atom:name>naoya</atom:name>
+          <atom:uri>https://rebuild.fm/people/naoya/</atom:uri>
+        </atom:contributor>
+        
+        <atom:contributor>
+          <atom:name>miyagawa</atom:name>
+          <atom:uri>https://rebuild.fm/people/miyagawa/</atom:uri>
+        </atom:contributor>
+        
+        
+        <itunes:explicit>false</itunes:explicit>
+        <itunes:subtitle>伊藤直也さんをゲストに迎えてポッドキャスト、LTSV、RubyMotion、Perlなどについて話しました。
+</itunes:subtitle>
+        <itunes:duration>52:53</itunes:duration>
+        <enclosure url="https://cache.rebuild.fm/podcast-ep1.mp3" type="audio/mpeg" length="31475078" />
+        
+        <psc:chapters version="1.2">
+          <psc:chapter start="00:00" title="Intro" />
+          <psc:chapter start="01:30" title="Podcast" />
+          <psc:chapter start="04:53" title="LTSV" />
+          <psc:chapter start="10:54" title="HackerNews" />
+          <psc:chapter start="13:57" title="Flipboard" />
+          <psc:chapter start="16:47" title="クラウド" />
+          <psc:chapter start="20:33" title="Vagrant" />
+          <psc:chapter start="25:43" title="RubyMotion" />
+          <psc:chapter start="39:43" title="Topaz" />
+          <psc:chapter start="41:28" title="Moe" />
+          <psc:chapter start="46:44" title="Perl 7" />
+          </psc:chapters>
+        
+        
+      </item>
+  </channel>
+</rss>
