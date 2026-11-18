@@ -27,6 +27,25 @@ const loading = ref(false);
 const loadError = ref<string | null>(null);
 
 /**
+ * 清書前（Whisper の区間）を出すか。既定は清書した段落。清書前は、LLM が意味を変えて
+ * いないかを確かめるためのもの
+ */
+const showRaw = ref(false);
+
+/** 清書した段落を出すか。清書し終えていて、清書前を選んでいなければ */
+const showParagraphs = computed(() => transcript.value?.paragraphs != null && !showRaw.value);
+
+/** 文字起こしに出す行。段落か、清書前の区間 */
+const lines = computed(() =>
+  showParagraphs.value ? (transcript.value?.paragraphs ?? []) : (transcript.value?.segments ?? []),
+);
+
+function toggleRaw(event: Event): void {
+  releaseKeyFocus(event);
+  showRaw.value = !showRaw.value;
+}
+
+/**
  * 要約。記事に添えて届いたものが無ければ、文字起こしを開いたときに届いたものを使う
  * （読み流した後に要約ができた記事は、差分同期で届け直されない）
  */
@@ -75,6 +94,8 @@ async function toggleTranscript(event: Event): Promise<void> {
 }
 
 const TIME_BUTTON = 'shrink-0 font-mono text-xs text-sky-700 hover:underline dark:text-sky-400';
+const TOGGLE_BUTTON =
+  'rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-500 hover:text-neutral-900 dark:border-neutral-700 dark:hover:text-neutral-100';
 </script>
 
 <template>
@@ -117,7 +138,7 @@ const TIME_BUTTON = 'shrink-0 font-mono text-xs text-sky-700 hover:underline dar
     <div v-if="audio.transcript !== undefined">
       <button
         type="button"
-        class="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-500 hover:text-neutral-900 dark:border-neutral-700 dark:hover:text-neutral-100"
+        :class="TOGGLE_BUTTON"
         :disabled="loading"
         data-testid="podcast-transcript-toggle"
         @click="toggleTranscript"
@@ -130,13 +151,22 @@ const TIME_BUTTON = 'shrink-0 font-mono text-xs text-sky-700 hover:underline dar
             : '文字起こしを閉じる'
         }}
       </button>
+      <button
+        v-if="transcript !== null && transcript.paragraphs !== null"
+        type="button"
+        :class="['ml-2', TOGGLE_BUTTON]"
+        data-testid="podcast-transcript-raw"
+        @click="toggleRaw"
+      >
+        {{ showRaw ? '清書を表示' : '清書前を表示' }}
+      </button>
       <p v-if="loadError !== null" class="mt-1 text-xs text-red-600">{{ loadError }}</p>
       <ol
         v-if="transcript !== null"
-        class="mt-2 space-y-1 text-sm leading-relaxed"
+        :class="['mt-2 text-sm leading-relaxed', showParagraphs ? 'space-y-3' : 'space-y-1']"
         data-testid="podcast-transcript"
       >
-        <li v-for="(segment, index) in transcript.segments" :key="index" class="flex gap-2">
+        <li v-for="(segment, index) in lines" :key="index" class="flex gap-2">
           <button type="button" :class="TIME_BUTTON" @click="seek($event, segment.start)">
             {{ formatTime(segment.start) }}
           </button>

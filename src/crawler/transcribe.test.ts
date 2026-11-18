@@ -4,6 +4,7 @@ import { selectEntries } from '../db/entries';
 import { appendTranscript, selectTranscript } from '../db/transcripts';
 import { getEntryRows, getFeedRow, resetDb, seedEntry, seedFeed } from '../test/seed';
 import { TEXT_MODEL } from './choose';
+import { CLEAN_MODEL } from './clean';
 import { crawl } from './index';
 import { sectionsOf, summarizeTranscript } from './summarize';
 import {
@@ -75,9 +76,16 @@ interface AsrCall {
  * 区切りごとに「part<n>」と 2 区間を返す Whisper と、決まった文を返す LLM。
  * 区切りの長さは 300 秒として返す
  */
-function stubAi(options: { asrFails?: boolean; summary?: string } = {}) {
+function stubAi(
+  options: {
+    asrFails?: boolean;
+    summary?: string;
+    /** 清書の応答。区間の文の配列を受けて返す。無ければ要約と同じ文を返す（読めない応答） */
+    clean?: (texts: string[]) => string;
+  } = {},
+) {
   const asr: AsrCall[] = [];
-  const text: { system: string; user: string }[] = [];
+  const text: { model: string; system: string; user: string }[] = [];
   const ai = {
     run: (model: string, input: Record<string, unknown>) => {
       if (model === ASR_MODEL) {
@@ -94,9 +102,15 @@ function stubAi(options: { asrFails?: boolean; summary?: string } = {}) {
           ],
         });
       }
-      if (model === TEXT_MODEL) {
+      if (model === TEXT_MODEL || model === CLEAN_MODEL) {
         const messages = input.messages as { content: string }[];
-        text.push({ system: messages[0].content, user: messages[1].content });
+        text.push({ model, system: messages[0].content, user: messages[1].content });
+        if (model === CLEAN_MODEL && options.clean !== undefined) {
+          // 断片は「文字起こし:」の後ろに「番号: 文」の行で並ぶ
+          const lines = messages[1].content.split('文字起こし:\n')[1].split('\n');
+          const texts = lines.map((line) => line.replace(/^\d+: /u, ''));
+          return Promise.resolve({ response: options.clean(texts) });
+        }
         return Promise.resolve({ response: options.summary ?? '話の要約。' });
       }
       return Promise.reject(new Error(`unexpected model ${model}`));
@@ -107,7 +121,7 @@ function stubAi(options: { asrFails?: boolean; summary?: string } = {}) {
 
 /** 取得の済んだフィード（次の取得は先）に、音声付きの記事を入れる */
 async function seedPodcast(
-  episodes: { url: string; chapters?: string; type?: string }[],
+  episodes: { url: string; chapters?: string; type?: string; body?: string }[],
   feed: { transcribe?: number } = {},
 ): Promise<{ feedId: number; entryIds: number[] }> {
   const feedId = await seedFeed(env.DB, 'https://podcast.example.com/feed', {
@@ -123,6 +137,7 @@ async function seedPodcast(
         audioType: episode.type ?? 'audio/mpeg',
         audioDuration: 900,
         audioChapters: episode.chapters ?? null,
+        ...(episode.body === undefined ? {} : { body: episode.body }),
       }),
     );
   }
@@ -315,6 +330,69 @@ describe('文字起こし', () => {
     const server = audioServer({ [EP1]: CHUNK_BYTES + 1 }, { type: 'audio/x-m4a' });
     await transcribePending(env, { now: NOW, fetchImpl: server.fetch, ai: stubAi().ai });
     expect((await selectTranscript(env.DB, entryIds[0]))?.state).toBe('failed');
+  });
+
+  it('起こし終えたら区切りごとに清書し、清書した文から要約する', async () => {
+    const { entryIds } = await seedPodcast([
+      { url: EP1, body: '<ul><li><a>Rails World</a></li></ul>' },
+    ]);
+    const server = audioServer({ [EP1]: CHUNK_BYTES + 10 });
+    const { ai, text } = stubAi({
+      clean: (texts) => JSON.stringify([{ from: 0, text: `${texts.join('、')}。` }]),
+    });
+
+    await transcribePending(env, { now: NOW, fetchImpl: server.fetch, ai });
+
+    const transcript = await selectTranscript(env.DB, entryIds[0]);
+    expect(transcript?.state).toBe('done');
+    // 段落の時刻は区切りの最初の区間から取る
+    expect(transcript?.paragraphs).toEqual([
+      { start: 0, text: 'part1a、part1b。' },
+      { start: 300, text: 'part2a、part2b。' },
+    ]);
+    // 清書前の区間も残す
+    expect(transcript?.segments).toHaveLength(4);
+
+    const cleans = text.filter((call) => call.model === CLEAN_MODEL);
+    expect(cleans).toHaveLength(2);
+    // ショーノートを用語集として渡す
+    expect(cleans[0].user).toContain('Rails World');
+    // 要約には清書した文を渡す
+    const summaries = text.filter((call) => call.model === TEXT_MODEL);
+    expect(summaries[0].user).toContain('part1a、part1b。');
+  });
+
+  it('清書の応答が使えなければ、清書前の区間で代えて要約まで進める', async () => {
+    const { entryIds } = await seedPodcast([{ url: EP1 }]);
+    const { ai } = stubAi({ clean: () => '清書できませんでした' });
+
+    await transcribePending(env, { now: NOW, fetchImpl: audioServer({ [EP1]: 100 }).fetch, ai });
+
+    const transcript = await selectTranscript(env.DB, entryIds[0]);
+    expect(transcript?.state).toBe('done');
+    expect(transcript?.paragraphs).toEqual(transcript?.segments);
+  });
+
+  it('清書の枠で止まった分は次の cron が続きから清書し、それから要約する', async () => {
+    const { entryIds } = await seedPodcast([{ url: EP1 }]);
+    const server = audioServer({ [EP1]: CHUNK_BYTES * 2 + 10 });
+    const { ai, text } = stubAi({
+      clean: (texts) => JSON.stringify([{ from: 0, text: texts.join('') }]),
+    });
+
+    await transcribePending(env, { now: NOW, fetchImpl: server.fetch, ai, cleanLimit: 2 });
+    let transcript = await selectTranscript(env.DB, entryIds[0]);
+    expect(transcript?.state).toBe('running');
+    // 頭だけ清書した全文は返さない
+    expect(transcript?.paragraphs).toBeNull();
+    expect(text).toHaveLength(2);
+
+    await transcribePending(env, { now: NOW + 300, fetchImpl: server.fetch, ai, cleanLimit: 2 });
+    transcript = await selectTranscript(env.DB, entryIds[0]);
+    expect(transcript?.state).toBe('done');
+    expect(transcript?.paragraphs?.map((paragraph) => paragraph.start)).toEqual([0, 300, 600]);
+    // 音声は取り直さない
+    expect(server.ranges).toHaveLength(3);
   });
 
   it('同じ区切りを 2 度書かない（cron の重なり）', async () => {

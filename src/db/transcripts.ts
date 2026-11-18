@@ -232,16 +232,78 @@ export const RESET_TRANSCRIPT_FAILURES = `UPDATE transcripts SET failures = 0
 export const RETRY_FAILED_TRANSCRIPTS = `UPDATE entries SET transcript_state = 'running'
   WHERE feed_id = ? AND transcript_state = 'failed'`;
 
-/** 文字起こしの全文（起こした分）。区切りの順に繋ぐ */
-export async function selectTranscriptSegments(
+/** 記事の本文（ショーノート）。清書の用語集にする（src/crawler/clean.ts） */
+export async function selectEntryBody(db: D1Database, entryId: number): Promise<string | null> {
+  const row = await db
+    .prepare('SELECT body FROM entries WHERE id = ?')
+    .bind(entryId)
+    .first<{ body: string }>();
+  return row?.body ?? null;
+}
+
+/** まだ清書していない区切り（src/crawler/clean.ts）。区切りの順に `limit` 件 */
+export async function selectUncleanedParts(
   db: D1Database,
   entryId: number,
-): Promise<TranscriptSegment[]> {
+  limit: number,
+): Promise<{ fromByte: number; segments: TranscriptSegment[] }[]> {
   const { results } = await db
-    .prepare('SELECT segments FROM transcript_parts WHERE entry_id = ? ORDER BY from_byte')
+    .prepare(
+      `SELECT from_byte, segments FROM transcript_parts
+        WHERE entry_id = ? AND cleaned IS NULL
+        ORDER BY from_byte LIMIT ?`,
+    )
+    .bind(entryId, limit)
+    .all<{ from_byte: number; segments: string }>();
+  return results.map((row) => ({
+    fromByte: row.from_byte,
+    segments: parseSegments(row.segments),
+  }));
+}
+
+/**
+ * 区切りの清書を書く（1 つの batch）。**まだ書かれていないときだけ書く**（cron が重なって
+ * 同じ区切りを 2 度清書しても、先に書いた方を残す）。
+ *
+ * 続けて失敗した数は 0 に戻さない。同じ回に清書できた区切りと AI が使えなかった区切りが
+ * 混ざると、戻しては 1 つ数えるのを繰り返して、いつまでも諦めなくなる
+ */
+export async function updateCleanedParts(
+  db: D1Database,
+  entryId: number,
+  parts: { fromByte: number; paragraphs: TranscriptSegment[] }[],
+): Promise<void> {
+  if (parts.length === 0) return;
+  await db.batch(
+    parts.map((part) =>
+      db
+        .prepare(
+          `UPDATE transcript_parts SET cleaned = ?
+            WHERE entry_id = ? AND from_byte = ? AND cleaned IS NULL`,
+        )
+        .bind(formatSegments(part.paragraphs), entryId, part.fromByte),
+    ),
+  );
+}
+
+/**
+ * 清書した段落（全文）。区切りの順に繋ぐ。**清書していない区切りが 1 つでも残っていれば
+ * null**（頭だけ清書した全文は作らない。どこからが生の文字起こしか分からなくなる）
+ */
+export async function selectCleanedSegments(
+  db: D1Database,
+  entryId: number,
+): Promise<TranscriptSegment[] | null> {
+  const { results } = await db
+    .prepare('SELECT cleaned FROM transcript_parts WHERE entry_id = ? ORDER BY from_byte')
     .bind(entryId)
-    .all<{ segments: string }>();
-  return results.flatMap((row) => parseSegments(row.segments));
+    .all<{ cleaned: string | null }>();
+  return cleanedOf(results);
+}
+
+function cleanedOf(rows: { cleaned: string | null }[]): TranscriptSegment[] | null {
+  if (rows.some((row) => row.cleaned === null)) return null;
+  return rows.flatMap((row) => parseSegments(row.cleaned ?? ''));
 }
 
 /** GET /api/entries/:id/transcript。文字起こしを始めていなければ null */
@@ -254,9 +316,16 @@ export async function selectTranscript(
     .bind(entryId)
     .first<{ transcript_state: string | null; transcript_summary: string | null }>();
   if (row === null || !isTranscriptState(row.transcript_state)) return null;
+  // 清書前と清書を 1 度に読む（2 時間半で 6〜8 万字ずつあり、同じ行を 2 度読まない）
+  const { results } = await db
+    .prepare('SELECT segments, cleaned FROM transcript_parts WHERE entry_id = ? ORDER BY from_byte')
+    .bind(entryId)
+    .all<{ segments: string; cleaned: string | null }>();
   return {
     state: row.transcript_state,
-    segments: await selectTranscriptSegments(db, entryId),
+    segments: results.flatMap((part) => parseSegments(part.segments)),
+    // 区切りが 1 つも無い（起こし始めたばかり）ときは清書も無い扱いにする
+    paragraphs: results.length === 0 ? null : cleanedOf(results),
     summary: parseSummary(row.transcript_summary),
   };
 }

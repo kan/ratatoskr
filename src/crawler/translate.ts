@@ -1,7 +1,6 @@
 import { selectUntranslated, updateTranslations } from '../db/entries';
 import { errorMessage } from '../lib/errors';
-import { parseJson } from '../lib/json';
-import { readAnswer, TEXT_MODEL } from './choose';
+import { readAnswer, readJsonArray, TEXT_MODEL } from './choose';
 import { releaseBudget, reserveBudget, type FetchBudget } from './fetch';
 import { elementScope, htmlResponse } from './rewriter';
 import { escapeHtml, sanitizeHtml } from './sanitize';
@@ -164,16 +163,10 @@ async function translateBatch(
   return parseTranslations(answer, sources.length) ?? 'unreadable';
 }
 
-/**
- * 応答から訳文の配列を読む。前後に説明が付いて返ることがあるので、最初の `[` から
- * 最後の `]` までを JSON として読む。数が合わなければ null（どれがどれか分からない）
- */
+/** 応答から訳文の配列を読む。数が合わなければ null（どれがどれか分からない） */
 export function parseTranslations(answer: string, count: number): string[] | null {
-  const from = answer.indexOf('[');
-  const to = answer.lastIndexOf(']');
-  if (from < 0 || to <= from) return null;
-  const parsed = parseJson(answer.slice(from, to + 1));
-  if (!Array.isArray(parsed) || parsed.length !== count) return null;
+  const parsed = readJsonArray(answer);
+  if (parsed === null || parsed.length !== count) return null;
   if (!parsed.every((item) => typeof item === 'string')) return null;
   return parsed as string[];
 }
@@ -184,7 +177,7 @@ export function parseTranslations(answer: string, count: number): string[] | nul
  * **差し戻し（replaceFragments）と同じ規則で数える。** 同じ HTML を同じ規則で 2 度
  * 走査するので、n 番目の断片は両方で同じものを指す
  */
-async function collectFragments(html: string): Promise<string[]> {
+export async function collectFragments(html: string): Promise<string[]> {
   const fragments: string[] = [];
   await walkText(html, (raw) => {
     // 空白を畳んだものを LLM に渡す

@@ -177,7 +177,13 @@ export interface TranscriptSegment {
 /** GET /api/entries/:id/transcript */
 export interface TranscriptResponse {
   state: TranscriptState;
+  /** Whisper の文字起こし（発言の切れ目ごとの区間） */
   segments: TranscriptSegment[];
+  /**
+   * 清書した段落（句読点を補い、固有名詞を直したもの）。全ての区切りを清書し終えるまでは
+   * null。画面はこちらを出し、segments は清書前を確かめるために残す
+   */
+  paragraphs: TranscriptSegment[] | null;
   /** 要約。done のときだけ */
   summary: TranscriptSummary | null;
 }

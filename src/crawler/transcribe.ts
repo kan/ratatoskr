@@ -3,14 +3,24 @@ import {
   appendTranscript,
   completeTranscript,
   recordTranscriptFailure,
+  selectCleanedSegments,
+  selectEntryBody,
   selectTranscriptionTargets,
-  selectTranscriptSegments,
+  selectUncleanedParts,
   tailOf,
+  updateCleanedParts,
   type TranscriptionTarget,
 } from '../db/transcripts';
 import { errorMessage } from '../lib/errors';
 import { asArray, asObject, asString } from '../lib/json';
-import { describeNetworkError, reserveBudget, TIMEOUT_MS, USER_AGENT } from './fetch';
+import { cleanPart, glossaryOf } from './clean';
+import {
+  describeNetworkError,
+  reserveBudget,
+  TIMEOUT_MS,
+  USER_AGENT,
+  type FetchBudget,
+} from './fetch';
 import { createPoliteFetch } from './polite';
 import { summarizeTranscript } from './summarize';
 
@@ -33,8 +43,8 @@ import { summarizeTranscript } from './summarize';
  * 何日もかかる。手動の更新（POST /api/feeds/:id/fetch）からは呼ばない（区切りごとに
  * Workers AI を待つので、応答が分単位で遅れる）。
  *
- * 起こし終えたら要約を作る（src/crawler/summarize.ts）。全文は記事に載せず、要約だけを
- * 記事に添えて配る。
+ * 起こし終えたら区切りごとに清書し（src/crawler/clean.ts）、清書した文から要約を作る
+ * （src/crawler/summarize.ts）。全文は記事に載せず、要約だけを記事に添えて配る。
  */
 
 export const ASR_MODEL = '@cf/openai/whisper-large-v3-turbo';
@@ -70,6 +80,16 @@ const AUDIO_TIMEOUT_MS = TIMEOUT_MS * 4;
  */
 const MAX_CHUNKS_PER_RUN = 8;
 
+/**
+ * 1 回の cron で清書する区切りの数。区切り 1 つで LLM 1 回。文字起こしの枠とは別に数える
+ * （清書は音声を取りに行かず、Whisper より速い）。2 時間半のエピソードの 28 区切りが
+ * 4 回の cron で終わる
+ */
+const MAX_CLEANS_PER_RUN = 8;
+
+/** 清書を並べて問い合わせる数。待ちは CPU 時間に計上されないので、cron の実行時間を縮める */
+const CLEAN_CONCURRENCY = 4;
+
 export interface TranscribeOptions {
   now?: number;
   /** テストで差し替える */
@@ -77,6 +97,8 @@ export interface TranscribeOptions {
   ai?: Ai;
   /** 起こせる区切りの数。既定は MAX_CHUNKS_PER_RUN */
   limit?: number;
+  /** 清書できる区切りの数。既定は MAX_CLEANS_PER_RUN */
+  cleanLimit?: number;
 }
 
 interface Context {
@@ -84,7 +106,9 @@ interface Context {
   ai: Ai;
   fetchImpl: typeof fetch;
   /** 起こせる区切りの残り。エピソードをまたいで減っていく */
-  budget: { remaining: number };
+  budget: FetchBudget;
+  /** 清書できる区切りの残り。エピソードをまたいで減っていく */
+  cleanBudget: FetchBudget;
   now: number;
 }
 
@@ -113,6 +137,7 @@ export async function transcribePending(
     ai,
     fetchImpl: polite.fetch,
     budget: { remaining: limit },
+    cleanBudget: { remaining: options.cleanLimit ?? MAX_CLEANS_PER_RUN },
     now,
   };
 
@@ -120,8 +145,10 @@ export async function transcribePending(
   // **1 本ずつ順に進める。** 区切りは前の区切りの末尾を文脈として Whisper に渡すので、
   // 同じエピソードの中は並べられない。新しいエピソードから起こす
   for (const target of targets) {
-    if (context.budget.remaining <= 0) break;
-    const outcome = await transcribeEpisode(target, context);
+    if (context.budget.remaining <= 0 && context.cleanBudget.remaining <= 0) break;
+    let outcome = await transcribeEpisode(target, context);
+    // 起こし終えたら清書し、清書し終えたら要約する
+    if (outcome === 'finished') outcome = await cleanEpisode(target, context);
     if (outcome === 'finished' && (await summarize(target, context))) {
       completed.push(target.entryId);
     }
@@ -354,8 +381,50 @@ function estimateDuration(bytes: number, total: number, duration: number | null)
   return duration === null ? 0 : (duration * bytes) / total;
 }
 
+/**
+ * 起こし終えたエピソードを区切りごとに清書する。枠で止まれば次の cron が続きから。
+ *
+ * 応答が使えなかった区切りは cleanPart が清書前の区間で代える。AI が使えなかったときは
+ * 失敗を数えて次の cron に回す
+ */
+async function cleanEpisode(
+  target: TranscriptionTarget,
+  context: Context,
+): Promise<EpisodeOutcome> {
+  const want = context.cleanBudget.remaining;
+  const parts = want > 0 ? await selectUncleanedParts(context.db, target.entryId, want) : [];
+  reserveBudget(context.cleanBudget, parts.length);
+  // ショーノートは清書するときだけ読む（文字起こし中のエピソードの cron で読まない）
+  const episode = {
+    title: target.title,
+    glossary:
+      parts.length === 0 ? '' : await glossaryOf(await selectEntryBody(context.db, target.entryId)),
+  };
+
+  for (let i = 0; i < parts.length; i += CLEAN_CONCURRENCY) {
+    const batch = parts.slice(i, i + CLEAN_CONCURRENCY);
+    const results = await Promise.all(
+      batch.map((part) => cleanPart(part.segments, episode, context.ai)),
+    );
+    const cleaned = results.flatMap((paragraphs, j) =>
+      paragraphs === 'unavailable' ? [] : [{ fromByte: batch[j].fromByte, paragraphs }],
+    );
+    await updateCleanedParts(context.db, target.entryId, cleaned);
+    if (cleaned.length < results.length) {
+      await recordFailure(context, target.entryId, 'Workers AI: 清書できない', false);
+      return 'unavailable';
+    }
+  }
+  // 枠が尽きていても、清書し終えて要約だけが残っていれば要約へ進める
+  const rest = await selectUncleanedParts(context.db, target.entryId, 1);
+  return rest.length === 0 ? 'finished' : 'pending';
+}
+
 async function summarize(target: TranscriptionTarget, context: Context): Promise<boolean> {
-  const segments = await selectTranscriptSegments(context.db, target.entryId);
+  // 清書した文から要約する（固有名詞が直っている）。清書し終えてから呼ぶので、null なら
+  // 前提が崩れている。清書前の文で要約して終えずに、次の cron の清書に任せる
+  const segments = await selectCleanedSegments(context.db, target.entryId);
+  if (segments === null) return false;
   const summary = await summarizeTranscript(segments, target, context.ai);
   // 要約できなかった。起こし終えた状態（running で末尾まで）のまま次の cron に回し、
   // 要約からやり直す。失敗は数えて、決まって失敗するエピソードで毎回 AI を呼び続けない

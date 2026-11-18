@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import type { EntriesResponse, TranscriptResponse } from '../../shared/types';
-import { appendTranscript, completeTranscript } from '../db/transcripts';
+import { appendTranscript, completeTranscript, updateCleanedParts } from '../db/transcripts';
 import { apiGet, apiJson } from '../test/request';
 import { seedEntry, seedFeed } from '../test/seed';
 
@@ -42,6 +42,8 @@ describe('GET /api/entries/:id/transcript', () => {
     expect(body).toEqual({
       state: 'running',
       segments: [{ start: 1.5, text: 'こんにちは タブ' }],
+      // 清書はまだ
+      paragraphs: null,
       summary: null,
     });
 
@@ -69,10 +71,15 @@ describe('GET /api/entries/:id/transcript', () => {
       segments: [{ start: 0, text: 'a' }],
       now: 0,
     });
+    await updateCleanedParts(env.DB, entryId, [
+      { fromByte: 0, paragraphs: [{ start: 0, text: 'A。' }] },
+    ]);
     await completeTranscript(env.DB, entryId, SUMMARY, 100);
 
     const body = await apiJson<TranscriptResponse>(`/api/entries/${entryId}/transcript`);
     expect(body.summary).toEqual(SUMMARY);
+    expect(body.segments).toEqual([{ start: 0, text: 'a' }]);
+    expect(body.paragraphs).toEqual([{ start: 0, text: 'A。' }]);
     const entries = await apiJson<EntriesResponse>(`/api/entries?feedId=${feedId}`);
     expect(entries.entries[0].audio?.summary).toEqual(SUMMARY);
   });

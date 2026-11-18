@@ -34,6 +34,10 @@ const TRANSCRIPT: TranscriptResponse = {
     { start: 0, text: 'こんにちは' },
     { start: 3725, text: 'ここは 1 時間を過ぎたところ' },
   ],
+  paragraphs: [
+    { start: 0, text: 'こんにちは。清書した段落です。' },
+    { start: 3725, text: 'ここは 1 時間を過ぎたところです。' },
+  ],
   summary: AUDIO.summary ?? null,
 };
 
@@ -86,6 +90,23 @@ test('文字起こしは開いたときにだけ取りに行き、時刻で再�
 
   await page.getByTestId('podcast-transcript-toggle').click();
   await expect(transcript).toHaveCount(0);
+});
+
+test('文字起こしは清書を出し、清書前に切り替えられる', async ({ page }) => {
+  await open(page);
+  await page.getByTestId('podcast-transcript-toggle').click();
+  const transcript = page.getByTestId('podcast-transcript');
+  await expect(transcript).toContainText('こんにちは。清書した段落です。');
+
+  const raw = page.getByTestId('podcast-transcript-raw');
+  await raw.click();
+  await expect(transcript).not.toContainText('清書した段落です。');
+  await expect(transcript).toContainText('こんにちは');
+  // 押した後にフォーカスを残さない（Space が記事送りにならなくなる）
+  await expect(raw).not.toBeFocused();
+
+  await raw.click();
+  await expect(transcript).toContainText('清書した段落です。');
 });
 
 test('要約がまだ無ければチャプターを目次にし、文字起こし中と出す', async ({ page }) => {
