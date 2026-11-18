@@ -242,10 +242,14 @@ Podcast のエピソードの文字起こし（issue #46）。始めていなけ
 ```jsonc
 {
   "state": "running",          // running | done | failed
-  "segments": [ { "start": 0, "text": "こんにちは" } ], // start は音声の頭からの秒
+  "segments": [ { "start": 0, "text": "こんにちは" } ], // Whisper の区間。start は音声の頭からの秒
+  "paragraphs": null,          // 清書した段落（segments と同じ形）。全ての区切りを清書し終えるまで null
   "summary": null              // done のときだけ要約（TranscriptSummary）
 }
 ```
+
+`paragraphs` は句読点を補って段落にまとめ、固有名詞を直したもの。画面はこちらを出し、
+`segments` は清書前を確かめるために返す。
 
 途中（running）でも起こした分を返す。要約も返すのは、読み流した後に要約ができた記事
 （差分同期は未読しか届け直さない）でも、ここを開けば読めるようにするため。
