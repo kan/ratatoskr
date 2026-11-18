@@ -1,3 +1,4 @@
+import { parseJson } from '../lib/json';
 import type { Candidate } from './extract';
 
 /**
@@ -105,11 +106,26 @@ export function readAnswer(result: unknown): string {
 
   const response = (result as { response?: unknown }).response;
   if (typeof response === 'string' && response !== '') return response;
+  // JSON だけを返させたときは、読み解き済みの値（配列・オブジェクト）で返ることがある。
+  // 呼び出し側は文字列から JSON を読むので、文字列に戻す
+  if (typeof response === 'object' && response !== null) return JSON.stringify(response);
 
   const choices = (result as { choices?: unknown }).choices;
   if (!Array.isArray(choices) || choices.length === 0) return '';
   const content = (choices[0] as { message?: { content?: unknown } }).message?.content;
   return typeof content === 'string' ? content : '';
+}
+
+/**
+ * 応答から JSON の配列を読む。配列だけを返せと言っても前後に説明が付いて返ることが
+ * あるので、最初の `[` から最後の `]` までを JSON として読む。読めなければ null
+ */
+export function readJsonArray(answer: string): unknown[] | null {
+  const from = answer.indexOf('[');
+  const to = answer.lastIndexOf(']');
+  if (from < 0 || to <= from) return null;
+  const parsed = parseJson(answer.slice(from, to + 1));
+  return Array.isArray(parsed) ? parsed : null;
 }
 
 /**

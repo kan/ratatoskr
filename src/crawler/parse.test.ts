@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { parseFeed } from './parse';
+import { parseDuration } from './podcast';
 import { ParseError } from './types';
 import rss2Xml from './__fixtures__/rss2.xml?raw';
 import atomXml from './__fixtures__/atom.xml?raw';
 import rdfXml from './__fixtures__/rdf.xml?raw';
 import datesXml from './__fixtures__/dates-broken.xml?raw';
+import podcastXml from './__fixtures__/podcast-rebuild.xml?raw';
 
 // 日付の足切り（未来すぎる値）を決定的に判定するため、時刻を固定する
 const NOW = Math.floor(Date.parse('2026-08-05T00:00:00Z') / 1000);
@@ -118,6 +120,70 @@ describe('日付の異常系', () => {
       expect(byTitle.get(title)?.publishedAt).toBeNull();
     },
   );
+});
+
+describe('Podcast（issue #46）', () => {
+  const feed = parseFeed(podcastXml, NOW);
+
+  it('音声の enclosure・itunes:duration・psc:chapters を読む', () => {
+    const [latest, first] = feed.items;
+    expect(latest.audio).toMatchObject({
+      url: 'https://cache.rebuild.fm/podcast-ep435.mp3',
+      type: 'audio/mpeg',
+      duration: 2 * 3600 + 34 * 60 + 53,
+    });
+    expect(latest.audio?.chapters[1]).toEqual({ start: 5 * 60 + 32, title: 'HomeView' });
+    expect(latest.audio?.chapters.at(-1)).toEqual({
+      start: 2 * 3600 + 23 * 60 + 12,
+      title: 'コンテンツ',
+    });
+    expect(first.audio?.duration).toBe(52 * 60 + 53);
+  });
+
+  it('音声でない enclosure は拾わない', () => {
+    const [item] = parseFeed(
+      `<rss><channel><item><title>画像</title>
+        <enclosure url="https://example.com/a.jpg" type="image/jpeg" length="1"/>
+      </item></channel></rss>`,
+    ).items;
+    expect(item.audio).toBeUndefined();
+  });
+
+  it('type の無い enclosure は拡張子で音声と見る', () => {
+    const [item] = parseFeed(
+      `<rss><channel><item><title>a</title><enclosure url="/ep1.m4a?x=1"/></item></channel></rss>`,
+    ).items;
+    expect(item.audio).toEqual({ url: '/ep1.m4a?x=1', type: null, duration: null, chapters: [] });
+  });
+
+  it('Atom の rel="enclosure" を読み、本文へのリンクには選ばない', () => {
+    const [entry] = parseFeed(
+      `<feed xmlns="http://www.w3.org/2005/Atom"><title>t</title><entry><id>1</id><title>e</title>
+        <link rel="enclosure" type="audio/mpeg" href="https://example.com/1.mp3"/>
+        <link href="https://example.com/1"/>
+      </entry></feed>`,
+    ).items;
+    expect(entry.url).toBe('https://example.com/1');
+    expect(entry.audio?.url).toBe('https://example.com/1.mp3');
+  });
+
+  it('音声の無い記事には audio の鍵を付けない', () => {
+    expect(parseFeed(rss2Xml, NOW).items[0]).not.toHaveProperty('audio');
+  });
+});
+
+describe('itunes:duration の書き方', () => {
+  it.each([
+    ['2:34:53', 9293],
+    ['47:56', 2876],
+    ['3600', 3600],
+    ['05:32.500', 332],
+    ['', null],
+    ['1:2:3:4', null],
+    ['abc', null],
+  ])('%s → %s', (value, expected) => {
+    expect(parseDuration(value)).toBe(expected);
+  });
 });
 
 describe('解釈できない入力', () => {

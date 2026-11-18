@@ -9,7 +9,14 @@ import type {
 } from '../../shared/types';
 import { markFullTextSuggested, selectFeedById } from '../db/feeds';
 import { apiJson, apiSend } from '../test/request';
-import { getEntryRows, getFeedRow, seedEntry, seedFeed, seedPin } from '../test/seed';
+import {
+  getEntryRows,
+  getFeedRow,
+  seedEntry,
+  seedFeed,
+  seedPin,
+  seedTranscript,
+} from '../test/seed';
 import newsListHtml from '../crawler/__fixtures__/news-list.html?raw';
 
 /**
@@ -332,6 +339,43 @@ describe('PATCH /api/feeds/:id の translate（issue #42）', () => {
     const [row] = await getEntryRows(env.DB, feedId);
     expect(row.translated_body).toBeNull();
     expect(row.body_updated_at).not.toBeNull();
+  });
+});
+
+describe('PATCH /api/feeds/:id の transcribe（issue #46）', () => {
+  it('入れ切りで勧めを止め、切っても済んだ要約は残す', async () => {
+    const feedId = await seedFeed(env.DB, 'https://podcast.example.com/feed');
+    const entryId = await seedEntry(env.DB, feedId, { audioUrl: 'https://cdn.example.com/1.mp3' });
+    await seedTranscript(env.DB, entryId, 'done', { overview: '要約', sections: [] });
+    await env.DB.prepare('UPDATE feeds SET transcribe_suggested = 1 WHERE id = ?')
+      .bind(feedId)
+      .run();
+
+    const on = await apiSend('PATCH', `/api/feeds/${feedId}`, { transcribe: true });
+    expect(((await on.json()) as FeedResponse).feed).toMatchObject({
+      transcribe: true,
+      transcribeSuggested: false,
+    });
+
+    await apiSend('PATCH', `/api/feeds/${feedId}`, { transcribe: false });
+    const after = await apiJson<BootstrapResponse>('/api/bootstrap');
+    expect(after.entries.find((e) => e.id === entryId)?.audio?.summary?.overview).toBe('要約');
+    expect((await getFeedRow(env.DB, feedId)).transcribe_suggested).toBe(2);
+  });
+
+  it('入れ直すと、諦めていた文字起こしをやり直す', async () => {
+    const feedId = await seedFeed(env.DB, 'https://podcast-retry.example.com/feed');
+    const entryId = await seedEntry(env.DB, feedId, { audioUrl: 'https://cdn.example.com/2.mp3' });
+    await seedTranscript(env.DB, entryId, 'failed');
+
+    await apiSend('PATCH', `/api/feeds/${feedId}`, { transcribe: true });
+    const after = await apiJson<BootstrapResponse>('/api/bootstrap');
+    expect(after.entries.find((e) => e.id === entryId)?.audio?.transcript).toBe('running');
+  });
+
+  it('真偽値以外は 400', async () => {
+    const id = await seedFeed(env.DB, 'https://podcast-bad.example.com/feed');
+    expect((await apiSend('PATCH', `/api/feeds/${id}`, { transcribe: 'yes' })).status).toBe(400);
   });
 });
 

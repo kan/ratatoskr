@@ -4,13 +4,19 @@ import {
   markFetchSuccess,
   markFetchUnchanged,
   markFullTextSuggested,
+  markTranscribeSuggested,
   markTranslateSuggested,
   selectCrawlTargets,
   selectCrawlTargetsByIds,
   updateRecipe,
   type CrawlTarget,
 } from '../db/feeds';
-import { insertEntries, selectKnownGuidHashes, type NewEntry } from '../db/entries';
+import {
+  fillMissingAudio,
+  insertEntries,
+  selectKnownGuidHashes,
+  type NewEntry,
+} from '../db/entries';
 import { sha256Hex } from '../lib/hash';
 import { mayHaveTweetEmbed, resolveTweetEmbeds } from './embed';
 import type { FetchBudget } from './fetch';
@@ -20,6 +26,7 @@ import { needsTranslation, translatePending } from './translate';
 import { sanitizeHtml } from './sanitize';
 import { sourceFor } from './source';
 import { titleFromBody } from './title';
+import { httpUrl } from './url';
 import {
   delayAfterFailure,
   intervalAfterNoUpdate,
@@ -251,6 +258,13 @@ async function crawlFeed(
   if (summaryOnly) await markFullTextSuggested(db, target.id);
   // 日本語でないなら訳すことを勧める（issue #42）。勧めるだけで、訳すかはユーザが決める
   if (!target.translate && looksForeign(rows)) await markTranslateSuggested(db, target.id);
+  // 音声付きの記事が初めて届いたら文字起こしを勧め（issue #46）、取り込み済みの記事にも
+  // 音声を書き足す（音声の列ができる前から購読していた Podcast のため）。1 度知れば
+  // 以降は何もしない（勧めの印が 0 でなくなる）
+  if (!target.podcast && rows.some((row) => row.audio !== undefined)) {
+    await fillMissingAudio(db, rows);
+    await markTranscribeSuggested(db, target.id);
+  }
 
   // **全文を取ってから訳す。** 訳文は読み出す本文（全文があれば全文）から作るので、
   // 逆の順にすると要約を訳した後で全文が入り、訳し直しになる
@@ -346,7 +360,19 @@ async function toNewEntry(feedId: number, item: ParsedItem, baseUrl: string): Pr
     // 本文中の href / src が全て落ちる
     body: await sanitizeHtml(item.body, url ?? baseUrl),
     publishedAt: item.publishedAt,
+    ...resolveAudio(item, baseUrl),
   };
+}
+
+/**
+ * エピソードの音声を絶対 URL にして添える（issue #46）。http / https 以外は捨てる
+ * （画面がそのまま audio 要素の src にするため。javascript: などを通さない）。
+ * 相対 URL はフィードの側を基準にする（記事のページではなく、フィードに書かれた値なので）
+ */
+function resolveAudio(item: ParsedItem, baseUrl: string): Pick<NewEntry, 'audio'> {
+  if (item.audio === undefined) return {};
+  const url = httpUrl(item.audio.url, baseUrl);
+  return url === null ? {} : { audio: { ...item.audio, url: url.href } };
 }
 
 /**

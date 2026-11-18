@@ -5,6 +5,7 @@ import type {
   CreateFeedResponse,
   EntriesResponse,
   Entry,
+  EntryAudio,
   Feed,
   FeedResponse,
   FetchFeedResponse,
@@ -47,6 +48,9 @@ function feed(id: number, title: string, rate: number, unreadCount: number): Fee
     recipeSource: null,
     translate: false,
     translateSuggested: false,
+    transcribe: false,
+    transcribeSuggested: false,
+    podcast: false,
     skimmed: false,
     nsfw: false,
   };
@@ -189,6 +193,8 @@ export interface MockOptions {
   bodies?: Record<number, string>;
   /** 記事 id → 訳文（issue #42）。訳した記事として配る */
   translations?: Record<number, { title: string; body: string }>;
+  /** 記事 id → 音声（issue #46）。Podcast のエピソードとして配る */
+  audio?: Record<number, EntryAudio>;
 }
 
 /**
@@ -223,10 +229,12 @@ export async function mockApi(page: Page, options: MockOptions = {}): Promise<Ap
   const entries: Entry[] = [
     ...ENTRIES.map((e) => {
       const translation = options.translations?.[e.id];
+      const audio = options.audio?.[e.id];
       return {
         ...e,
         body: options.bodies?.[e.id] ?? e.body,
         ...(translation === undefined ? {} : { translation }),
+        ...(audio === undefined ? {} : { audio }),
       };
     }),
     ...Array.from({ length: options.extraEntries ?? 0 }, (_, i) =>

@@ -1,3 +1,5 @@
+import type { TranscriptSummary } from '../../shared/types';
+
 /**
  * テスト用の足場。ここだけは src/db/ の外で SQL を書く。
  *
@@ -24,6 +26,7 @@ export interface FeedSeed {
   recipe: string | null;
   recipeSource: string | null;
   translate: number;
+  transcribe: number;
 }
 
 export interface FeedRow {
@@ -53,6 +56,8 @@ export interface FeedRow {
   recipe_source: string | null;
   translate: number;
   translate_suggested: number;
+  transcribe: number;
+  transcribe_suggested: number;
   skimmed: number;
 }
 
@@ -70,6 +75,10 @@ export interface EntryRow {
   body_updated_at: number | null;
   translated_title: string | null;
   translated_body: string | null;
+  audio_url: string | null;
+  audio_type: string | null;
+  audio_duration: number | null;
+  audio_chapters: string | null;
 }
 
 /**
@@ -109,6 +118,7 @@ export async function seedFeed(
     recipe: null,
     recipeSource: null,
     translate: 0,
+    transcribe: 0,
     ...overrides,
   };
 
@@ -117,8 +127,8 @@ export async function seedFeed(
       `INSERT INTO feeds
          (url, title, site_url, rate, folder, read_seq, etag, last_modified, content_hash,
           next_fetch_at, fetch_interval, consecutive_failures, disabled, created_at,
-          full_text, full_text_selector, recipe, recipe_source, translate)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          full_text, full_text_selector, recipe, recipe_source, translate, transcribe)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING id`,
     )
     .bind(
@@ -141,6 +151,7 @@ export async function seedFeed(
       seed.recipe,
       seed.recipeSource,
       seed.translate,
+      seed.transcribe,
     )
     .first<{ id: number }>();
 
@@ -156,6 +167,11 @@ export interface EntrySeed {
   body: string;
   publishedAt: number | null;
   storedAt: number;
+  audioUrl: string | null;
+  audioType: string | null;
+  audioDuration: number | null;
+  /** JSON のまま入れる */
+  audioChapters: string | null;
 }
 
 // guid_hash は (feed_id, guid_hash) で UNIQUE。テストごとに衝突しない値を配る
@@ -175,13 +191,18 @@ export async function seedEntry(
     body: '<p>本文</p>',
     publishedAt: null,
     storedAt: 0,
+    audioUrl: null,
+    audioType: null,
+    audioDuration: null,
+    audioChapters: null,
     ...overrides,
   };
 
   const row = await db
     .prepare(
-      `INSERT INTO entries (feed_id, guid_hash, url, title, author, body, published_at, stored_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO entries (feed_id, guid_hash, url, title, author, body, published_at, stored_at,
+                            audio_url, audio_type, audio_duration, audio_chapters)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING id`,
     )
     .bind(
@@ -193,6 +214,10 @@ export async function seedEntry(
       seed.body,
       seed.publishedAt,
       seed.storedAt,
+      seed.audioUrl,
+      seed.audioType,
+      seed.audioDuration,
+      seed.audioChapters,
     )
     .first<{ id: number }>();
 
@@ -232,6 +257,19 @@ export async function seedPin(
     .first<{ id: number }>();
   if (row === null) throw new Error('pin の投入に失敗');
   return row.id;
+}
+
+/** 文字起こし（issue #46）の状態と要約を、記事に直接書く */
+export async function seedTranscript(
+  db: D1Database,
+  entryId: number,
+  state: 'running' | 'done' | 'failed',
+  summary: TranscriptSummary | null = null,
+): Promise<void> {
+  await db
+    .prepare('UPDATE entries SET transcript_state = ?, transcript_summary = ? WHERE id = ?')
+    .bind(state, summary === null ? null : JSON.stringify(summary), entryId)
+    .run();
 }
 
 /** 手動で未読に戻した記事（ウォーターマークからの例外）を作る */

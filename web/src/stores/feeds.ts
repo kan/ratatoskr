@@ -446,6 +446,9 @@ export const useFeedsStore = defineStore('feeds', () => {
     local.recipeSource = feed.recipeSource;
     local.translate = feed.translate;
     local.translateSuggested = feed.translateSuggested;
+    local.transcribe = feed.transcribe;
+    local.transcribeSuggested = feed.transcribeSuggested;
+    local.podcast = feed.podcast;
     local.skimmed = feed.skimmed;
     syncUnreadCount(local);
     if (index === feedIndex.value) absorbNewEntries();

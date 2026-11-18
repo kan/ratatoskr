@@ -1,4 +1,4 @@
-import type { RecipeSource } from '../../shared/types';
+import type { AudioSource, RecipeSource } from '../../shared/types';
 import type { FetchOutcome, FetchTarget } from './fetch';
 
 /**
@@ -15,7 +15,15 @@ export interface ParsedItem {
   body: string;
   /** パースできなかった場合は null（順序は id で決まるので実害がない） */
   publishedAt: number | null;
+  /** Podcast のエピソードの音声（issue #46）。音声の enclosure が無ければ省く */
+  audio?: ParsedAudio;
 }
+
+/**
+ * エピソードの音声（src/crawler/podcast.ts）。url はフィードに書かれたままで、
+ * 絶対 URL への解決は取り込み側が行う
+ */
+export type ParsedAudio = AudioSource;
 
 export interface ParsedFeed {
   title: string;

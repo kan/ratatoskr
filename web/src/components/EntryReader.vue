@@ -5,6 +5,7 @@ import { repairBrokenImage } from '@/lib/image-repair';
 import { releaseKeyFocus } from '@/lib/keymap';
 import { linksIn, sameLinks, type ArticleLink } from '@/lib/links';
 import { classifySwipe, pullsPastBottom } from '@/lib/swipe';
+import PodcastPanel from './PodcastPanel.vue';
 
 /**
  * 右ペイン。常に 1 記事だけを表示する。記事リストは作らない（docs/UX.md）。
@@ -279,6 +280,15 @@ defineExpose({ pageDown, pageUp, scrollToBottom, links });
             <span v-if="translated" data-testid="entry-translated"> / 訳文（t で原文）</span>
           </p>
           <hr class="my-4 border-neutral-300 dark:border-neutral-700" />
+          <!--
+            Podcast のエピソード（issue #46）。記事ごとに作り直して、記事を移れば再生を止める
+          -->
+          <PodcastPanel
+            v-if="entry.audio"
+            :key="entry.id"
+            :entry-id="entry.id"
+            :audio="entry.audio"
+          />
           <!-- body は取り込み時にサーバ側でサニタイズ済み（CLAUDE.md の不変条件 4） -->
           <!-- eslint-disable-next-line vue/no-v-html -->
           <div

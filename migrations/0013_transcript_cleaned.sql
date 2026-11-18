@@ -1,0 +1,11 @@
+-- 文字起こしの清書（issue #46。src/crawler/clean.ts）。
+--
+-- Whisper の文字起こしは発言の切れ目ごとの細切れで、固有名詞もカタカナになる。
+-- 起こし終えた後に LLM で文にまとめ、ショーノートの綴りに合わせて固有名詞を直す。
+--
+--   cleaned … 清書した段落。segments と同じ「開始秒<TAB>文」の行。NULL なら未清書。
+--             LLM の応答が使えなかった区切りは、生の区間をそのまま入れて終える
+--             （取り直しを繰り返さない）
+--
+-- **生の文字起こし（segments）は残す。** LLM が意味を変えていないかを画面で確かめられるように
+ALTER TABLE transcript_parts ADD COLUMN cleaned TEXT;

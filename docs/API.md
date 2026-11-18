@@ -31,6 +31,9 @@ export interface Feed {
   recipeSource: 'ai' | 'score' | 'manual' | null; // 取得定義で読んでいるなら、誰が作ったか（issue #40）
   translate: boolean;         // 日本語以外の記事を訳すか（issue #42）
   translateSuggested: boolean; // 日本語ではないと見えた（勧めるだけ）
+  transcribe: boolean;        // Podcast を文字起こしして要約するか（issue #46）
+  transcribeSuggested: boolean; // 音声付きの記事が届いた（勧めるだけ）
+  podcast: boolean;           // 音声付きの記事が届いたことがある（文字起こしの入切を出すか）
   skimmed: boolean;           // 最近ほとんど読まずに送っている（issue #43。勧めるだけ）
   nsfw: boolean;              // 表示を有効にした端末でしか出さない（issue #23）
 }
@@ -45,7 +48,28 @@ export interface Entry {
   publishedAt: number | null;
   storedAt: number;
   translation?: { title: string; body: string }; // 訳文（issue #42）。訳した記事にだけ付く
+  audio?: EntryAudio;    // Podcast のエピソードの音声（issue #46）。音声付きの記事にだけ付く
 }
+
+export interface EntryAudio {
+  url: string;                 // http / https の絶対 URL
+  type: string | null;         // enclosure の type
+  duration: number | null;     // 秒
+  chapters: { start: number; title: string }[]; // psc:chapters。無ければ空
+  transcript?: 'running' | 'done' | 'failed';   // 文字起こしの状態。始めていなければ省く
+  summary?: TranscriptSummary; // 要約。done のときだけ
+}
+
+export interface TranscriptSummary {
+  overview: string;            // エピソード全体の要旨
+  sections: { start: number; title: string | null; text: string }[]; // チャプターか 10 分ごと
+}
+
+// 要約は HTML ではなく値で配る。中身は LLM の出力なので、画面は文字として描くだけ
+
+// 文字起こしの全文は Entry に載せない（2 時間半で 6〜8 万字あり、全件先落としに
+// 混ぜると重い）。GET /api/entries/:id/transcript で開いたときに取る。
+// 要約ができたときは body_updated_at を刻み、未読なら updatedEntries で届け直す
 
 // translation は原文（title / body）を置き換えない。どちらを出すかは画面が決める
 // （既定は訳文、t で原文）。訳文が変わった・消えたときも本文の変化として
@@ -211,6 +235,25 @@ export interface Pin {
 
 未読に戻した記事を既読に戻す（`entry_states` の行を削除）。
 
+### `GET /api/entries/:id/transcript`
+
+Podcast のエピソードの文字起こし（issue #46）。始めていなければ 404。
+
+```jsonc
+{
+  "state": "running",          // running | done | failed
+  "segments": [ { "start": 0, "text": "こんにちは" } ], // Whisper の区間。start は音声の頭からの秒
+  "paragraphs": null,          // 清書した段落（segments と同じ形）。全ての区切りを清書し終えるまで null
+  "summary": null              // done のときだけ要約（TranscriptSummary）
+}
+```
+
+`paragraphs` は句読点を補って段落にまとめ、固有名詞を直したもの。画面はこちらを出し、
+`segments` は清書前を確かめるために返す。
+
+途中（running）でも起こした分を返す。要約も返すのは、読み流した後に要約ができた記事
+（差分同期は未読しか届け直さない）でも、ここを開けば読めるようにするため。
+
 ### `POST /api/pins`
 
 ```jsonc
@@ -261,13 +304,15 @@ export interface Pin {
 
 ### `PATCH /api/feeds/:id`
 
-`rate`、`folder`、`title`、`disabled`、`fullText`、`nsfw`、`translate` を更新する。`title` はフィードの提供する値を上書きするユーザ指定値。
+`rate`、`folder`、`title`、`disabled`、`fullText`、`nsfw`、`translate`、`transcribe` を更新する。`title` はフィードの提供する値を上書きするユーザ指定値。
 
 `nsfw` を変えると、**そのフィードの記事を指すピンの `nsfw` も同じ値に揃える**（1 つの batch）。記事が保持期間で消えたピンは、どのフィードの記事だったかを引けないので動かさない。
 
 `fullText` は「記事ページから本文を取ってくるか」。**既定は false で、決めるのはユーザ。** 相手のサーバに記事の数だけ取りに行く動作なので、こちらが勝手に始めない。クロール時に要約しか配信していないと見えたフィードは `fullTextSuggested` が立ち、購読管理画面がそれを勧める。
 
 `translate` は「日本語以外の記事を訳すか」（issue #42）。`fullText` と同じく既定は false で、決めるのはユーザ。切ると訳文を捨て、訳文の付いていた記事は `updatedEntries` で原文に戻して届け直す。
+
+`transcribe` は「Podcast を文字起こしして要約するか」（issue #46）。既定は false で、決めるのはユーザ。対象はフィードごとに音声付きの最新 3 件。入れても手動更新では起こさず、次の cron から取り掛かる。**切っても済んだ文字起こしと要約は捨てない**（訳文と違って原文を置き換えず、作り直すと音声の長さだけ Workers AI を使い直すため）。
 
 ### `DELETE /api/feeds/:id`
 

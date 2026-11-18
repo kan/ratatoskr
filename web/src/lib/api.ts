@@ -16,6 +16,7 @@ import type {
   ReadingEventsRequest,
   ReadResponse,
   SyncResponse,
+  TranscriptResponse,
   UpdateFeedRequest,
 } from '@shared/types';
 
@@ -133,6 +134,14 @@ export type EntriesParams = {
 
 export function getEntries(params: EntriesParams = {}): Promise<EntriesResponse> {
   return get<EntriesResponse>('/entries', params);
+}
+
+/**
+ * Podcast のエピソードの文字起こし（issue #46）。全文は重いので記事には載っておらず、
+ * 開いたときにだけ取る
+ */
+export function getTranscript(entryId: number): Promise<TranscriptResponse> {
+  return get<TranscriptResponse>(`/entries/${entryId}/transcript`);
 }
 
 /**
